@@ -30,16 +30,26 @@ class ExpressionParser:
         while self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value in ('+', '-'):
             op = self.consume().value
             right = self.parse_term()
-            node = BinaryExpr(op, node, right)
+            # NOVO: Constant Folding (Soma e Subtração)
+            if isinstance(node, NumberExpr) and isinstance(right, NumberExpr) and not node.is_float and not right.is_float:
+                if op == '+': node = NumberExpr(str(int(node.value) + int(right.value)))
+                elif op == '-': node = NumberExpr(str(int(node.value) - int(right.value)))
+            else:
+                node = BinaryExpr(op, node, right)
         return node
 
     def parse_term(self):
         node = self.parse_factor()
-        # NOVO: Adicionado o operador de módulo (%)
         while self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value in ('*', '/', '%'):
             op = self.consume().value
             right = self.parse_factor()
-            node = BinaryExpr(op, node, right)
+            # NOVO: Constant Folding (Multiplicação, Divisão e Módulo)
+            if isinstance(node, NumberExpr) and isinstance(right, NumberExpr) and not node.is_float and not right.is_float:
+                if op == '*': node = NumberExpr(str(int(node.value) * int(right.value)))
+                elif op == '/': node = NumberExpr(str(int(node.value) // int(right.value)))
+                elif op == '%': node = NumberExpr(str(int(node.value) % int(right.value)))
+            else:
+                node = BinaryExpr(op, node, right)
         return node
 
     def parse_factor(self):

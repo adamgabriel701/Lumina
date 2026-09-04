@@ -40,11 +40,11 @@ python3 lumina_cli.py build benchmarks/loop.lm
 python3 lumina_cli.py build benchmarks/primes.lm
 python3 lumina_cli.py build benchmarks/matrix.lm
 
-echo "Compilando C (gcc -O3)..."
-gcc -O3 -march=native -funroll-loops -o benchmarks/fib_c benchmarks/fib.c
-gcc -O3 -march=native -funroll-loops -o benchmarks/loop_c benchmarks/loop.c
-gcc -O3 -march=native -funroll-loops -o benchmarks/primes_c benchmarks/primes.c
-gcc -O3 -march=native -funroll-loops -o benchmarks/matrix_c benchmarks/matrix.c
+echo "Compilando C (clang -O3)..."
+clang -O3 -march=native -funroll-loops -o benchmarks/fib_c benchmarks/fib.c
+clang -O3 -march=native -funroll-loops -o benchmarks/loop_c benchmarks/loop.c
+clang -O3 -march=native -funroll-loops -o benchmarks/primes_c benchmarks/primes.c
+clang -O3 -march=native -funroll-loops -o benchmarks/matrix_c benchmarks/matrix.c
 
 echo "Compilando Rust (rustc -O)..."
 rustc -O -o benchmarks/fib_rs benchmarks/fib.rs 2>/dev/null

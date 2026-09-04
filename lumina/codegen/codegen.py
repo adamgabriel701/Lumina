@@ -161,6 +161,13 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen):
                     self.symbol_table[p_name] = ptr
                     self.var_types[p_name] = p_ty
                     
+        # NOVO: Atributos de Otimização para o LLVM
+        if func_node.name != "main":
+            func.attributes.add('alwaysinline')
+            func.attributes.add('nounwind')
+        else:
+            func.attributes.add('nounwind')
+
         self.functions_table[func_node.name] = (func, func_type)
         for stmt in func_node.body:
             self.codegen_stmt(stmt)

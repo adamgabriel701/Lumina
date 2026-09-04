@@ -1,30 +1,26 @@
-/* O Primeiro Passo do Bootstrapping: Um Lexer escrito em Lumina */
+/* Tokenizer escrito na própria linguagem Lumina */
 
 fn main() -> int:
-    let code = "let x = 42;"
+    let code = "let x = 42"
     let length = len(code)
     
-    mut letters = 0
-    mut digits = 0
-    mut symbols = 0
-    mut spaces = 0
+    mut token = ""
     
     for i in 0..length:
         let c = code[i]
         
+        # Se for espaço (ASCII 32)
         if c == 32:
-            spaces += 1
-        elif (c >= 65 and c <= 90) or (c >= 97 and c <= 122):
-            letters += 1
-        elif c >= 48 and c <= 57:
-            digits += 1
+            # Se o token não estiver vazio, imprime e reseta
+            if len(token) > 0:
+                print("Token:", token)
+                token = ""
         else:
-            symbols += 1
+            # Concatena o caractere na string dinamicamente
+            token = token + chr(c)
             
-    print("Análise Léxica do código:", code)
-    print("Letras:", letters)
-    print("Números:", digits)
-    print("Símbolos:", symbols)
-    print("Espaços:", spaces)
-    
+    # Imprime o último token se a string não terminar com espaço
+    if len(token) > 0:
+        print("Token:", token)
+        
     return 0

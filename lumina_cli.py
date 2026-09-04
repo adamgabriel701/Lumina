@@ -5,6 +5,8 @@ import subprocess
 import glob
 import ctypes
 import ctypes.util
+import re
+import hashlib
 from llvmlite import binding as llvm
 from lumina.lexer import Lexer
 from lumina.parser import Parser
@@ -13,8 +15,57 @@ from lumina.codegen import LLVMCodegen
 from lumina.ast import ImportStmt
 from lumina.errors import LuminaError
 
+# --- Helpers de Cache ---
+def get_all_dependency_files(filename):
+    """Faz um scan rápido para encontrar todos os arquivos .lm envolvidos na compilação."""
+    files = set()
+    def resolve(f):
+        abs_f = os.path.abspath(f)
+        if abs_f in files: return
+        files.add(abs_f)
+        try:
+            with open(f, "r") as file:
+                code = file.read()
+        except: return
+            
+        # Regex para encontrar imports rapidamente sem fazer parse completo
+        for match in re.finditer(r'import\s+"([^"]+)"', code):
+            dep = match.group(1)
+            if dep.startswith("std/"):
+                cli_dir = os.path.dirname(os.path.abspath(__file__))
+                dep_path = os.path.join(cli_dir, "std", dep.replace("std/", "") + ".lm")
+            elif os.path.exists(dep + ".lm" if not dep.endswith(".lm") else dep):
+                dep_path = dep if dep.endswith(".lm") else dep + ".lm"
+            else:
+                dep_path = os.path.join("lumina_modules", dep)
+                if not dep_path.endswith(".lm"): dep_path += ".lm"
+            resolve(dep_path)
+            
+    resolve(filename)
+    return list(files)
+
+def get_cache_hash(filename):
+    """Calcula um hash MD5 baseado no conteúdo de todos os arquivos do projeto."""
+    hasher = hashlib.md5()
+    deps = get_all_dependency_files(filename)
+    for f in sorted(deps):
+        try:
+            with open(f, "rb") as file:
+                hasher.update(file.read())
+        except: pass
+    return hasher.hexdigest()
+
 # --- Módulos do Compilador ---
-def parse_module(filename):
+def parse_module(filename, current_stack=None):
+    # 1. Detecção de Importações Circulares
+    abs_path = os.path.abspath(filename)
+    if current_stack is None:
+        current_stack = set()
+    if abs_path in current_stack:
+        raise LuminaError(f"Importação circular detectada envolvendo '{filename}'.", filename, 0, 0, "")
+        
+    current_stack.add(abs_path)
+    
     with open(filename, "r") as f:
         code = f.read()
         
@@ -30,14 +81,14 @@ def parse_module(filename):
             if node.filename.startswith("std/"):
                 cli_dir = os.path.dirname(os.path.abspath(__file__))
                 std_path = os.path.join(cli_dir, "std", node.filename.replace("std/", "") + ".lm")
-                imported_ast = parse_module(std_path)
+                imported_ast = parse_module(std_path, current_stack)
                 
             # 2. Se for um arquivo local
             elif os.path.exists(node.filename + ".lm" if not node.filename.endswith(".lm") else node.filename):
                 imported_path = node.filename if node.filename.endswith(".lm") else node.filename + ".lm"
-                imported_ast = parse_module(imported_path)
+                imported_ast = parse_module(imported_path, current_stack)
                 
-            # 3. NOVO: Se for um pacote baixado (lumina_modules/)
+            # 3. Se for um pacote baixado (lumina_modules/)
             else:
                 mod_path = os.path.join("lumina_modules", node.filename)
                 if not mod_path.endswith(".lm"):
@@ -46,15 +97,28 @@ def parse_module(filename):
                 if not os.path.exists(mod_path):
                     raise LuminaError(f"Módulo '{node.filename}' não encontrado localmente, na stdlib ou em lumina_modules/.", filename, 0, 0, code)
                     
-                imported_ast = parse_module(mod_path)
+                imported_ast = parse_module(mod_path, current_stack)
                 
             print(f"--> Importando módulo: {node.filename}")
             resolved_ast.extend(imported_ast)
         else:
             resolved_ast.append(node)
+            
+    current_stack.remove(abs_path)
     return resolved_ast
 
-def compile_lumina(filename, output_file="output.ll"):
+def compile_lumina(filename, output_file="output.ll", use_cache=True):
+    # 3. Suporte a Compilação Incremental/Cache
+    cache_dir = ".lumina_cache"
+    cache_file = os.path.join(cache_dir, get_cache_hash(filename) + ".ll") if use_cache else None
+    
+    if use_cache and os.path.exists(cache_file):
+        print("⚡ Usando cache de compilação (.lumina_cache)...")
+        with open(cache_file, "r") as f:
+            llvm_ir = f.read()
+        with open(output_file, "w") as f: f.write(llvm_ir)
+        return llvm_ir
+
     print("--- 1. Análise Léxica e Sintática ---")
     try:
         ast = parse_module(filename)
@@ -73,7 +137,38 @@ def compile_lumina(filename, output_file="output.ll"):
     codegen = LLVMCodegen()
     llvm_ir = codegen.generate_module(ast)
     
+    # 2. Passes de Otimização LLVM em Memória
+    print("🔧 Aplicando otimizações LLVM...")
+    try:
+        mod = llvm.parse_assembly(llvm_ir)
+        mod.verify()
+        
+        # Tenta a API antiga do llvmlite (LLVM 13-)
+        try:
+            pmb = llvm.create_pass_manager_builder()
+            pmb.opt_level = 2
+            pm = llvm.create_module_pass_manager()
+            pmb.populate(pm)
+            pm.run(mod)
+        except AttributeError:
+            # Fallback para a nova API do llvmlite (LLVM 15+)
+            tm = llvm.Target.from_default_triple().create_target_machine()
+            pmb = llvm.create_pass_builder(tm)
+            pm = llvm.create_module_pass_manager()
+            pmb.populate(pm, opt_level=2)
+            pm.run(mod)
+            
+        llvm_ir = str(mod)
+    except Exception as e:
+        print(f"⚠️ Aviso: Não foi possível rodar as otimizações em memória: {e}")
+    
     with open(output_file, "w") as f: f.write(llvm_ir)
+    
+    # Salva no cache para a próxima execução
+    if use_cache:
+        os.makedirs(cache_dir, exist_ok=True)
+        with open(cache_file, "w") as f: f.write(llvm_ir)
+        
     return llvm_ir
 
 def run_jit(llvm_ir, cli_args):
@@ -110,7 +205,6 @@ def run_jit(llvm_ir, cli_args):
 def cmd_new(project_name):
     os.makedirs(project_name, exist_ok=True)
     
-    # NOVO: lumina.json agora tem campo de dependências
     config = {
         "name": project_name,
         "entry": "main.lm",
@@ -129,7 +223,6 @@ def cmd_new(project_name):
         
     print(f"✅ Projeto '{project_name}' criado com sucesso!")
 
-# NOVO COMANDO: INSTALL
 def cmd_install():
     if not os.path.exists("lumina.json"):
         print("❌ Erro: Nenhum arquivo 'lumina.json' encontrado no diretório atual.")
@@ -146,7 +239,6 @@ def cmd_install():
     os.makedirs("lumina_modules", exist_ok=True)
     
     for pkg_name, source in deps.items():
-        # Formato esperado: "github:usuario/repo"
         if not source.startswith("github:"):
             print(f"⚠️  Fonte inválida para {pkg_name}. Use o formato 'github:usuario/repo'.")
             continue
@@ -170,29 +262,23 @@ def cmd_doc():
     print("📚 Gerando documentação...")
     docs_data = []
     
-    # Encontra todos os arquivos .lm na pasta atual e subpastas
     for filepath in glob.glob("**/*.lm", recursive=True):
+        if "lumina_modules" in filepath or filepath.startswith("std/"): continue
+        
         with open(filepath, "r") as f:
             lines = f.readlines()
             
         current_doc = []
         for line in lines:
             stripped = line.strip()
-            
-            # Se for um comentário de documentação (##)
             if stripped.startswith("## "):
                 current_doc.append(stripped[3:])
             elif stripped.startswith("##"):
                 current_doc.append(stripped[2:])
-            # Se for uma linha vazia ou comentário normal, limpa o doc atual
             elif stripped == "" or stripped.startswith("#"):
                 current_doc = []
-            # Se for uma declaração (fn, struct, enum) e tivermos um doc acumulado
             elif current_doc and (stripped.startswith("fn ") or stripped.startswith("struct ") or stripped.startswith("enum ")):
-                # Limpa a sintaxe para ficar bonito no HTML (remove indentação extra)
                 clean_decl = stripped
-                
-                # Separa parâmetros de função para formatar melhor
                 if stripped.startswith("fn "):
                     clean_decl = stripped.replace("fn ", "").replace(" -> ", " ⟶ ")
                 
@@ -202,9 +288,8 @@ def cmd_doc():
                     "decl": clean_decl,
                     "doc": "\n".join(current_doc)
                 })
-                current_doc = [] # Reseta o doc
+                current_doc = []
 
-    # Gera o HTML
     html_content = """<!DOCTYPE html>
 <html lang="pt-br">
 <head>
@@ -246,7 +331,6 @@ def cmd_doc():
     print("✅ Documentação gerada com sucesso em: docs/index.html")
 
 def cmd_build(entry_file=None):
-    # NOVO: Se um arquivo for passado, usa ele. Senão, lê o lumina.json
     if entry_file:
         entry = entry_file
         project_name = entry_file.replace('.lm', '')
@@ -268,7 +352,6 @@ def cmd_build(entry_file=None):
     if not llvm_ir: return None
     
     link_flags = " ".join([f"-l{lib}" for lib in libs])
-    # Muda o output.ll para o mesmo nome do projeto para não sobrescrever
     ir_file = f"{project_name}.ll"
     with open(ir_file, "w") as f: f.write(llvm_ir)
     
@@ -285,19 +368,15 @@ def cmd_build(entry_file=None):
         return None
 
 def cmd_run(args, use_jit=False):
-    # NOVO: Define o arquivo de entrada padrão
     entry = "program.lm"
     
-    # Se o usuário passou o nome do arquivo, usa ele
     if args and not args[0].startswith('--'):
         entry = args[0]
         args = args[1:]
-    # Senão, se existir um lumina.json, lê a config
     elif os.path.exists("lumina.json"):
         with open("lumina.json", "r") as f:
             config = json.load(f)
             entry = config.get("entry", "main.lm")
-    # Senão, se existir um main.lm, usa ele
     elif os.path.exists("main.lm"):
         entry = "main.lm"
         
@@ -337,7 +416,6 @@ def main():
     elif command == "doc":
         cmd_doc()
         
-    # NOVO COMANDO NA CLI
     elif command == "install":
         cmd_install()
         

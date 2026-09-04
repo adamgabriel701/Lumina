@@ -87,23 +87,40 @@ class ExpressionCodegen:
                 if node.op == 'and': return self.builder.and_(left, right, name="and_tmp")
                 elif node.op == 'or': return self.builder.or_(left, right, name="or_tmp")
             
-            # Concatenação de String
-            if node.op == '+' and (isinstance(node.left, StringExpr) or isinstance(node.right, StringExpr)):
-                buf = self.builder.alloca(ir.ArrayType(self.i8_ty, 256), name="str_concat_buf")
-                buf_ptr = self.builder.bitcast(buf, self.voidptr_ty, name="buf_ptr")
-                
-                if left.type == self.voidptr_ty and right.type == self.i64_ty:
-                    fmt_str = self.create_global_string("%s%d")
-                    self.builder.call(self.sprintf, [buf_ptr, fmt_str, left, right], name="sprintf_str_int")
-                elif left.type == self.i64_ty and right.type == self.voidptr_ty:
-                    fmt_str = self.create_global_string("%d%s")
-                    self.builder.call(self.sprintf, [buf_ptr, fmt_str, left, right], name="sprintf_int_str")
-                else:
-                    fmt_str = self.create_global_string("%s%s")
-                    self.builder.call(self.sprintf, [buf_ptr, fmt_str, left, right], name="sprintf_str_str")
+            # Aritmética de Ponteiros (ptr + int)
+            if isinstance(left.type, ir.PointerType) and right.type == self.i64_ty:
+                if node.op == '+':
+                    return self.builder.gep(left, [right], name="ptr_add_tmp")
+                elif node.op == '-':
+                    neg_right = self.builder.neg(right, name="neg_idx")
+                    return self.builder.gep(left, [neg_right], name="ptr_sub_tmp")
                     
-                return buf_ptr
-            
+            # NOVO: Concatenação Dinâmica de Strings (malloc)
+            # Verifica os tipos em tempo de execução no LLVM, não apenas na AST
+            if node.op == '+' and (isinstance(node.left, StringExpr) or isinstance(node.right, StringExpr) or left.type == self.voidptr_ty or right.type == self.voidptr_ty):
+                # Garante que a string esteja à esquerda
+                if left.type != self.voidptr_ty and right.type == self.voidptr_ty:
+                    left, right = right, left
+                    
+                if left.type == self.voidptr_ty:
+                    # Calcula o tamanho das duas strings
+                    len1 = self.builder.call(self.strlen, [left], name="len1")
+                    if right.type == self.i64_ty:
+                        len2 = ir.Constant(self.i64_ty, 20) # Tamanho máximo de um int
+                        fmt_str = self.create_global_string("%s%d")
+                    else:
+                        len2 = self.builder.call(self.strlen, [right], name="len2")
+                        fmt_str = self.create_global_string("%s%s")
+                        
+                    total_len = self.builder.add(len1, len2, name="total_len")
+                    total_bytes = self.builder.add(total_len, ir.Constant(self.i64_ty, 1), name="total_bytes")
+                    
+                    # Aloca memória no Heap para a nova string
+                    buf = self.builder.call(self.malloc, [total_bytes], name="str_concat_buf")
+                    # Usa sprintf para concatenar
+                    self.builder.call(self.sprintf, [buf, fmt_str, left, right], name="sprintf_concat")
+                    return buf
+
             # Atribuição Composta (+=, -=, etc)
             if node.op in ('+=', '-=', '*=', '/='):
                 op = node.op[0] # Pega o primeiro caractere: '+', '-', '*', '/'
@@ -119,14 +136,6 @@ class ExpressionCodegen:
                     elif op == '-': return self.builder.sub(left, right, name="sub_assign")
                     elif op == '*': return self.builder.mul(left, right, name="mul_assign")
                     elif op == '/': return self.builder.sdiv(left, right, name="div_assign")
-            
-            # Aritmética de Ponteiros (ptr + int)
-            if isinstance(left.type, ir.PointerType) and right.type == self.i64_ty:
-                if node.op == '+':
-                    return self.builder.gep(left, [right], name="ptr_add_tmp")
-                elif node.op == '-':
-                    neg_right = self.builder.neg(right, name="neg_idx")
-                    return self.builder.gep(left, [neg_right], name="ptr_sub_tmp")
                     
             if left.type == self.f64_ty or right.type == self.f64_ty:
                 left = self.to_float_if_needed(left)
@@ -311,6 +320,15 @@ class ExpressionCodegen:
                     self.builder.call(self.sprintf, [buf_ptr, fmt_str, val])
                 return buf_ptr
                 
+            # NOVO: Converte Int (ASCII) para String de 1 caractere
+            elif node.name == "chr":
+                val = self.codegen_expr(node.args[0])
+                # Aloca 2 bytes no Heap (1 para o char, 1 para o null terminator)
+                buf = self.builder.call(self.malloc, [ir.Constant(self.i64_ty, 2)], name="chr_malloc")
+                fmt_str = self.create_global_string("%c")
+                self.builder.call(self.sprintf, [buf, fmt_str, val], name="chr_sprintf")
+                return buf
+
             elif node.name == "print":
                 for arg_node in node.args:
                     arg_val = self.codegen_expr(arg_node)

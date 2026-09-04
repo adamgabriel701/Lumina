@@ -26,6 +26,10 @@ class SemanticAnalyzer:
             elif isinstance(decl, ImplBlock):
                 for method in decl.methods:
                     self.functions.add(method.name)
+                    
+        for decl in declarations:
+            if isinstance(decl, Function):
+                self.analyze_function(decl)
 
     def push_scope(self): self.scopes.append({})
     def pop_scope(self): self.scopes.pop()
@@ -92,9 +96,12 @@ class SemanticAnalyzer:
             self.pop_scope()
         elif isinstance(node, MatchStmt):
             self.analyze_expr(node.condition)
-            for val, body in node.cases:
-                self.analyze_expr(val)
+            # CORREÇÃO: Agora desempacota 3 valores (variant_name, var_name, body)
+            for variant_name, var_name, body in node.cases:
                 self.push_scope()
+                # Se houver extração de variável (ex: case Some(x):), declara a variável x
+                if var_name:
+                    self.declare_var(var_name, "int", False) # Simplificado para int
                 for stmt in body: self.analyze_stmt(stmt)
                 self.pop_scope()
             if node.default:
@@ -123,7 +130,7 @@ class SemanticAnalyzer:
                     real_method_name = f"{struct_name}_{node.name}"
                     if real_method_name not in self.functions:
                         raise LuminaError(f"Método '{node.name}' não declarado na struct '{struct_name}'.", self.filename, 0, 0, self.source_code)
-            elif node.name not in ("print", "input", "atoi", "len", "alloc", "free", "read_file", "write_file", "int", "float", "str", "argv") and node.name not in self.functions:
+            elif node.name not in ("print", "input", "atoi", "len", "alloc", "free", "read_file", "write_file", "int", "float", "str", "argv", "chr") and node.name not in self.functions:
                 raise LuminaError(f"Função '{node.name}' não declarada.", self.filename, 0, 0, self.source_code)
             for arg in node.args: self.analyze_expr(arg)
         elif isinstance(node, ArrayExpr):

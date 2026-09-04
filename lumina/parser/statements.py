@@ -187,15 +187,17 @@ class StatementParser:
         
         variants = []
         while self.current_token() and self.current_token().type != TokenType.DEDENT:
-            if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
-            
+            if self.current_token().type == TokenType.NEWLINE: 
+                self.consume()
+                continue
+                
             var_name = self.consume(TokenType.IDENT).value
             payload_type = None
             if self.current_token().type == TokenType.OP and self.current_token().value == '(':
                 self.consume() # '('
                 payload_type = self.consume(TokenType.IDENT).value
                 self.consume(TokenType.OP) # ')'
-                
+                    
             variants.append((var_name, payload_type))
             self.consume(TokenType.NEWLINE)
             

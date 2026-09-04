@@ -35,11 +35,10 @@ class ForStmt:
     end: any
     body: List[any]
 
-# NOVO MATCH COM EXTRAÇÃO DE VARIÁVEL
 @dataclass
 class MatchStmt:
     condition: any
-    cases: List[tuple]      # Agora cada caso é: (nome_variante, nome_var_extraida, corpo)
+    cases: List[tuple]
     default: Optional[List[any]]
 
 @dataclass
@@ -69,8 +68,7 @@ class ExternDecl:
     params: List[tuple]
     return_type: str
 
-# NOVO NÓ DE ENUM (TAGGED UNION)
 @dataclass
 class EnumDecl:
     name: str
-    variants: List[tuple] # Lista de (nome_do_estado, tipo_do_payload)
+    variants: List[tuple]

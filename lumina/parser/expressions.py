@@ -98,7 +98,6 @@ class ExpressionParser:
                 self.consume(TokenType.OP)
                 return CallExpr(name, args)
                 
-        # ...
             node = VariableExpr(name, token.line, token.col)
             
             while True:

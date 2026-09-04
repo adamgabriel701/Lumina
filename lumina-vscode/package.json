@@ -1,0 +1,34 @@
+{
+  "name": "lumina",
+  "displayName": "Lumina Language Support",
+  "description": "Syntax highlighting for the Lumina programming language",
+  "version": "0.1.0",
+  "publisher": "adam-lumina",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.0.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "lumina",
+        "aliases": ["Lumina", "lumina"],
+        "extensions": [".lm"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "lumina",
+        "scopeName": "source.lumina",
+        "path": "./syntaxes/lumina.tmLanguage.json"
+      }
+    ]
+  },
+  "scripts": {
+    "package": "vsce package"
+  }
+}

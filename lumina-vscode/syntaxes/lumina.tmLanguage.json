@@ -1,0 +1,89 @@
+{
+  "scopeName": "source.lumina",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.block.lumina",
+          "begin": "/\\*",
+          "end": "\\*/"
+        },
+        {
+          "name": "comment.line.number-sign.lumina",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.lumina",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.lumina",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.lumina",
+          "match": "\\b[0-9]+\\.[0-9]+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.lumina",
+          "match": "\\b[0-9]+\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.lumina",
+          "match": "\\b(if|elif|else|while|for|in|return|match|case|default|and|or|not)\\b"
+        },
+        {
+          "name": "keyword.other.lumina",
+          "match": "\\b(fn|let|mut|struct|impl|import)\\b"
+        },
+        {
+          "name": "constant.language.boolean.lumina",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "support.function.builtin.lumina",
+          "match": "\\b(print|input|atoi|len|alloc|free|read_file|write_file|argv|int|float|str)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.primitive.lumina",
+          "match": "\\b(int|float|bool|void|str)\\b"
+        },
+        {
+          "name": "entity.name.type.class.lumina",
+          "match": "\\b([A-Z][a-zA-Z0-9_]*)\\b"
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "name": "variable.other.lumina",
+          "match": "\\b([a-z_][a-zA-Z0-9_]*)\\b"
+        }
+      ]
+    }
+  }
+}

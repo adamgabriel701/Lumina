@@ -212,4 +212,4 @@ Para instalar:
 
 ## 📜 Licença
 
-Este projeto está licenciado sob a Licença MIT - consulte o arquivo [LICENSE](https://www.google.com/search?q=LICENSE) para obter mais detalhes.
+Este projeto está licenciado sob a Licença MIT - consulte o arquivo [LICENSE](./LICENCE) para obter mais detalhes.

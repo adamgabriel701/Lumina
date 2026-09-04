@@ -1,4 +1,4 @@
-from ..ast import VarDecl, AssignStmt, ReturnStmt, Function, IfStmt, WhileStmt, ForStmt, StructDecl, VariableExpr, MatchStmt, ImplBlock, DerefExpr, MemberExpr, IndexExpr, ImportStmt, ExternDecl, EnumDecl, BinaryExpr
+from ..ast import VarDecl, AssignStmt, ReturnStmt, Function, IfStmt, WhileStmt, ForStmt, StructDecl, VariableExpr, MatchStmt, ImplBlock, DerefExpr, MemberExpr, IndexExpr, ImportStmt, ExternDecl, EnumDecl, BinaryExpr, ContinueStmt
 from ..lexer import TokenType
 
 class StatementParser:
@@ -43,6 +43,12 @@ class StatementParser:
             return self.parse_for()
         elif token.type == TokenType.KEYWORD and token.value == 'match':
             return self.parse_match()
+            
+        # NOVO: Continue
+        elif token.type == TokenType.KEYWORD and token.value == 'continue':
+            self.consume()
+            self.consume(TokenType.NEWLINE)
+            return ContinueStmt()
             
         elif token.type == TokenType.OP and token.value == '*':
             node = self.parse_expression()

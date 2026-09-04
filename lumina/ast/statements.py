@@ -72,3 +72,14 @@ class ExternDecl:
 class EnumDecl:
     name: str
     variants: List[tuple]
+
+@dataclass
+class ContinueStmt:
+    pass
+
+@dataclass
+class Function:
+    name: str
+    params: List[tuple]
+    return_type: str
+    body: List[any]

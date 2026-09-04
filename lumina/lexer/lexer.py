@@ -44,8 +44,35 @@ class Lexer:
                     continue
                 elif c == '"':
                     j = i + 1
-                    while j < len(stripped) and stripped[j] != '"': j += 1
-                    self.tokens.append(Token(TokenType.STRING, stripped[i+1:j], line_num, col))
+                    # NOVO: Processa caracteres de escape (\n, \r, \t, etc)
+                    raw_str = ""
+                    while j < len(stripped) and stripped[j] != '"':
+                        if stripped[j] == '\\' and j + 1 < len(stripped):
+                            next_char = stripped[j+1]
+                            if next_char == 'n':
+                                raw_str += '\n'
+                                j += 2
+                                continue
+                            elif next_char == 'r':
+                                raw_str += '\r'
+                                j += 2
+                                continue
+                            elif next_char == 't':
+                                raw_str += '\t'
+                                j += 2
+                                continue
+                            elif next_char == '\\':
+                                raw_str += '\\'
+                                j += 2
+                                continue
+                            elif next_char == '"':
+                                raw_str += '"'
+                                j += 2
+                                continue
+                        raw_str += stripped[j]
+                        j += 1
+                        
+                    self.tokens.append(Token(TokenType.STRING, raw_str, line_num, col))
                     i = j + 1
                     continue
                 elif c.isdigit():
@@ -61,7 +88,7 @@ class Lexer:
                     j = i
                     while j < len(stripped) and (stripped[j].isalnum() or stripped[j] == '_'): j += 1
                     word = stripped[i:j]
-                    if word in ('fn', 'let', 'mut', 'if', 'elif', 'else', 'while', 'for', 'in', 'struct', 'impl', 'import', 'extern', 'enum', 'return', 'print', 'true', 'false', 'match', 'case', 'default', 'and', 'or', 'not'):
+                    if word in ('fn', 'let', 'mut', 'if', 'elif', 'else', 'while', 'for', 'in', 'struct', 'impl', 'import', 'extern', 'enum', 'return', 'print', 'true', 'false', 'match', 'case', 'default', 'and', 'or', 'not', 'continue'):
                         self.tokens.append(Token(TokenType.KEYWORD, word, line_num, col))
                     else:
                         self.tokens.append(Token(TokenType.IDENT, word, line_num, col))

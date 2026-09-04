@@ -77,14 +77,18 @@ def parse_module(filename, current_stack=None):
     resolved_ast = []
     for node in ast:
         if isinstance(node, ImportStmt):
-            # 1. Se for da stdlib (std/)
+            # NOVO: Se for da stdlib (std/), tira o .lm do final
             if node.filename.startswith("std/"):
                 cli_dir = os.path.dirname(os.path.abspath(__file__))
-                std_path = os.path.join(cli_dir, "std", node.filename.replace("std/", "") + ".lm")
+                # Remove o .lm se existir, e depois adiciona o caminho completo
+                clean_name = node.filename.replace("std/", "")
+                if clean_name.endswith(".lm"):
+                    clean_name = clean_name[:-3]
+                std_path = os.path.join(cli_dir, "std", clean_name + ".lm")
                 imported_ast = parse_module(std_path, current_stack)
                 
-            # 2. Se for um arquivo local
-            elif os.path.exists(node.filename + ".lm" if not node.filename.endswith(".lm") else node.filename):
+            # NOVO: Se for um arquivo local, aceita com ou sem .lm
+            elif os.path.exists(node.filename if node.filename.endswith(".lm") else node.filename + ".lm"):
                 imported_path = node.filename if node.filename.endswith(".lm") else node.filename + ".lm"
                 imported_ast = parse_module(imported_path, current_stack)
                 
@@ -331,7 +335,7 @@ def cmd_build(entry_file=None):
     ir_file = f"{project_name}.ll"
     with open(ir_file, "w") as f: f.write(llvm_ir)
     
-    cmd = f"clang -O3 -march=native -funroll-loops {ir_file} -o {project_name} {link_flags}"
+    cmd = f"clang -O3 -march=native -funroll-loops {ir_file} -o {project_name} {link_flags} -lc -lpthread"
     
     print("\n--- 4. Linkagem Nativa ---")
     print(f"Executando: {cmd}")

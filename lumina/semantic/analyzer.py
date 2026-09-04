@@ -1,5 +1,5 @@
 from ..ast import NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr, ArrayExpr, IndexExpr, MemberExpr, AddressOfExpr, DerefExpr, UnaryExpr
-from ..ast import ReturnStmt, Function, VarDecl, AssignStmt, IfStmt, WhileStmt, ForStmt, MatchStmt, StructDecl, ImplBlock, ExternDecl, EnumDecl
+from ..ast import ReturnStmt, Function, VarDecl, AssignStmt, IfStmt, WhileStmt, ForStmt, MatchStmt, StructDecl, ImplBlock, ExternDecl, EnumDecl, ContinueStmt
 from ..errors import LuminaError
 
 class SemanticAnalyzer:
@@ -13,6 +13,7 @@ class SemanticAnalyzer:
 
     def analyze(self, declarations):
         for decl in declarations:
+            # NOVO: Registra funções normais E externas importadas de outros módulos
             if isinstance(decl, (Function, ExternDecl)):
                 self.functions.add(decl.name)
             elif isinstance(decl, StructDecl):
@@ -108,6 +109,9 @@ class SemanticAnalyzer:
                 self.push_scope()
                 for stmt in node.default: self.analyze_stmt(stmt)
                 self.pop_scope()
+        # NOVO: Continue
+        elif isinstance(node, ContinueStmt):
+            pass
         else:
             self.analyze_expr(node)
 
@@ -160,6 +164,10 @@ class SemanticAnalyzer:
             return struct_def.fields[node.member]
             
         elif isinstance(node, AddressOfExpr):
+            # NOVO: Se for o nome de uma função (ex: &worker), está tudo bem!
+            if isinstance(node.val, VariableExpr) and node.val.name in self.functions:
+                return
+            # Senão, analisa como expressão normal (ex: &minha_variavel)
             self.analyze_expr(node.val)
         elif isinstance(node, DerefExpr):
             self.analyze_expr(node.val)

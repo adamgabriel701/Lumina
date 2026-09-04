@@ -33,6 +33,9 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen):
 
         self.variant_defs = {} # NOVO: Mapeia nome do construtor -> (nome_enum, indice, tipo_payload)
 
+        self.variant_defs = {} # Mapeia nome do construtor -> (nome_enum, indice, tipo_payload)
+        self.continue_block = None # NOVO: Guarda o bloco para onde o 'continue' deve pular
+
     # MÉTODO PARA CRIAR ENUMS ATUALIZADO
     def create_enum(self, node: EnumDecl):
         # Usa IdentifiedStructType para ser compatível com a checagem do VariableExpr

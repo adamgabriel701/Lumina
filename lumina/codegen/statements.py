@@ -1,5 +1,5 @@
 from llvmlite import ir
-from ..ast import ReturnStmt, VarDecl, AssignStmt, IfStmt, WhileStmt, ForStmt, MemberExpr, ArrayExpr, MatchStmt, DerefExpr, IndexExpr, VariableExpr, CallExpr
+from ..ast import ReturnStmt, VarDecl, AssignStmt, IfStmt, WhileStmt, ForStmt, MemberExpr, ArrayExpr, MatchStmt, DerefExpr, IndexExpr, VariableExpr, CallExpr, ContinueStmt
 
 class StatementCodegen:
     def codegen_stmt(self, node):
@@ -141,10 +141,15 @@ class StatementCodegen:
             self.builder.cbranch(cond_val, body_bb, end_bb)
             
             self.builder.position_at_end(body_bb)
-            self.cleanup_vars.append(set()) # Empilha escopo
+            self.cleanup_vars.append(set())
+            old_continue = self.continue_block
+            self.continue_block = cond_bb # NOVO: Continue pula para a condição
+            
             for stmt in node.body: self.codegen_stmt(stmt)
+            self.continue_block = old_continue # Restaura
+            
             if not self.builder.block.is_terminated:
-                self.cleanup_block(self.cleanup_vars.pop()) # Limpa antes de voltar pro cond
+                self.cleanup_block(self.cleanup_vars.pop())
                 self.builder.branch(cond_bb)
             else:
                 self.cleanup_vars.pop()
@@ -162,7 +167,9 @@ class StatementCodegen:
 
             cond_bb = self.builder.append_basic_block(name="for.cond")
             body_bb = self.builder.append_basic_block(name="for.body")
+            inc_bb = self.builder.append_basic_block(name="for.inc") # NOVO: Bloco de incremento
             end_bb = self.builder.append_basic_block(name="for.end")
+            
             self.builder.branch(cond_bb)
             self.builder.position_at_end(cond_bb)
             curr_val = self.builder.load(ptr, name=node.var_name + "_val")
@@ -170,15 +177,25 @@ class StatementCodegen:
             self.builder.cbranch(cond, body_bb, end_bb)
             
             self.builder.position_at_end(body_bb)
-            self.cleanup_vars.append(set()) # Empilha escopo
+            self.cleanup_vars.append(set())
+            old_continue = self.continue_block
+            self.continue_block = inc_bb # NOVO: Continue pula para o incremento
+            
             for stmt in node.body: self.codegen_stmt(stmt)
+            self.continue_block = old_continue # Restaura
+            
             if not self.builder.block.is_terminated:
-                self.cleanup_block(self.cleanup_vars.pop()) # Limpa antes de voltar pro cond
-                next_val = self.builder.add(curr_val, ir.Constant(self.i64_ty, 1), name="for_next")
-                self.builder.store(next_val, ptr)
-                self.builder.branch(cond_bb)
+                self.cleanup_block(self.cleanup_vars.pop())
+                self.builder.branch(inc_bb)
             else:
                 self.cleanup_vars.pop()
+                
+            # NOVO: Bloco de Incremento
+            self.builder.position_at_end(inc_bb)
+            next_val = self.builder.add(curr_val, ir.Constant(self.i64_ty, 1), name="for_next")
+            self.builder.store(next_val, ptr)
+            self.builder.branch(cond_bb)
+            
             self.builder.position_at_end(end_bb)
             
         elif isinstance(node, MatchStmt):
@@ -234,5 +251,10 @@ class StatementCodegen:
                 self.builder.branch(end_bb)
                 
             self.builder.position_at_end(end_bb)
+        # NOVO: Continue
+        elif isinstance(node, ContinueStmt):
+            if self.continue_block:
+                self.cleanup_block(self.cleanup_vars[-1])
+                self.builder.branch(self.continue_block)
         else:
             self.codegen_expr(node)

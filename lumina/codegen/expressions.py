@@ -29,6 +29,26 @@ class ExpressionCodegen:
             return ir.Constant(ir.IntType(1), 1 if node.value else 0)
         elif isinstance(node, StringExpr): 
             return self.create_global_string(node.value)
+
+        # NOVO: Operadores Unários (-, +, not)
+        elif isinstance(node, UnaryExpr):
+            if node.op == 'not':
+                val = self.codegen_expr(node.val)
+                if val.type != ir.IntType(1):
+                    val = self.builder.icmp_signed("!=", val, ir.Constant(val.type, 0), name="not_cond")
+                return self.builder.xor(val, ir.Constant(ir.IntType(1), 1), name="not_tmp")
+                
+            # NOVO: Negação Numérica (ex: -1)
+            elif node.op == '-':
+                val = self.codegen_expr(node.val)
+                if val.type == self.f64_ty:
+                    return self.builder.fneg(val, name="fneg_tmp")
+                else:
+                    return self.builder.neg(val, name="neg_tmp")
+                    
+            # NOVO: Positivo Numérico (ex: +1), apenas retorna o valor
+            elif node.op == '+':
+                return self.codegen_expr(node.val)
             
         # NOVO: Operador NOT
         elif isinstance(node, UnaryExpr):
@@ -42,10 +62,15 @@ class ExpressionCodegen:
             
         elif isinstance(node, AddressOfExpr):
             if isinstance(node.val, VariableExpr):
+                # NOVO: Se for o nome de uma função, usa ptrtoint para obter o endereço de memória
+                if node.val.name in self.functions_table:
+                    func, _ = self.functions_table[node.val.name]
+                    return self.builder.ptrtoint(func, self.i64_ty, name="fn_ptr_int")
+                    
                 ptr = self.symbol_table.get(node.val.name)
                 if not ptr: raise Exception(f"Variável '{node.val.name}' não declarada.")
                 return self.builder.bitcast(ptr, self.voidptr_ty, name="addr_of")
-            raise Exception("Endereço de memória só pode ser pego de variáveis.")
+            raise Exception("Endereço de memória só pode ser pego de variáveis ou funções.")
             
         elif isinstance(node, DerefExpr):
             ptr = self.codegen_expr(node.val)
@@ -107,7 +132,7 @@ class ExpressionCodegen:
                     len1 = self.builder.call(self.strlen, [left], name="len1")
                     if right.type == self.i64_ty:
                         len2 = ir.Constant(self.i64_ty, 20) # Tamanho máximo de um int
-                        fmt_str = self.create_global_string("%s%d")
+                        fmt_str = self.create_global_string("%s%ld")
                     else:
                         len2 = self.builder.call(self.strlen, [right], name="len2")
                         fmt_str = self.create_global_string("%s%s")
@@ -326,7 +351,7 @@ class ExpressionCodegen:
                 buf_ptr = self.builder.bitcast(buf, self.voidptr_ty, name="cast_buf_ptr")
                 val = self.codegen_expr(node.args[0])
                 if val.type == self.i64_ty:
-                    fmt_str = self.create_global_string("%d")
+                    fmt_str = self.create_global_string("%ld")
                     self.builder.call(self.sprintf, [buf_ptr, fmt_str, val])
                 elif val.type == self.f64_ty:
                     fmt_str = self.create_global_string("%f")
@@ -351,10 +376,19 @@ class ExpressionCodegen:
                     else:
                         if arg_val.type == self.f64_ty: fmt_str = self.create_global_string("%f ")
                         elif arg_val.type == self.voidptr_ty: fmt_str = self.create_global_string("%s ")
-                        else: fmt_str = self.create_global_string("%d ")
+                        else: fmt_str = self.create_global_string("%ld ")
                         self.builder.call(self.printf, [fmt_str, arg_val])
                 nl_str = self.create_global_string("\n")
                 self.builder.call(self.printf, [nl_str])
+                
+                # NOVO: Força o flush do stdout para vermos erros imediatamente
+                fflush_fn = self.functions_table.get("fflush")
+                if not fflush_fn:
+                    fflush_ty = ir.FunctionType(ir.IntType(32), [self.voidptr_ty])
+                    fflush_fn = (ir.Function(self.module, fflush_ty, name="fflush"), fflush_ty)
+                    self.functions_table["fflush"] = fflush_fn
+                self.builder.call(fflush_fn[0], [ir.Constant(self.voidptr_ty, None)])
+                
                 return ir.Constant(self.i64_ty, 0)
             elif node.is_method:
                 obj_node = node.args[0]
@@ -374,7 +408,14 @@ class ExpressionCodegen:
                 args = []
                 for i, arg_node in enumerate(node.args):
                     arg_val = self.codegen_expr(arg_node)
-                    if func_type.args[i] == self.f64_ty and arg_val.type == self.i64_ty: arg_val = self.to_float_if_needed(arg_val)
+                    if func_type.args[i] == self.f64_ty and arg_val.type == self.i64_ty: 
+                        arg_val = self.to_float_if_needed(arg_val)
+                        
+                    # NOVO: Se a função esperar um ponteiro genérico (i8* / void*) 
+                    # e recebemos um ponteiro tipado (i64*), faz o bitcast automaticamente!
+                    elif func_type.args[i] == self.voidptr_ty and isinstance(arg_val.type, ir.PointerType) and arg_val.type != self.voidptr_ty:
+                        arg_val = self.builder.bitcast(arg_val, self.voidptr_ty, name="arg_void_cast")
+                        
                     args.append(arg_val)
                 return self.builder.call(func, args, name=node.name + "_call")
                 

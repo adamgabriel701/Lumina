@@ -1,0 +1,35 @@
+fn iniciar_servidor(porta: int) -> int:
+    # 1. Cria o socket (IPv4, TCP)
+    let server_fd = socket(2, 1, 0)
+    if server_fd < 0:
+        print("Erro ao criar o socket")
+        return -1
+        
+    # 2. Configura o endereço (sockaddr_in)
+    # Em C, essa struct tem 16 bytes. Vamos alocar e preencher manualmente.
+    mut addr = alloc_bytes(16)
+    
+    # NOVO: Zera a memória para limpar o lixo (importante para o bind não falhar)
+    for i in 0..16:
+        addr[i] = 0
+        
+    # Preenche a struct sockaddr_in:
+    # Byte 0-1: Family (AF_INET = 2)
+    addr[0] = 2
+    
+    # Byte 2-3: Porta (Network Byte Order / Big Endian)
+    addr[2] = porta / 256
+    addr[3] = porta % 256
+    
+    # Byte 4-7: IP (0.0.0.0 = 0) - Já está zerado!
+    
+    # 3. Faz o bind (associa o socket à porta)
+    let bind_res = bind(server_fd, addr, 16)
+    if bind_res < 0:
+        print("Erro ao fazer bind na porta")
+        close(server_fd)
+        return -1
+        
+    # 4. Escuta por conexões (backlog de 10)
+    listen(server_fd, 10)
+    return server_fd

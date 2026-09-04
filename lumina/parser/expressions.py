@@ -55,6 +55,11 @@ class ExpressionParser:
     def parse_factor(self):
         token = self.current_token()
         
+        # NOVO: Operador Unário (- e +)
+        if token.type == TokenType.OP and token.value in ('-', '+'):
+            op = self.consume().value
+            return UnaryExpr(op, self.parse_factor())
+            
         # NOVO: Operador NOT
         if token.type == TokenType.KEYWORD and token.value == 'not':
             self.consume()

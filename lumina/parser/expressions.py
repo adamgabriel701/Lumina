@@ -35,7 +35,8 @@ class ExpressionParser:
 
     def parse_term(self):
         node = self.parse_factor()
-        while self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value in ('*', '/'):
+        # NOVO: Adicionado o operador de módulo (%)
+        while self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value in ('*', '/', '%'):
             op = self.consume().value
             right = self.parse_factor()
             node = BinaryExpr(op, node, right)

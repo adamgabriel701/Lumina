@@ -1,0 +1,23 @@
+/* Multiplicação de Matrizes (200x200) - Estresse de Loops Aninhados e Memória */
+fn main() -> int:
+    let n = 200
+    let size = n * n
+    mut a = alloc(size)
+    mut b = alloc(size)
+    mut c = alloc(size)
+    
+    for i in 0..size:
+        a[i] = i % 10
+        b[i] = (i * 2) % 10
+        c[i] = 0
+        
+    for i in 0..n:
+        for j in 0..n:
+            mut sum = 0
+            for k in 0..n:
+                sum += a[i * n + k] * b[k * n + j]
+            c[i * n + j] = sum
+            
+    print("Matriz C[0][0]:", c[0])
+    print("Matriz C[199][199]:", c[199 * n + 199])
+    return 0

@@ -150,6 +150,8 @@ class ExpressionCodegen:
                 elif node.op == '-': return self.builder.sub(left, right, name="sub_tmp")
                 elif node.op == '*': return self.builder.mul(left, right, name="mul_tmp")
                 elif node.op == '/': return self.builder.sdiv(left, right, name="div_tmp")
+                # NOVO: Operador de Módulo (%)
+                elif node.op == '%': return self.builder.srem(left, right, name="mod_tmp")
                 elif node.op in ('==', '!=', '<', '>', '<=', '>='): return self.builder.icmp_signed(node.op, left, right, name="cmp_tmp")
                 
         elif isinstance(node, IndexExpr):
@@ -166,16 +168,16 @@ class ExpressionCodegen:
                     idx_val = self.codegen_expr(node.index)
                     if idx_val.type != self.i64_ty: idx_val = self.builder.fptosi(idx_val, self.i64_ty, name="idx_int")
                     
-                    # NOVO: Se for uma string (i8*), lê o caractere (i8) e converte para i64 (int)
-                    if ptr.type == self.voidptr_ty:
+                    # NOVO: Se for string (i8*), lê o caractere (i8) e converte para i64 (int)
+                    # Verifica se NÃO é um array de inteiros do heap
+                    if ptr.type == self.voidptr_ty and node.array.name not in self.heap_int_arrays:
                         char_ptr = self.builder.gep(ptr, [idx_val], name="char_ptr")
                         char_val = self.builder.load(char_ptr, name="char_val")
                         # Converte o byte (i8) para inteiro (i64) para podermos comparar na Lumina
                         return self.builder.zext(char_val, self.i64_ty, name="char_as_int")
                         
                     # Se for array do Heap (i64*)
-                    if ptr.type == self.voidptr_ty:
-                        ptr = self.builder.bitcast(ptr, self.i64_ty.as_pointer(), name="heap_cast")
+                    # NOVO: O alloc já retorna i64*, então não precisamos mais do bitcast aqui!
                     elem_ptr = self.builder.gep(ptr, [idx_val], name="heap_elem_ptr")
                     return self.builder.load(elem_ptr, name="heap_elem_val")
             else:
@@ -220,12 +222,23 @@ class ExpressionCodegen:
                             s.remove(var_name)
                             break
                 ptr = self.codegen_expr(node.args[0])
+                # CORREÇÃO: Garante que o ponteiro seja i8* (void*) antes de chamar o free
+                if ptr.type != self.voidptr_ty:
+                    ptr = self.builder.bitcast(ptr, self.voidptr_ty, name="manual_free_cast")
                 self.builder.call(self.free, [ptr], name="free_call")
                 return ir.Constant(self.i64_ty, 0)
             elif node.name == "alloc":
                 size_val = self.codegen_expr(node.args[0])
                 size_bytes = self.builder.mul(size_val, ir.Constant(self.i64_ty, 8), name="size_bytes")
-                ptr = self.builder.call(self.malloc, [size_bytes], name="malloc_ptr")
+                ptr_i8 = self.builder.call(self.malloc, [size_bytes], name="malloc_ptr")
+                # NOVO: Retorna i64* diretamente, removendo bitcasts de dentro dos loops!
+                ptr_i64 = self.builder.bitcast(ptr_i8, self.i64_ty.as_pointer(), name="malloc_ptr_i64")
+                return ptr_i64
+                
+            # NOVO: Aloca exatamente a quantidade de bytes passada (1 byte por índice)
+            elif node.name == "alloc_bytes":
+                size_val = self.codegen_expr(node.args[0])
+                ptr = self.builder.call(self.malloc, [size_val], name="malloc_bytes_ptr")
                 return ptr
                 
             # NOVO: Lê argumentos da linha de comando (argv)

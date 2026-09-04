@@ -130,7 +130,7 @@ class SemanticAnalyzer:
                     real_method_name = f"{struct_name}_{node.name}"
                     if real_method_name not in self.functions:
                         raise LuminaError(f"Método '{node.name}' não declarado na struct '{struct_name}'.", self.filename, 0, 0, self.source_code)
-            elif node.name not in ("print", "input", "atoi", "len", "alloc", "free", "read_file", "write_file", "int", "float", "str", "argv", "chr") and node.name not in self.functions:
+            elif node.name not in ("print", "input", "atoi", "len", "alloc", "alloc_bytes", "free", "read_file", "write_file", "int", "float", "str", "argv", "chr") and node.name not in self.functions:
                 raise LuminaError(f"Função '{node.name}' não declarada.", self.filename, 0, 0, self.source_code)
             for arg in node.args: self.analyze_expr(arg)
         elif isinstance(node, ArrayExpr):

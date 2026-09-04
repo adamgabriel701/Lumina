@@ -14,6 +14,8 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen):
         self.string_counter = 0
         self.functions_table = {}
         self.array_sizes = {} 
+        # NOVO: Conjunto para rastrear variáveis que são arrays de inteiros alocados no Heap
+        self.heap_int_arrays = set()
         
         # NOVO: Pilha de escopos para auto-free (RAII)
         self.cleanup_vars = [set()]
@@ -63,6 +65,9 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen):
                 ptr = self.symbol_table.get(var_name)
                 if ptr:
                     val = self.builder.load(ptr, name=var_name + "_cleanup_val")
+                    # CORREÇÃO: Garante que o ponteiro seja i8* (void*) antes de chamar o free
+                    if val.type != self.voidptr_ty:
+                        val = self.builder.bitcast(val, self.voidptr_ty, name="free_cast")
                     self.builder.call(self.free, [val], name="auto_free_" + var_name)
                     self.freed_vars.add(var_name)
         vars_set.clear()

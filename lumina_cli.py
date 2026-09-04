@@ -137,31 +137,7 @@ def compile_lumina(filename, output_file="output.ll", use_cache=True):
     codegen = LLVMCodegen()
     llvm_ir = codegen.generate_module(ast)
     
-    # 2. Passes de Otimização LLVM em Memória
-    print("🔧 Aplicando otimizações LLVM...")
-    try:
-        mod = llvm.parse_assembly(llvm_ir)
-        mod.verify()
-        
-        # Tenta a API antiga do llvmlite (LLVM 13-)
-        try:
-            pmb = llvm.create_pass_manager_builder()
-            pmb.opt_level = 2
-            pm = llvm.create_module_pass_manager()
-            pmb.populate(pm)
-            pm.run(mod)
-        except AttributeError:
-            # Fallback para a nova API do llvmlite (LLVM 15+)
-            tm = llvm.Target.from_default_triple().create_target_machine()
-            pmb = llvm.create_pass_builder(tm)
-            pm = llvm.create_module_pass_manager()
-            pmb.populate(pm, opt_level=2)
-            pm.run(mod)
-            
-        llvm_ir = str(mod)
-    except Exception as e:
-        print(f"⚠️ Aviso: Não foi possível rodar as otimizações em memória: {e}")
-    
+    # Otimizações serão aplicadas pelo clang (-O3 -march=native)
     with open(output_file, "w") as f: f.write(llvm_ir)
     
     # Salva no cache para a próxima execução
@@ -355,7 +331,7 @@ def cmd_build(entry_file=None):
     ir_file = f"{project_name}.ll"
     with open(ir_file, "w") as f: f.write(llvm_ir)
     
-    cmd = f"clang -O2 {ir_file} -o {project_name} {link_flags}"
+    cmd = f"clang -O3 -march=native -funroll-loops {ir_file} -o {project_name} {link_flags}"
     
     print("\n--- 4. Linkagem Nativa ---")
     print(f"Executando: {cmd}")

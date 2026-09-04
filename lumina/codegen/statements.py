@@ -35,6 +35,8 @@ class StatementCodegen:
                 # NOVO: Se a variável recebeu um alloc, adiciona ao escopo para auto-free
                 if isinstance(node.value, CallExpr) and node.value.name == "alloc":
                     self.cleanup_vars[-1].add(node.name)
+                    # NOVO: Marca como array de inteiros no Heap
+                    self.heap_int_arrays.add(node.name)
 
         elif isinstance(node, AssignStmt):
             if isinstance(node.target, DerefExpr):
@@ -44,6 +46,7 @@ class StatementCodegen:
                 val = self.codegen_expr(node.value)
                 self.builder.store(val, ptr)
             elif isinstance(node.target, IndexExpr):
+                # Se for array da pilha (Stack)
                 if isinstance(node.target.array, VariableExpr) and node.target.array.name in self.array_sizes:
                     arr_ptr = self.symbol_table.get(node.target.array.name)
                     idx_val = self.codegen_expr(node.target.index)
@@ -52,13 +55,21 @@ class StatementCodegen:
                     val = self.codegen_expr(node.value)
                     self.builder.store(val, elem_ptr)
                 else:
+                    # Se for array do Heap
                     ptr = self.codegen_expr(node.target.array)
                     idx_val = self.codegen_expr(node.target.index)
                     if idx_val.type != self.i64_ty: idx_val = self.builder.fptosi(idx_val, self.i64_ty, name="idx_int")
-                    if ptr.type == self.voidptr_ty:
-                        ptr = self.builder.bitcast(ptr, self.i64_ty.as_pointer(), name="heap_assign_cast")
-                    elem_ptr = self.builder.gep(ptr, [idx_val], name="heap_assign_ptr")
+                    
                     val = self.codegen_expr(node.value)
+                    
+                    # NOVO: Verifica o tipo do ponteiro para saber se é array de bytes ou de inteiros
+                    if ptr.type == self.voidptr_ty:
+                        # É um array de bytes (alloc_bytes)
+                        if val.type == self.i64_ty:
+                            val = self.builder.trunc(val, self.i8_ty, name="byte_trunc")
+                    # Se for i64* (alloc), não faz nada, salva o i64 direto
+                    
+                    elem_ptr = self.builder.gep(ptr, [idx_val], name="heap_assign_ptr")
                     self.builder.store(val, elem_ptr)
             elif isinstance(node.target, MemberExpr):
                 obj_ptr = self.resolve_member_ptr(node.target)
@@ -73,6 +84,10 @@ class StatementCodegen:
                 var_ty = self.var_types[node.target.name]
                 if var_ty == self.f64_ty and val.type == self.i64_ty: val = self.to_float_if_needed(val)
                 self.builder.store(val, ptr)
+                
+                # NOVO: Se a reatribuição for um alloc, marca como array do Heap
+                if isinstance(node.value, CallExpr) and node.value.name == "alloc":
+                    self.heap_int_arrays.add(node.target.name)
 
         elif isinstance(node, ReturnStmt):
             val = self.codegen_expr(node.values[0])

@@ -1,0 +1,9 @@
+fn fib(n: int) -> int:
+    if n <= 1:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+fn main() -> int:
+    let result = fib(35)
+    print("Fib(35) =", result)
+    return 0

@@ -1,0 +1,104 @@
+A Lumina foi desenhada para ser uma linguagem de sistemas moderna, combinando a ergonomia da sintaxe baseada em indentação (inspirada em Python e Nim) com o poder de baixo nível do LLVM, oferecendo inferência de tipos forte e compilação para código nativo de alta performance.
+
+Abaixo, apresento a especificação completa, arquitetura, código inicial e o guia de configuração. A implementação será feita em **Python** utilizando a biblioteca `llvmlite`, por ser mais acessível para prototipagem rápida de compiladores.
+
+---
+
+### 1. Especificação de Sintaxe e Exemplos
+
+#### 1.1. Declaração de Variáveis e Constantes
+Lumina usa `let` para variáveis mutáveis com inferência de tipo, `let` com anotação explícita (`: tipo`) quando necessário, e `const` para constantes de tempo de compilação.
+
+```lumina
+# Inferência de tipo (deduzido como inteiro de 64 bits)
+let x = 10
+
+# Tipagem explícita
+let y: float = 3.14
+
+# Constante
+const MAX_LIMIT = 100
+```
+
+#### 1.2. Estruturas de Controle
+Sem chaves e sem parênteses obrigatórios. O escopo é definido pela indentação (4 espaços).
+
+```lumina
+# Condicional
+if x > 5:
+    print("Maior")
+elif x == 5:
+    print("Igual")
+else:
+    print("Menor")
+
+# Loop While
+let i = 0
+while i < 3:
+    print(i)
+    i = i + 1
+
+# Loop For (range exclusivo no final)
+for j in 0..3:
+    print(j)
+```
+
+#### 1.3. Funções
+Funções são declaradas com `fn`. O tipo de retorno é inferido ou explicitado após `->`.
+
+```lumina
+fn somar(a: int, b: int) -> int:
+    return a + b
+```
+
+#### 1.4. Exemplos Completos
+
+**Hello World:**
+```lumina
+fn main():
+    print("Hello, World!")
+```
+
+**Fibonacci Recursivo:**
+```lumina
+fn fib(n: int) -> int:
+    if n <= 1:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+fn main():
+    let resultado = fib(10)
+    print("Fibonacci de 10 é:")
+    print(resultado)
+```
+
+---
+
+### 2. Arquitetura do Compilador
+
+O fluxo do compilador da Lumina segue o modelo clássico de front-end, middle-end e back-end:
+
+```text
+[Código-fonte .lm]
+      │
+      ▼
+[1. Lexer] ──> Gera Tokens (tratando INDENT/DEDENT)
+      │
+      ▼
+[2. Parser] ──> Constrói a AST (Árvore de Sintaxe Abstrata)
+      │
+      ▼
+[3. Analisador Semântico] ──> Verifica escopos e realiza Inferência de Tipos (Hindley-Milner simplificado)
+      │
+      ▼
+[4. Gerador de LLVM IR] ──> Usa llvmlite para mapear a AST tipada para LLVM IR
+      │
+      ▼
+[Código LLVM IR (.ll)]
+      │
+      ▼
+[5. LLVM Optimizer & Codegen] ──> `opt` e `llc` ou `clang` convertem IR para código de máquina nativo
+      │
+      ▼
+[Executável Nativo]
+```

@@ -21,6 +21,10 @@ class BuiltinManager:
         atoi_ty = ir.FunctionType(i64_ty, [voidptr_ty])
         atoi = ir.Function(module, atoi_ty, name="atoi")
         
+        # NOVO: strlen para medir strings
+        strlen_ty = ir.FunctionType(i64_ty, [voidptr_ty])
+        strlen_fn = ir.Function(module, strlen_ty, name="strlen")
+        
         # Memória
         malloc_ty = ir.FunctionType(voidptr_ty, [i64_ty])
         malloc_fn = ir.Function(module, malloc_ty, name="malloc")
@@ -28,7 +32,7 @@ class BuiltinManager:
         free_ty = ir.FunctionType(ir.VoidType(), [voidptr_ty])
         free_fn = ir.Function(module, free_ty, name="free")
         
-        # NOVO: Manipulação de Arquivos
+        # Manipulação de Arquivos
         fopen_ty = ir.FunctionType(voidptr_ty, [voidptr_ty, voidptr_ty])
         fopen = ir.Function(module, fopen_ty, name="fopen")
         
@@ -41,4 +45,4 @@ class BuiltinManager:
         fclose_ty = ir.FunctionType(ir.VoidType(), [voidptr_ty])
         fclose = ir.Function(module, fclose_ty, name="fclose")
         
-        return printf, scanf, atoi, sprintf, malloc_fn, free_fn, fopen, fgets, fputs, fclose
+        return printf, scanf, atoi, sprintf, malloc_fn, free_fn, fopen, fgets, fputs, fclose, strlen_fn

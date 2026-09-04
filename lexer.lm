@@ -1,0 +1,30 @@
+/* O Primeiro Passo do Bootstrapping: Um Lexer escrito em Lumina */
+
+fn main() -> int:
+    let code = "let x = 42;"
+    let length = len(code)
+    
+    mut letters = 0
+    mut digits = 0
+    mut symbols = 0
+    mut spaces = 0
+    
+    for i in 0..length:
+        let c = code[i]
+        
+        if c == 32:
+            spaces += 1
+        elif (c >= 65 and c <= 90) or (c >= 97 and c <= 122):
+            letters += 1
+        elif c >= 48 and c <= 57:
+            digits += 1
+        else:
+            symbols += 1
+            
+    print("Análise Léxica do código:", code)
+    print("Letras:", letters)
+    print("Números:", digits)
+    print("Símbolos:", symbols)
+    print("Espaços:", spaces)
+    
+    return 0

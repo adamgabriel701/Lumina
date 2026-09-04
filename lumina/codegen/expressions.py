@@ -146,6 +146,7 @@ class ExpressionCodegen:
         elif isinstance(node, IndexExpr):
             if isinstance(node.array, VariableExpr):
                 if node.array.name in self.array_sizes:
+                    # Array estático na pilha
                     arr_ptr = self.symbol_table.get(node.array.name)
                     idx_val = self.codegen_expr(node.index)
                     if idx_val.type != self.i64_ty: idx_val = self.builder.fptosi(idx_val, self.i64_ty, name="idx_int")
@@ -155,6 +156,15 @@ class ExpressionCodegen:
                     ptr = self.codegen_expr(node.array)
                     idx_val = self.codegen_expr(node.index)
                     if idx_val.type != self.i64_ty: idx_val = self.builder.fptosi(idx_val, self.i64_ty, name="idx_int")
+                    
+                    # NOVO: Se for uma string (i8*), lê o caractere (i8) e converte para i64 (int)
+                    if ptr.type == self.voidptr_ty:
+                        char_ptr = self.builder.gep(ptr, [idx_val], name="char_ptr")
+                        char_val = self.builder.load(char_ptr, name="char_val")
+                        # Converte o byte (i8) para inteiro (i64) para podermos comparar na Lumina
+                        return self.builder.zext(char_val, self.i64_ty, name="char_as_int")
+                        
+                    # Se for array do Heap (i64*)
                     if ptr.type == self.voidptr_ty:
                         ptr = self.builder.bitcast(ptr, self.i64_ty.as_pointer(), name="heap_cast")
                     elem_ptr = self.builder.gep(ptr, [idx_val], name="heap_elem_ptr")
@@ -183,9 +193,15 @@ class ExpressionCodegen:
                 arg_val = self.codegen_expr(node.args[0])
                 return self.builder.call(self.atoi, [arg_val], name="atoi_call")
             elif node.name == "len":
-                arr_name = node.args[0].name
-                size = self.array_sizes.get(arr_name, 0)
-                return ir.Constant(self.i64_ty, size)
+                if isinstance(node.args[0], VariableExpr) and node.args[0].name in self.array_sizes:
+                    size = self.array_sizes.get(node.args[0].name, 0)
+                    return ir.Constant(self.i64_ty, size)
+                else:
+                    # NOVO: Se for uma string, chama strlen do C
+                    ptr = self.codegen_expr(node.args[0])
+                    if ptr.type == self.voidptr_ty:
+                        return self.builder.call(self.strlen, [ptr], name="strlen_call")
+                    return ir.Constant(self.i64_ty, 0)
             elif node.name == "free":
                 # NOVO: Se o usuário chamou free manualmente, remove da pilha de auto-free
                 if isinstance(node.args[0], VariableExpr):

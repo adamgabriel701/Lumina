@@ -1,0 +1,61 @@
+# ==========================================
+# Python & Caches
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+ENV/
+
+# ==========================================
+# Arquivos de Compilação & LLVM IR
+# ==========================================
+*.ll
+*.bc
+*.s
+*.o
+*.obj
+output.ll
+
+# Executáveis gerados por testes locais ou CLI
+programa_final
+a.out
+
+# ==========================================
+# Benchmarks (Binários Compilados)
+# ==========================================
+benchmarks/fib
+benchmarks/fib_c
+benchmarks/fib_cpp
+benchmarks/fib_go
+benchmarks/fib_rs
+benchmarks/loop
+benchmarks/loop_c
+benchmarks/loop_cpp
+benchmarks/loop_go
+benchmarks/loop_rs
+
+# ==========================================
+# Módulos & Extensão do VS Code
+# ==========================================
+*.vsix
+lumina-vscode/node_modules/
+lumina-vscode/out/
+lumina_modules/
+
+# ==========================================
+# Logs e Arquivos Temporários
+# ==========================================
+*.log
+log.txt
+.DS_Store
+Thumbs.db
+
+# ==========================================
+# IDEs e Ambientes de Desenvolvimento
+# ==========================================
+.vscode/
+.idea/
+.devcontainer/

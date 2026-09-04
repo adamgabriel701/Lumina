@@ -19,7 +19,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen):
         self.cleanup_vars = [set()]
         self.freed_vars = set()
         
-        self.printf, self.scanf, self.atoi, self.sprintf, self.malloc, self.free, self.fopen, self.fgets, self.fputs, self.fclose = BuiltinManager.setup_builtins(self.module)
+        self.printf, self.scanf, self.atoi, self.sprintf, self.malloc, self.free, self.fopen, self.fgets, self.fputs, self.fclose, self.strlen = BuiltinManager.setup_builtins(self.module)
         
         self.i64_ty = ir.IntType(64)
         self.f64_ty = ir.DoubleType()

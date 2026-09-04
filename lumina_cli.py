@@ -335,7 +335,7 @@ def cmd_build(entry_file=None):
     ir_file = f"{project_name}.ll"
     with open(ir_file, "w") as f: f.write(llvm_ir)
     
-    cmd = f"clang -O3 -march=native -funroll-loops {ir_file} -o {project_name} {link_flags} -lc -lpthread"
+    cmd = f"clang -O3 -march=native -funroll-loops {ir_file} -o {project_name} {link_flags} -lc -lpthread -lgc"
     
     print("\n--- 4. Linkagem Nativa ---")
     print(f"Executando: {cmd}")

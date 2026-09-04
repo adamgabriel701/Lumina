@@ -8,7 +8,7 @@
 
 **Lumina** é uma linguagem de programação de sistemas de propósito geral, focada em alta performance, ergonomia, concorrência e segurança de memória. Ela combina a sintaxe limpa e expressiva baseada em indentação (estilo Python/Nim) com o poder de baixo nível e otimização industrial do backend **LLVM**.
 
-A linguagem oferece tipagem estática com inferência, controle de memória híbrido (manual + RAII), Tipos Algébricos (Enums), interoperabilidade nativa com C (FFI), multithreading nativo (POSIX Threads), um Web Framework HTTP embutido, compilação incremental com cache inteligente e um ecossistema completo de ferramentas no CLI.
+A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums), interoperabilidade nativa com C (FFI), multithreading nativo (POSIX Threads), compilação incremental com cache inteligente e um ecossistema completo de ferramentas no CLI.
 
 ---
 
@@ -16,12 +16,12 @@ A linguagem oferece tipagem estática com inferência, controle de memória híb
 
 * **Sintaxe Limpa & Indentada:** Escopo definido por indentação significativa (sem chaves `{}` ou pontos e vírgulas `;`).
 * **Tipagem Estática com Inferência:** O compilador deduz os tipos automaticamente sem perder a segurança e performance de tempo de compilação.
+* **Mutabilidade Rigorosa:** `let` declara variáveis imutáveis por padrão. Use `mut` para indicar mutabilidade explícita.
 * **Tipos Algébricos (ADTs) & Pattern Matching:** Defina `enum`s contendo dados/payloads (ex: `Some(int)`, `None`) e extraia valores com `match`.
-* **Gerenciamento de Memória Híbrido (RAII & Auto-Free):**
-  * Suporte a ponteiros explícitos (`&` e `*`), ponteiros de função, aritmética e alocação dinâmica (`alloc` / `alloc_bytes` / `free`).
-  * **RAII:** Recursos alocados no Heap são automaticamente destruídos no término do escopo, prevenindo vazamentos de memória.
+* **Gerenciamento de Memória Automático (Garbage Collector):**
+  * Integração nativa com o **Boehm GC** (`libgc`). A memória alocada dinamicamente (`alloc`, `alloc_bytes`, concatenação de strings) é limpa automaticamente em segundo plano, eliminando vazamentos de memória sem a necessidade de chamadas manuais de `free()`.
 * **Concorrência e Redes (I/O Nativo):**
-  * **Multithreading:** Suporte a criação de threads nativas do sistema operacional via FFI com `pthread_create` e `pthread_join`.
+  * **Multithreading:** Suporte a criação de threads nativas do sistema operacional via FFI com `pthread_create` e `pthread_join`, incluindo o uso de ponteiros de função (`&worker`).
   * **Web Framework:** Módulo `std/http` para criação de servidores TCP/HTTP de altíssima performance direto no kernel do Linux (POSIX Sockets).
 * **Pipeline LLVM Avançado & Cache Incremental:**
   * **Otimizações Agressivas:** Gera código intermediário (IR) limpo e delega ao `clang -O3 -march=native` a aplicação de vetorização de loops (AVX/SSE) e promoção a registradores (`mem2reg`).
@@ -33,7 +33,7 @@ A linguagem oferece tipagem estática com inferência, controle de memória híb
 
 ## 🏎️ Benchmarks de Performance (Média de 10 Execuções)
 
-A Lumina foi testada contra as principais linguagens compiladas e interpretadas do mercado. Os testes abaixo representam a **média de 10 execuções** consecutivas. 
+A Lumina foi testada contra as principais linguagens compiladas e interpretadas do mercado. Os testes abaixo representam a **média de 10 execuções** consecutivas para garantir estabilidade matemática e remover ruídos do SO. 
 Para isolar a qualidade do código gerado, tanto a Lumina quanto o C foram compilados com o mesmo backend LLVM (`clang -O3 -march=native -funroll-loops`).
 
 ### Teste 1: Fibonacci Recursivo (N=35) — Chamadas de Função e CPU
@@ -42,6 +42,9 @@ Para isolar a qualidade do código gerado, tanto a Lumina quanto o C foram compi
 | Rust | 0.0362 |
 | C | 0.0400 |
 | **Lumina** | **0.0400** 🥇 |
+| Go | 0.0713 |
+| Node.js | 0.2364 |
+| Python | 1.4574 |
 
 ### Teste 2: Loop Matemático (100 Milhões) — Estresse de Memória e Loops
 | Linguagem | Tempo Médio (s) |
@@ -49,6 +52,8 @@ Para isolar a qualidade do código gerado, tanto a Lumina quanto o C foram compi
 | **Lumina** | **0.0028** 🥇 |
 | C | 0.0029 |
 | Rust | 0.0040 |
+| Go | 0.1007 |
+| Node.js | 0.1476 |
 
 ### Teste 3: Crivo de Eratóstenes (10 Milhões) — Acesso a Array no Heap
 | Linguagem | Tempo Médio (s) |
@@ -56,6 +61,7 @@ Para isolar a qualidade do código gerado, tanto a Lumina quanto o C foram compi
 | **Lumina** | **0.0257** 🥇 |
 | C | 0.0308 |
 | Rust | 0.0326 |
+| Go | 0.0416 |
 
 ### Teste 4: Multiplicação de Matrizes (200x200) — Loops Aninhados e Cache
 | Linguagem | Tempo Médio (s) |
@@ -63,32 +69,76 @@ Para isolar a qualidade do código gerado, tanto a Lumina quanto o C foram compi
 | C | 0.0066 |
 | **Lumina** | **0.0073** |
 | Rust | 0.0102 |
+| Go | 0.0168 |
+| Node.js | 0.0551 |
 
-*Resultado: A Lumina supera o C em loops matemáticos e acesso a memória otimizado, e destrói o Rust em 3 dos 4 testes.*
+*Resultado: Com o mesmo backend (LLVM/Clang), a Lumina supera o C em loops matemáticos e acesso a memória otimizado, e destrói o Rust em 3 dos 4 testes, provando ser uma linguagem de sistemas de altíssima performance.*
 
 ---
 
 ## 🚀 Como Usar (CLI)
 
 ### Pré-requisitos
+
 * **Python 3.10+**
-* Biblioteca `llvmlite` (`pip install llvmlite`)
+* Biblioteca Python `llvmlite` (`pip install llvmlite`)
 * **LLVM** e **Clang** instalados e acessíveis no `PATH`
+* **Boehm GC** instalado (`sudo apt install libgc-dev`)
 * **Git** (para o gerenciador de pacotes)
 
-### Instalação Global (Alias)
+---
+
+### Instalação Global Recomendada (Alias / Symlink)
+
+Para executar o comando `lumina` de qualquer diretório sem precisar apontar para a pasta do script, adicione um alias no seu terminal:
+
 ```bash
 # Linux / macOS (~/.bashrc ou ~/.zshrc)
 alias lumina="python3 /caminho/para/Lumina/lumina_cli.py"
 ```
 
+---
+
 ### Comandos Principais
+
+#### 1. Criar um novo projeto
+Gera a estrutura inicial com arquivo de configuração `lumina.json` e ponto de entrada `main.lm`.
 ```bash
-lumina new meu_projeto      # Cria a estrutura inicial (lumina.json + main.lm)
-lumina install              # Baixa dependências do GitHub para lumina_modules/
-lumina jit                  # Executa instantaneamente na memória RAM
-lumina build                # Compila para binário nativo otimizado (-O3)
-lumina doc                  # Gera portal de documentação HTML em docs/index.html
+lumina new meu_projeto
+cd meu_projeto
+```
+
+#### 2. Gerenciar Dependências Remotas
+Declare repositórios remotos do GitHub no arquivo `lumina.json`:
+```json
+{
+  "dependencies": {
+    "utils": "github:usuario/repo"
+  }
+}
+```
+Baixe os pacotes para `lumina_modules/`:
+```bash
+lumina install
+```
+
+#### 3. Execução Instantânea via JIT
+Compila e executa diretamente na memória RAM sem gerar arquivos intermediários no disco.
+```bash
+lumina jit
+```
+
+#### 4. Compilar para Binário Nativo Otimizado
+Aplica as otimizações em memória, utiliza o cache incremental (`.lumina_cache`) e invoca o `clang -O3` para gerar o executável final (linkando com `libgc` e `pthread`):
+```bash
+lumina build
+./meu_projeto
+```
+
+#### 5. Gerar Portal de Documentação HTML
+Extrai comentários iniciados em `##` do código e cria a página web em `docs/index.html`:
+```bash
+lumina doc
 ```
 
 ---
@@ -96,7 +146,7 @@ lumina doc                  # Gera portal de documentação HTML em docs/index.h
 ## 🛠️ Exemplos de Código
 
 ### 1. Multithreading Nativo (POSIX Threads)
-A Lumina suporta concorrência real passando ponteiros de função diretamente para a API do C:
+A Lumina suporta concorrência real passando ponteiros de função (`&worker`) diretamente para a API do C:
 ```lumina
 extern fn pthread_create(thread: str, attr: int, start_routine: int, arg: str) -> int
 extern fn pthread_join(thread: int, retval: int) -> int
@@ -113,26 +163,39 @@ fn main() -> int:
     return 0
 ```
 
-### 2. Web Framework HTTP Nativo
-Um servidor web rodando direto no kernel do Linux, sem Apache ou Node.js:
+### 2. Tipos Algébricos, Pattern Matching e FFI Nativa
 ```lumina
-import "std/http"
+enum Option:
+    Some(int)
+    None
+
+fn dividir(a: int, b: int) -> Option:
+    if b == 0:
+        return None
+    return Some(a / b)
 
 fn main() -> int:
-    let server_fd = iniciar(8080)
-    mut request_buffer = alloc_bytes(1024)
-    
-    while true:
-        let client_fd = accept(server_fd, ...)
-        recv(client_fd, request_buffer, 1024, 0)
-        
-        # Roteamento HTTP
-        if request_buffer[5] == 32: # "GET / "
-            responder(client_fd, "<h1>Bem-vindo!</h1>")
-            continue
+    let res = dividir(10, 2)
+    match res:
+        case Some(val):
+            print("Sucesso! Resultado:", val)
+        case None:
+            print("Falha: divisao por zero")
             
-        not_found(client_fd)
+    extern fn sqrt(x: float) -> float
+    print("Raiz quadrada de 16.0:", sqrt(16.0))
+    return 0
 ```
+
+---
+
+## 📦 Standard Library (`std/`)
+
+A Lumina conta com uma biblioteca padrão modularizada em `std/` escrita na própria linguagem, encapsulando chamadas de sistema e bibliotecas C nativas de forma segura:
+
+* `std/math`: Funções matemáticas (sqrt, sin, cos).
+* `std/fs`: Manipulação de arquivos.
+* `std/http`: Web Framework HTTP nativo (Servidor TCP, Rotas, Respostas HTTP).
 
 ---
 
@@ -141,17 +204,32 @@ fn main() -> int:
 ```text
 Lumina/
 ├── lumina_cli.py            # CLI, Build System, Cache e Package Manager
-├── std/                     # Standard Library (http.lm, net.lm, math.lm, fs.lm)
+├── std/                     # Standard Library (http.lm, math.lm, fs.lm, etc)
 ├── benchmarks/              # Suíte de benchmarks (Lumina vs C, Rust, Go)
+├── program.lm               # Arquivo principal de testes locais
 ├── lumina/                  # Núcleo do Compilador
-│   ├── errors.py            # Erros amigáveis estilo Rust
+│   ├── errors.py            # Erros amigáveis com indicação de linha e coluna (Rust-style)
 │   ├── lexer/               # Análise Léxica (Tokens, INDENT/DEDENT)
 │   ├── parser/              # Análise Sintática e Construção da AST
 │   ├── semantic/            # Analisador Semântico (Escopos, Mutabilidade, Tipos)
-│   ├── codegen/             # Geração de código LLVM IR (RAII, Enums, FFI, Threads)
+│   ├── codegen/             # Geração de código LLVM IR (GC, Enums, FFI, Threads)
 │   └── ast/                 # Definições dos Nós da Árvore Sintática Abstrata
-└── tests/                   # Suíte de testes funcionais
+└── tests/                   # Suíte de testes funcionais e de regressão
 ```
 
+---
+
+## 🎨 Extensão para o VS Code
+
+A Lumina oferece suporte a realce de sintaxe (*syntax highlighting*) e regras de indentação para o VS Code:
+
+1. Gere o pacote `.vsix` executando `npx @vscode/vsce package` na pasta da extensão.
+2. No VS Code, abra o painel de Extensões (`Ctrl+Shift+X`).
+3. Clique no menu de três pontos (`...`) no canto superior direito > **Instalar de VSIX...**.
+4. Selecione o arquivo `.vsix` gerado e reinicie a janela.
+
+---
+
 ## 📜 Licença
-Este projeto é distribuído sob a Licença **MIT**.
+
+Este projeto é distribuído sob a Licença **MIT**. Para mais detalhes, consulte o arquivo [LICENSE](LICENSE).

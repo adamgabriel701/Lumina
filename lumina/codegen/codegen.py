@@ -63,16 +63,8 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen):
 
     # NOVO: Método para limpar variáveis de um escopo
     def cleanup_block(self, vars_set):
-        for var_name in list(vars_set):
-            if var_name not in self.freed_vars:
-                ptr = self.symbol_table.get(var_name)
-                if ptr:
-                    val = self.builder.load(ptr, name=var_name + "_cleanup_val")
-                    # CORREÇÃO: Garante que o ponteiro seja i8* (void*) antes de chamar o free
-                    if val.type != self.voidptr_ty:
-                        val = self.builder.bitcast(val, self.voidptr_ty, name="free_cast")
-                    self.builder.call(self.free, [val], name="auto_free_" + var_name)
-                    self.freed_vars.add(var_name)
+        # O Garbage Collector (Boehm GC) agora cuida da memória!
+        # Não precisamos mais inserir chamadas de 'free' automáticas (RAII).
         vars_set.clear()
 
     def get_llvm_type(self, type_name):

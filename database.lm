@@ -1,0 +1,45 @@
+import "std/fs"
+
+# Função para inserir na tabela (passamos a tabela e o ponteiro do contador)
+fn inserir(tabela: str, total_ptr: str, chave: int, valor: int):
+    let total = total_ptr[0]
+    if total < 100:
+        # Guarda a chave na posição atual
+        tabela[total] = chave
+        # Incrementa o contador
+        total_ptr[0] = total + 1
+
+# Função para buscar na tabela
+fn buscar(tabela: str, total: int, chave: int) -> int:
+    for i in 0..total:
+        if tabela[i] == chave:
+            return i
+    return -1
+
+fn main() -> int:
+    print("🚀 LuminaDB Iniciado!")
+    
+    # Tabela em memória (Array de até 100 inteiros)
+    mut tabela = alloc(100)
+    # Ponteiro para guardar o total de registros
+    mut total_ptr = alloc(1)
+    total_ptr[0] = 0
+    
+    # Inserindo dados
+    inserir(tabela, total_ptr, 1, 100)
+    inserir(tabela, total_ptr, 2, 200)
+    inserir(tabela, total_ptr, 3, 300)
+    
+    # Atualiza o total local
+    let total = total_ptr[0]
+    
+    # Buscando
+    let idx = buscar(tabela, total, 2)
+    if idx != -1:
+        print("Chave 2 encontrada no indice:", idx)
+        
+    # Persistindo no disco
+    write_file("lumina_db.txt", "LuminaDB - Total de registros salvos: 3")
+    print("💾 Banco de dados salvo em lumina_db.txt")
+    
+    return 0

@@ -77,6 +77,11 @@ class EnumDecl:
 class ContinueStmt:
     pass
 
+# NOVO NÓ DE DEFER
+@dataclass
+class DeferStmt:
+    body: List[any]
+
 @dataclass
 class Function:
     name: str

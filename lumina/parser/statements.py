@@ -1,4 +1,4 @@
-from ..ast import VarDecl, AssignStmt, ReturnStmt, Function, IfStmt, WhileStmt, ForStmt, StructDecl, VariableExpr, MatchStmt, ImplBlock, DerefExpr, MemberExpr, IndexExpr, ImportStmt, ExternDecl, EnumDecl, BinaryExpr, ContinueStmt
+from ..ast import VarDecl, AssignStmt, ReturnStmt, Function, IfStmt, WhileStmt, ForStmt, StructDecl, VariableExpr, MatchStmt, ImplBlock, DerefExpr, MemberExpr, IndexExpr, ImportStmt, ExternDecl, EnumDecl, BinaryExpr, ContinueStmt, DeferStmt, NumberExpr
 from ..lexer import TokenType
 
 class StatementParser:
@@ -13,6 +13,11 @@ class StatementParser:
             
         elif token.type == TokenType.KEYWORD and token.value == 'return':
             self.consume()
+            # NOVO: Se vier um NEWLINE logo após, é um 'return' vazio (retorna 0)
+            if self.current_token() and self.current_token().type == TokenType.NEWLINE:
+                self.consume()
+                return ReturnStmt([NumberExpr("0")])
+                
             values = [self.parse_expression()]
             while self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == ',':
                 self.consume()
@@ -49,6 +54,26 @@ class StatementParser:
             self.consume()
             self.consume(TokenType.NEWLINE)
             return ContinueStmt()
+            
+        # NOVO: Defer
+        elif token.type == TokenType.KEYWORD and token.value == 'defer':
+            self.consume()
+            # Suporta "defer close(fd)" ou "defer: <bloco>"
+            if self.current_token().type == TokenType.OP and self.current_token().value == ':':
+                self.consume()
+                self.consume(TokenType.NEWLINE)
+                self.consume(TokenType.INDENT)
+                body = []
+                while self.current_token() and self.current_token().type != TokenType.DEDENT:
+                    if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
+                    body.append(self.parse_statement())
+                self.consume(TokenType.DEDENT)
+                return DeferStmt(body)
+            else:
+                # Defer de linha única
+                expr = self.parse_expression()
+                self.consume(TokenType.NEWLINE)
+                return DeferStmt([expr])
             
         elif token.type == TokenType.OP and token.value == '*':
             node = self.parse_expression()

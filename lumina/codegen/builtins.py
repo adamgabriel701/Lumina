@@ -16,16 +16,25 @@ class BuiltinManager:
         # Strings
         sprintf_ty = ir.FunctionType(i32_ty, [voidptr_ty, voidptr_ty], var_arg=True)
         sprintf = ir.Function(module, sprintf_ty, name="sprintf")
+        
+        # NOVO: snprintf (seguro contra buffer overflow) e strcpy
+        snprintf_ty = ir.FunctionType(i32_ty, [voidptr_ty, i64_ty, voidptr_ty], var_arg=True)
+        snprintf_fn = ir.Function(module, snprintf_ty, name="snprintf")
+        strcpy_ty = ir.FunctionType(voidptr_ty, [voidptr_ty, voidptr_ty])
+        strcpy_fn = ir.Function(module, strcpy_ty, name="strcpy")
+        
         atoi_ty = ir.FunctionType(i64_ty, [voidptr_ty])
         atoi = ir.Function(module, atoi_ty, name="atoi")
         strlen_ty = ir.FunctionType(i64_ty, [voidptr_ty])
         strlen_fn = ir.Function(module, strlen_ty, name="strlen")
+        strcat_ty = ir.FunctionType(voidptr_ty, [voidptr_ty, voidptr_ty])
+        strcat_fn = ir.Function(module, strcat_ty, name="strcat")
+        strdup_ty = ir.FunctionType(voidptr_ty, [voidptr_ty])
+        strdup_fn = ir.Function(module, strdup_ty, name="strdup")
         
-        # Memória - NOVO: Usando GC_malloc do Boehm GC
+        # Memória (GC)
         malloc_ty = ir.FunctionType(voidptr_ty, [i64_ty])
         malloc_fn = ir.Function(module, malloc_ty, name="GC_malloc")
-        
-        # Mantemos o free apenas para compatibilidade, mas o GC ignora ele
         free_ty = ir.FunctionType(ir.VoidType(), [voidptr_ty])
         free_fn = ir.Function(module, free_ty, name="free")
         
@@ -39,4 +48,5 @@ class BuiltinManager:
         fclose_ty = ir.FunctionType(ir.VoidType(), [voidptr_ty])
         fclose = ir.Function(module, fclose_ty, name="fclose")
         
-        return printf, scanf, atoi, sprintf, malloc_fn, free_fn, fopen, fgets, fputs, fclose, strlen_fn
+        # NOVO: Retorno agora inclui snprintf_fn e strcpy_fn
+        return printf, scanf, atoi, sprintf, malloc_fn, free_fn, fopen, fgets, fputs, fclose, strlen_fn, strcat_fn, strdup_fn, snprintf_fn, strcpy_fn

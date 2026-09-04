@@ -120,32 +120,32 @@ class ExpressionCodegen:
                     neg_right = self.builder.neg(right, name="neg_idx")
                     return self.builder.gep(left, [neg_right], name="ptr_sub_tmp")
                     
-            # NOVO: Concatenação Dinâmica de Strings (malloc)
-            # Verifica os tipos em tempo de execução no LLVM, não apenas na AST
+            # NOVO: Concatenação Dinâmica de Strings (100% robusto com snprintf e strcpy)
             if node.op == '+' and (isinstance(node.left, StringExpr) or isinstance(node.right, StringExpr) or left.type == self.voidptr_ty or right.type == self.voidptr_ty):
-                # Garante que a string esteja à esquerda
-                if left.type != self.voidptr_ty and right.type == self.voidptr_ty:
+                
+                # Se o lado direito for um inteiro (i64), converte para string em um buffer isolado
+                if right.type == self.i64_ty:
+                    int_buf = self.builder.alloca(ir.ArrayType(self.i8_ty, 32), name="int_buf")
+                    int_buf_ptr = self.builder.bitcast(int_buf, self.voidptr_ty, name="int_ptr")
+                    fmt_int = self.create_global_string("%ld")
+                    # NOVO: Usa snprintf para evitar qualquer estouro de memória
+                    self.builder.call(self.snprintf, [int_buf_ptr, ir.Constant(self.i64_ty, 32), fmt_int, right], name="int_to_str")
+                    right = int_buf_ptr
+                    
+                # Se o lado esquerdo for inteiro, inverte para ficar string + string
+                if left.type == self.i64_ty and right.type == self.voidptr_ty:
                     left, right = right, left
                     
-                if left.type == self.voidptr_ty:
-                    # Calcula o tamanho das duas strings
-                    len1 = self.builder.call(self.strlen, [left], name="len1")
-                    if right.type == self.i64_ty:
-                        len2 = ir.Constant(self.i64_ty, 20) # Tamanho máximo de um int
-                        fmt_str = self.create_global_string("%s%ld")
-                    else:
-                        len2 = self.builder.call(self.strlen, [right], name="len2")
-                        fmt_str = self.create_global_string("%s%s")
-                        
-                    total_len = self.builder.add(len1, len2, name="total_len")
-                    total_bytes = self.builder.add(total_len, ir.Constant(self.i64_ty, 1), name="total_bytes")
-                    
-                    # Aloca memória no Heap para a nova string
-                    buf = self.builder.call(self.malloc, [total_bytes], name="str_concat_buf")
-                    # Usa sprintf para concatenar
-                    self.builder.call(self.sprintf, [buf, fmt_str, left, right], name="sprintf_concat")
+                # Se ambos forem strings, aloca um buffer grande e usa strcpy + strcat
+                if left.type == self.voidptr_ty and right.type == self.voidptr_ty:
+                    # Aloca 256 bytes no Heap
+                    buf = self.builder.call(self.malloc, [ir.Constant(self.i64_ty, 256)], name="concat_buf")
+                    # NOVO: Copia a string da esquerda para o buffer de destino
+                    self.builder.call(self.strcpy, [buf, left], name="copy_left")
+                    # NOVO: Concatena a string da direita no final do buffer
+                    self.builder.call(self.strcat, [buf, right], name="cat_right")
                     return buf
-
+                
             # Atribuição Composta (+=, -=, etc)
             if node.op in ('+=', '-=', '*=', '/='):
                 op = node.op[0] # Pega o primeiro caractere: '+', '-', '*', '/'

@@ -94,6 +94,43 @@ class ExpressionParser:
             is_float = '.' in token.value
             return NumberExpr(token.value, is_float)
             
+        # NOVO: Interpolação de Strings ($"Texto {variavel}")
+        elif token.type == TokenType.OP and token.value == '$' and self.peek() and self.peek().type == TokenType.STRING:
+            self.consume() # Consome o '$'
+            str_token = self.consume(TokenType.STRING)
+            s = str_token.value
+            
+            parts = []
+            current = ""
+            i = 0
+            while i < len(s):
+                if s[i] == '{':
+                    if current: parts.append(StringExpr(current))
+                    current = ""
+                    j = i + 1
+                    while j < len(s) and s[j] != '}':
+                        current += s[j]
+                        j += 1
+                        
+                    from ..lexer import Lexer
+                    from .parser import Parser
+                    
+                    mini_lexer = Lexer(current)
+                    mini_parser = Parser(mini_lexer.tokenize(), self.filename, self.source_code)
+                    parts.append(mini_parser.parse_expression())
+                    current = ""
+                    i = j + 1
+                else:
+                    current += s[i]
+                    i += 1
+            if current: parts.append(StringExpr(current))
+            
+            # Combina as partes usando concatenação
+            node = parts[0]
+            for p in parts[1:]:
+                node = BinaryExpr('+', node, p)
+            return node
+            
         elif token.type == TokenType.STRING:
             self.consume()
             return StringExpr(token.value)

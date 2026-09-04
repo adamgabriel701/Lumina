@@ -1,5 +1,5 @@
 from llvmlite import ir
-from ..ast import ReturnStmt, VarDecl, AssignStmt, IfStmt, WhileStmt, ForStmt, MemberExpr, ArrayExpr, MatchStmt, DerefExpr, IndexExpr, VariableExpr, CallExpr, ContinueStmt
+from ..ast import ReturnStmt, VarDecl, AssignStmt, IfStmt, WhileStmt, ForStmt, MemberExpr, ArrayExpr, MatchStmt, DerefExpr, IndexExpr, VariableExpr, CallExpr, ContinueStmt, DeferStmt
 
 class StatementCodegen:
     def codegen_stmt(self, node):
@@ -90,13 +90,14 @@ class StatementCodegen:
                     self.heap_int_arrays.add(node.target.name)
 
         elif isinstance(node, ReturnStmt):
-            val = self.codegen_expr(node.values[0])
+            # NOVO: Executa todos os 'defer' antes de retornar!
+            for body in reversed(self.deferred_stmts):
+                for stmt in body: self.codegen_stmt(stmt)
+            self.deferred_stmts.clear()
             
-            # NOVO: Se for retornar um ponteiro de Struct (como Enums), carrega o valor
+            val = self.codegen_expr(node.values[0])
             if isinstance(val.type, ir.PointerType) and isinstance(val.type.pointee, ir.IdentifiedStructType):
                 val = self.builder.load(val, name="ret_val")
-                
-            # Limpa TODOS os escopos ativos antes de retornar
             for scope in self.cleanup_vars:
                 self.cleanup_block(scope)
             self.builder.ret(val)
@@ -256,5 +257,10 @@ class StatementCodegen:
             if self.continue_block:
                 self.cleanup_block(self.cleanup_vars[-1])
                 self.builder.branch(self.continue_block)
+                
+        # NOVO: Defer (Guarda os statements para rodar no fim)
+        elif isinstance(node, DeferStmt):
+            self.deferred_stmts.append(node.body)
+            
         else:
             self.codegen_expr(node)

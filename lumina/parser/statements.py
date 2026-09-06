@@ -13,7 +13,7 @@ class StatementParser:
             
         elif token.type == TokenType.KEYWORD and token.value == 'return':
             self.consume()
-            # NOVO: Se vier um NEWLINE logo após, é um 'return' vazio (retorna 0)
+            # Suporte a return vazio
             if self.current_token() and self.current_token().type == TokenType.NEWLINE:
                 self.consume()
                 return ReturnStmt([NumberExpr("0")])
@@ -49,32 +49,6 @@ class StatementParser:
         elif token.type == TokenType.KEYWORD and token.value == 'match':
             return self.parse_match()
             
-        # NOVO: Continue
-        elif token.type == TokenType.KEYWORD and token.value == 'continue':
-            self.consume()
-            self.consume(TokenType.NEWLINE)
-            return ContinueStmt()
-            
-        # NOVO: Defer
-        elif token.type == TokenType.KEYWORD and token.value == 'defer':
-            self.consume()
-            # Suporta "defer close(fd)" ou "defer: <bloco>"
-            if self.current_token().type == TokenType.OP and self.current_token().value == ':':
-                self.consume()
-                self.consume(TokenType.NEWLINE)
-                self.consume(TokenType.INDENT)
-                body = []
-                while self.current_token() and self.current_token().type != TokenType.DEDENT:
-                    if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
-                    body.append(self.parse_statement())
-                self.consume(TokenType.DEDENT)
-                return DeferStmt(body)
-            else:
-                # Defer de linha única
-                expr = self.parse_expression()
-                self.consume(TokenType.NEWLINE)
-                return DeferStmt([expr])
-            
         elif token.type == TokenType.OP and token.value == '*':
             node = self.parse_expression()
             if self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == '=':
@@ -85,13 +59,12 @@ class StatementParser:
             self.consume(TokenType.NEWLINE)
             return node
 
-        # NOVO: Aceita =, +=, -=, *=, /=
+        # Atribuição Composta e Simples
         elif token.type == TokenType.IDENT and self.peek() and self.peek().type == TokenType.OP and self.peek().value in ('=', '+=', '-=', '*=', '/='):
             name = self.consume(TokenType.IDENT).value
             op = self.consume().value
             expr = self.parse_expression()
             self.consume(TokenType.NEWLINE)
-            # Se for composto, embrulhamos em um BinaryExpr para o Codegen entender
             if op != '=':
                 expr = BinaryExpr(op, VariableExpr(name), expr)
             return AssignStmt(VariableExpr(name), expr)
@@ -106,7 +79,6 @@ class StatementParser:
             self.consume(TokenType.NEWLINE)
             return node
             
-        # NOVO: Import
         elif token.type == TokenType.KEYWORD and token.value == 'import':
             self.consume()
             filename = self.consume(TokenType.STRING).value
@@ -115,6 +87,44 @@ class StatementParser:
 
         elif token.type == TokenType.KEYWORD and token.value == 'extern':
             return self.parse_extern()
+            
+        elif token.type == TokenType.KEYWORD and token.value == 'continue':
+            self.consume()
+            self.consume(TokenType.NEWLINE)
+            return ContinueStmt()
+            
+        # NOVO: Defer
+        elif token.type == TokenType.KEYWORD and token.value == 'defer':
+            self.consume()
+            if self.current_token().type == TokenType.OP and self.current_token().value == ':':
+                self.consume()
+                self.consume(TokenType.NEWLINE)
+                self.consume(TokenType.INDENT)
+                body = []
+                while self.current_token() and self.current_token().type != TokenType.DEDENT:
+                    if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
+                    body.append(self.parse_statement())
+                self.consume(TokenType.DEDENT)
+                return DeferStmt(body)
+            else:
+                expr = self.parse_expression()
+                self.consume(TokenType.NEWLINE)
+                return DeferStmt([expr])
+
+        # NOVO: Test Runner
+        elif token.type == TokenType.KEYWORD and token.value == 'test':
+            self.consume()
+            test_name = self.consume(TokenType.STRING).value
+            self.consume(TokenType.OP) # ':'
+            self.consume(TokenType.NEWLINE)
+            self.consume(TokenType.INDENT)
+            body = []
+            while self.current_token() and self.current_token().type != TokenType.DEDENT:
+                if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
+                body.append(self.parse_statement())
+            self.consume(TokenType.DEDENT)
+            # Transforma o teste em uma função normal para o Codegen compilar
+            return Function(f"test_{test_name.replace(' ', '_')}", [], "int", body)
             
         else:
             expr = self.parse_expression()
@@ -208,11 +218,10 @@ class StatementParser:
         self.consume(TokenType.DEDENT)
         return ForStmt(var_name, start, end, body)
 
-    # NOVO MÉTODO PARSE ENUM
     def parse_enum(self):
-        self.consume() # 'enum'
+        self.consume()
         name = self.consume(TokenType.IDENT).value
-        self.consume(TokenType.OP) # ':'
+        self.consume(TokenType.OP)
         self.consume(TokenType.NEWLINE)
         self.consume(TokenType.INDENT)
         
@@ -225,21 +234,20 @@ class StatementParser:
             var_name = self.consume(TokenType.IDENT).value
             payload_type = None
             if self.current_token().type == TokenType.OP and self.current_token().value == '(':
-                self.consume() # '('
+                self.consume()
                 payload_type = self.consume(TokenType.IDENT).value
-                self.consume(TokenType.OP) # ')'
-                    
+                self.consume(TokenType.OP)
+                
             variants.append((var_name, payload_type))
             self.consume(TokenType.NEWLINE)
             
         self.consume(TokenType.DEDENT)
         return EnumDecl(name, variants)
 
-    # MATCH ATUALIZADO PARA EXTRAÇÃO (case Some(x):)
     def parse_match(self):
-        self.consume() # 'match'
+        self.consume()
         condition = self.parse_expression()
-        self.consume(TokenType.OP) # ':'
+        self.consume(TokenType.OP)
         self.consume(TokenType.NEWLINE)
         self.consume(TokenType.INDENT)
         
@@ -250,17 +258,16 @@ class StatementParser:
             if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
                 
             if self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'case':
-                self.consume() # 'case'
+                self.consume()
                 variant_name = self.consume(TokenType.IDENT).value
                 var_name = None
                 
-                # NOVO: Se vier um parênteses, tem extração de variável (ex: case Some(x):)
                 if self.current_token().type == TokenType.OP and self.current_token().value == '(':
-                    self.consume() # '('
+                    self.consume()
                     var_name = self.consume(TokenType.IDENT).value
-                    self.consume(TokenType.OP) # ')'
+                    self.consume(TokenType.OP)
                     
-                self.consume(TokenType.OP) # ':'
+                self.consume(TokenType.OP)
                 self.consume(TokenType.NEWLINE)
                 self.consume(TokenType.INDENT)
                 
@@ -272,8 +279,8 @@ class StatementParser:
                 cases.append((variant_name, var_name, body))
                 
             elif self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'default':
-                self.consume() # 'default'
-                self.consume(TokenType.OP) # ':'
+                self.consume()
+                self.consume(TokenType.OP)
                 self.consume(TokenType.NEWLINE)
                 self.consume(TokenType.INDENT)
                 
@@ -313,23 +320,23 @@ class StatementParser:
         return Function(name, params, return_type, body)
 
     def parse_extern(self):
-        self.consume() # 'extern'
-        self.consume(TokenType.KEYWORD) # 'fn'
+        self.consume()
+        self.consume(TokenType.KEYWORD)
         name = self.consume(TokenType.IDENT).value
         
         params = []
-        self.consume(TokenType.OP) # '('
+        self.consume(TokenType.OP)
         if self.current_token().type != TokenType.OP or self.current_token().value != ')':
             while True:
                 p_name = self.consume(TokenType.IDENT).value
-                self.consume(TokenType.OP) # ':'
+                self.consume(TokenType.OP)
                 p_type = self.consume(TokenType.IDENT).value
                 params.append((p_name, p_type))
                 if self.current_token().type == TokenType.OP and self.current_token().value == ',':
                     self.consume()
                 else:
                     break
-        self.consume(TokenType.OP) # ')'
+        self.consume(TokenType.OP)
         
         return_type = "void"
         if self.current_token().type == TokenType.OP and self.current_token().value == '->':

@@ -4,8 +4,15 @@ from ..lexer import TokenType
 
 class ExpressionParser:
     def parse_expression(self):
-        # Operadores lógicos têm a menor precedência
         node = self.parse_logical()
+        
+        # NOVO: Operador Pipe (|>)
+        while self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == '|>':
+            self.consume() # Consome '|>'
+            func_name = self.consume(TokenType.IDENT).value
+            # Transforma `dados |> func` em `func(dados)`
+            node = CallExpr(func_name, [node])
+            
         return node
 
     def parse_logical(self):
@@ -16,7 +23,6 @@ class ExpressionParser:
             node = BinaryExpr(op, node, right)
         return node
 
-    # NOVO: Método restaurado para cuidar do >, <, ==, etc
     def parse_comparison(self):
         node = self.parse_additive()
         while self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value in ('==', '!=', '<', '>', '<=', '>='):
@@ -30,7 +36,7 @@ class ExpressionParser:
         while self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value in ('+', '-'):
             op = self.consume().value
             right = self.parse_term()
-            # NOVO: Constant Folding (Soma e Subtração)
+            # Constant Folding
             if isinstance(node, NumberExpr) and isinstance(right, NumberExpr) and not node.is_float and not right.is_float:
                 if op == '+': node = NumberExpr(str(int(node.value) + int(right.value)))
                 elif op == '-': node = NumberExpr(str(int(node.value) - int(right.value)))
@@ -43,7 +49,7 @@ class ExpressionParser:
         while self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value in ('*', '/', '%'):
             op = self.consume().value
             right = self.parse_factor()
-            # NOVO: Constant Folding (Multiplicação, Divisão e Módulo)
+            # Constant Folding
             if isinstance(node, NumberExpr) and isinstance(right, NumberExpr) and not node.is_float and not right.is_float:
                 if op == '*': node = NumberExpr(str(int(node.value) * int(right.value)))
                 elif op == '/': node = NumberExpr(str(int(node.value) // int(right.value)))
@@ -55,12 +61,12 @@ class ExpressionParser:
     def parse_factor(self):
         token = self.current_token()
         
-        # NOVO: Operador Unário (- e +)
+        # Operador Unário (- e +)
         if token.type == TokenType.OP and token.value in ('-', '+'):
             op = self.consume().value
             return UnaryExpr(op, self.parse_factor())
             
-        # NOVO: Operador NOT
+        # Operador NOT
         if token.type == TokenType.KEYWORD and token.value == 'not':
             self.consume()
             return UnaryExpr('not', self.parse_factor())
@@ -94,46 +100,41 @@ class ExpressionParser:
             is_float = '.' in token.value
             return NumberExpr(token.value, is_float)
             
-        # NOVO: Interpolação de Strings ($"Texto {variavel}")
-        elif token.type == TokenType.OP and token.value == '$' and self.peek() and self.peek().type == TokenType.STRING:
-            self.consume() # Consome o '$'
-            str_token = self.consume(TokenType.STRING)
-            s = str_token.value
-            
-            parts = []
-            current = ""
-            i = 0
-            while i < len(s):
-                if s[i] == '{':
-                    if current: parts.append(StringExpr(current))
-                    current = ""
-                    j = i + 1
-                    while j < len(s) and s[j] != '}':
-                        current += s[j]
-                        j += 1
-                        
-                    from ..lexer import Lexer
-                    from .parser import Parser
-                    
-                    mini_lexer = Lexer(current)
-                    mini_parser = Parser(mini_lexer.tokenize(), self.filename, self.source_code)
-                    parts.append(mini_parser.parse_expression())
-                    current = ""
-                    i = j + 1
-                else:
-                    current += s[i]
-                    i += 1
-            if current: parts.append(StringExpr(current))
-            
-            # Combina as partes usando concatenação
-            node = parts[0]
-            for p in parts[1:]:
-                node = BinaryExpr('+', node, p)
-            return node
-            
+        # NOVO: Interpolação de Strings Nativa ("Texto {var}")
         elif token.type == TokenType.STRING:
             self.consume()
-            return StringExpr(token.value)
+            s = token.value
+            
+            if '{' in s and '}' in s:
+                from ..lexer import Lexer
+                from .parser import Parser
+                
+                parts = []
+                current = ""
+                i = 0
+                while i < len(s):
+                    if s[i] == '{':
+                        if current: parts.append(StringExpr(current))
+                        current = ""
+                        j = i + 1
+                        while j < len(s) and s[j] != '}':
+                            current += s[j]
+                            j += 1
+                            
+                        mini_lexer = Lexer(current)
+                        mini_parser = Parser(mini_lexer.tokenize(), self.filename, self.source_code)
+                        parts.append(mini_parser.parse_expression())
+                        current = ""
+                        i = j + 1
+                    else:
+                        current += s[i]
+                        i += 1
+                if current: parts.append(StringExpr(current))
+                
+                # Embrulhamos em um ArrayExpr para o Codegen saber que é uma interpolação
+                return ArrayExpr(parts)
+                
+            return StringExpr(s)
             
         elif token.type == TokenType.IDENT or (token.type == TokenType.KEYWORD and token.value == 'print'):
             name = self.consume().value

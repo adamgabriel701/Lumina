@@ -369,26 +369,29 @@ class ExpressionCodegen:
 
             elif node.name == "print":
                 for arg_node in node.args:
-                    arg_val = self.codegen_expr(arg_node)
-                    if isinstance(arg_node, StringExpr):
-                        fmt_str = self.create_global_string("%s ")
-                        self.builder.call(self.printf, [fmt_str, arg_val])
+                    # NOVO: Se for uma f-string (ArrayExpr), imprime os elementos separados por espaço
+                    if isinstance(arg_node, ArrayExpr):
+                        for el in arg_node.elements:
+                            arg_val = self.codegen_expr(el)
+                            if isinstance(el, StringExpr):
+                                fmt_str = self.create_global_string("%s ")
+                                self.builder.call(self.printf, [fmt_str, arg_val])
+                            else:
+                                if arg_val.type == self.f64_ty: fmt_str = self.create_global_string("%f ")
+                                else: fmt_str = self.create_global_string("%ld ")
+                                self.builder.call(self.printf, [fmt_str, arg_val])
                     else:
-                        if arg_val.type == self.f64_ty: fmt_str = self.create_global_string("%f ")
-                        elif arg_val.type == self.voidptr_ty: fmt_str = self.create_global_string("%s ")
-                        else: fmt_str = self.create_global_string("%ld ")
-                        self.builder.call(self.printf, [fmt_str, arg_val])
+                        arg_val = self.codegen_expr(arg_node)
+                        if isinstance(arg_node, StringExpr):
+                            fmt_str = self.create_global_string("%s ")
+                            self.builder.call(self.printf, [fmt_str, arg_val])
+                        else:
+                            if arg_val.type == self.f64_ty: fmt_str = self.create_global_string("%f ")
+                            elif arg_val.type == self.voidptr_ty: fmt_str = self.create_global_string("%s ")
+                            else: fmt_str = self.create_global_string("%ld ")
+                            self.builder.call(self.printf, [fmt_str, arg_val])
                 nl_str = self.create_global_string("\n")
                 self.builder.call(self.printf, [nl_str])
-                
-                # NOVO: Força o flush do stdout para vermos erros imediatamente
-                fflush_fn = self.functions_table.get("fflush")
-                if not fflush_fn:
-                    fflush_ty = ir.FunctionType(ir.IntType(32), [self.voidptr_ty])
-                    fflush_fn = (ir.Function(self.module, fflush_ty, name="fflush"), fflush_ty)
-                    self.functions_table["fflush"] = fflush_fn
-                self.builder.call(fflush_fn[0], [ir.Constant(self.voidptr_ty, None)])
-                
                 return ir.Constant(self.i64_ty, 0)
             elif node.is_method:
                 obj_node = node.args[0]

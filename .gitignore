@@ -25,11 +25,20 @@ __pycache__/
 /bits
 /break_test
 /features
+/ergonomia
 /ffi_test
 /gc_test
 /quicksort
 /test_runner
 /wasm_math
+
+# Documentação gerada automaticamente
+/docs/
+
+# Arquivos soltos da raiz
+/main.lm
+/ugly.lm
+/output.ll
 
 # Outputs de Bancos de Dados e Logs
 *.txt

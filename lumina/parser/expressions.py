@@ -169,9 +169,12 @@ class ExpressionParser:
                     index = self.parse_expression()
                     self.consume(TokenType.OP)
                     node = IndexExpr(node, index)
-                elif self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == '.':
-                    self.consume()
+                # NOVO: Aceita '.' (normal) e '?.' (safe navigation)
+                elif self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value in ('.', '?.'):
+                    op = self.consume().value
                     member_name = self.consume(TokenType.IDENT).value
+                    is_safe = (op == '?.')
+                    
                     if self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == '(':
                         self.consume()
                         args = [node]
@@ -185,7 +188,7 @@ class ExpressionParser:
                         self.consume(TokenType.OP)
                         node = CallExpr(member_name, args, is_method=True)
                     else:
-                        node = MemberExpr(node, member_name)
+                        node = MemberExpr(node, member_name, is_safe=is_safe)
                 else:
                     break
                 

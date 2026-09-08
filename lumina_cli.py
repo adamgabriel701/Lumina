@@ -561,10 +561,86 @@ def cmd_fmt(filename):
         print("❌ Não foi possível formatar devido a erros de sintaxe:")
         print(e)
 
+def cmd_repl():
+    print("Lumina REPL 1.0")
+    print("Digite seu código. Pressione ENTER numa linha vazia para executar.")
+    print("Digite 'exit' para sair.")
+    print("----------------------------------------------------------")
+    
+    # Inicializa o motor JIT nativo uma única vez
+    llvm.initialize_native_target()
+    llvm.initialize_native_asmprinter()
+    lib_c_path = ctypes.util.find_library('c')
+    if lib_c_path: llvm.load_library_permanently(lib_c_path)
+    
+    buffer = []
+    
+    while True:
+        try:
+            # Se o buffer estiver vazio, mostra "lumina>", senão mostra "..."
+            prompt = "lumina> " if not buffer else "... "
+            line = input(prompt)
+            
+            if line.strip().lower() in ("exit", "quit"):
+                break
+                
+            # Se o usuário pressionou Enter numa linha vazia
+            if not line.strip():
+                if not buffer:
+                    continue # Continua esperando código
+                
+                # Junta todo o buffer digitado em um único código
+                code = "fn main() -> int:\n    " + "\n    ".join(buffer) + "\n    return 0"
+                
+                try:
+                    # Lexa, parsea, analisa e gera o IR
+                    lexer = Lexer(code)
+                    tokens = lexer.tokenize()
+                    parser = Parser(tokens, "repl.lm", code)
+                    ast = parser.parse()
+                    
+                    analyzer = SemanticAnalyzer("repl.lm", code)
+                    analyzer.analyze(ast)
+                    
+                    codegen = LLVMCodegen()
+                    llvm_ir = codegen.generate_module(ast)
+                    
+                    # Executa na memória RAM via MCJIT
+                    mod = llvm.parse_assembly(llvm_ir)
+                    mod.verify()
+                    target = llvm.Target.from_default_triple()
+                    tm = target.create_target_machine()
+                    engine = llvm.create_mcjit_compiler(mod, tm) # CORREÇÃO AQUI
+                    engine.finalize_object()
+                    engine.run_static_constructors()
+
+                    func_ptr = engine.get_function_address("main")
+                    cfunc = ctypes.CFUNCTYPE(ctypes.c_int64, ctypes.c_int32, ctypes.POINTER(ctypes.c_char_p))(func_ptr)
+                    cfunc(0, None)
+                    
+                except LuminaError as e:
+                    # Se der erro de sintaxe ou semântica, imprime e continua
+                    print(e)
+                except Exception as e:
+                    print(f"Erro interno: {e}")
+                finally:
+                    # Limpa o buffer para a próxima execução
+                    buffer = []
+                continue
+                
+            # Adiciona a linha ao buffer
+            buffer.append(line)
+            
+        except KeyboardInterrupt:
+            print("\n(Buffer limpo. Digite 'exit' para sair)")
+            buffer = []
+        except EOFError:
+            break
+                
 def main():
     if len(sys.argv) < 2:
         print("Uso: python3 lumina_cli.py <comando> [argumentos]")
-        print("Comandos: new, build, run, jit, doc, install, bind")
+        print("Comandos: new, build, run, jit, doc, install, bind, fmt, repl")
         return
 
     command = sys.argv[1]
@@ -582,7 +658,6 @@ def main():
             extra_flags = []
         else:
             entry_file = None
-            # Pega o primeiro argumento que não começa com '-' como arquivo de entrada
             for arg in args:
                 if not arg.startswith('-'):
                     entry_file = arg
@@ -611,13 +686,16 @@ def main():
             print("Uso: python3 lumina_cli.py bind <c_header.h> <nome_modulo>")
             return
         cmd_bind(args[0], args[1])
-
-    # NOVO COMANDO NA CLI
+        
     elif command == "fmt":
         if len(args) < 1:
             print("Uso: python3 lumina_cli.py fmt <arquivo.lm>")
             return
         cmd_fmt(args[0])
+        
+    # NOVO COMANDO: REPL
+    elif command == "repl":
+        cmd_repl()
         
     else:
         print(f"Comando desconhecido: {command}")

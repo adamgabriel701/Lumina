@@ -8,7 +8,7 @@
 
 **Lumina** é uma linguagem de programação de sistemas de propósito geral, focada em alta performance, ergonomia moderna, concorrência e segurança de memória. Ela combina a sintaxe limpa e expressiva baseada em indentação (estilo Python/Nim) com o poder de baixo nível e otimização industrial do backend **LLVM**.
 
-A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums), operadores modernos (`|>`, `defer`, f-strings), interoperabilidade nativa com C/C++ (FFI), suporte a Green Threads (Corrotinas), compilação incremental, e é **Cross-Platform** (compila para binários nativos x86_64/ARM e para WebAssembly).
+A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums), operadores modernos (`|>`, `defer`, f-strings, `?.`), interoperabilidade nativa com C/C++ (FFI), suporte a Green Threads (Corrotinas), um REPL interativo, compilação incremental, e é **Cross-Platform** (compila para binários nativos x86_64/ARM e para WebAssembly).
 
 ---
 
@@ -20,15 +20,16 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
 * **Ergonomia Moderna:**
   * **F-strings Nativas:** `print("Usuário {id} logou.")`.
   * **Operador Pipe (`|>`):** `5 |> dobrar |> imprimir`.
-  * **Defer & Assert:** Garantia de limpeza e testes nativos.
+  * **Navegação Segura (`?.`):** Evita Segmentation Faults ao acessar membros de structs nulas: `usuario?.perfil?.nome`.
+  * **Defer & Assert:** Garantia de limpeza de escopo e testes nativos.
   * **Auto-Formatter:** `lumina fmt` formata o código automaticamente.
-* **Gerenciamento de Memória Automático:** Integração nativa com o **Boehm GC**.
+* **Gerenciamento de Memória Automático:** Integração nativa com o **Boehm GC** (`libgc`).
 * **Concorrência e Redes:**
   * **Multithreading:** Threads nativas do SO via `pthread_create`.
   * **Green Threads:** Suporte a Corrotinas via troca de contexto de CPU (`ucontext`).
   * **Web Framework & Proxy:** Servidores TCP/HTTP e Proxy Reverso de baixa latência.
 * **Pipeline LLVM Avançado & Cache:** Otimizações `clang -O3 -march=native` e hashing MD5 para compilação instantânea.
-* **Ecossistema Integrado:** CLI, Gerenciador de Pacotes Git, Auto-documentador HTML, Auto-Gerador de Bindings C e Extensão VS Code com **LSP (Autocomplete)**.
+* **Ecossistema Integrado:** CLI, REPL, Gerenciador de Pacotes Git, Auto-documentador HTML, Auto-Gerador de Bindings C e Extensão VS Code com **LSP (Autocomplete e Diagnóstico)**.
 * **Cross-Platform (Wasm):** Compila para `.wasm`, rodando em navegadores e Node.js.
 
 ---
@@ -62,6 +63,7 @@ lumina new meu_projeto      # Cria a estrutura inicial
 lumina install              # Baixa dependências do GitHub
 lumina bind header.h nome   # Gera bindings FFI a partir de um arquivo C
 lumina fmt arquivo.lm       # Formata o código automaticamente
+lumina repl                 # Inicia o console interativo (REPL JIT)
 lumina jit                  # Executa instantaneamente na memória RAM
 lumina build                # Compila para binário nativo otimizado (-O3)
 lumina build app.lm --wasm  # Compila para WebAssembly (.wasm)
@@ -72,7 +74,7 @@ lumina doc                  # Gera portal de documentação HTML
 
 ## 🛠️ Exemplos de Código
 
-### 1. Ergonomia Moderna (Pipe, F-strings, Defer)
+### 1. Ergonomia Moderna (Pipe, F-strings, Defer, Safe Nav)
 ```lumina
 fn dobrar(x: int) -> int:
     return x * 2
@@ -83,6 +85,10 @@ fn processar_dados(id: int):
 
 fn main() -> int:
     processar_dados(1)
+    
+    mut u: Usuario
+    let safe_id = u?.id  # Navegação segura (não crasha se 'u' for nulo)
+    
     let resultado = 5 |> dobrar |> dobrar
     print("Resultado do Pipe: {resultado}")
     return 0
@@ -100,23 +106,6 @@ async function run() {
     console.log("🚀 Fibonacci(10):", result);
 }
 run();
-```
-
-### 3. Multithreading Nativo (POSIX Threads)
-```lumina
-extern fn pthread_create(thread: str, attr: int, start_routine: int, arg: str) -> int
-extern fn pthread_join(thread: int, retval: int) -> int
-
-fn worker(arg: str) -> str:
-    let id = arg[0] - 48
-    print("Thread", id, "iniciada!")
-    return ""
-
-fn main() -> int:
-    mut t1 = alloc(1)
-    pthread_create(t1, 0, &worker, "1")
-    pthread_join(t1[0], 0)
-    return 0
 ```
 
 ---
@@ -139,7 +128,7 @@ A Lumina conta com uma biblioteca padrão modularizada escrita na própria lingu
 
 ```text
 Lumina/
-├── lumina_cli.py            # CLI, Build System, Cache e Package Manager
+├── lumina_cli.py            # CLI, Build System, REPL, Cache e Package Manager
 ├── lumina_lsp.py            # Language Server Protocol (Autocomplete e Diagnóstico)
 ├── lumina/                  # Núcleo do Compilador (Lexer, Parser, Semantic, Codegen)
 ├── std/                     # Standard Library (.lm)

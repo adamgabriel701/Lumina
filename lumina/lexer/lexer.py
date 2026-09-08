@@ -43,7 +43,6 @@ class Lexer:
                     i += 1
                     continue
                     
-                # NOVO: Garante que o '$' seja sempre lido como um operador isolado
                 elif c == '$':
                     self.tokens.append(Token(TokenType.OP, '$', line_num, col))
                     i += 1
@@ -51,7 +50,6 @@ class Lexer:
                     
                 elif c == '"':
                     j = i + 1
-                    # NOVO: Processa caracteres de escape (\n, \r, \t, etc)
                     raw_str = ""
                     while j < len(stripped) and stripped[j] != '"':
                         if stripped[j] == '\\' and j + 1 < len(stripped):
@@ -84,9 +82,8 @@ class Lexer:
                     continue
                 elif c.isdigit():
                     j = i
-                    # NOVO: Suporte a Hexadecimais (0x...)
                     if c == '0' and j + 1 < len(stripped) and (stripped[j+1] == 'x' or stripped[j+1] == 'X'):
-                        j += 2 # Pula o '0x'
+                        j += 2
                         while j < len(stripped) and (stripped[j].isdigit() or stripped[j] in 'abcdefABCDEF'): j += 1
                         self.tokens.append(Token(TokenType.NUMBER, stripped[i:j], line_num, col))
                         i = j
@@ -103,21 +100,13 @@ class Lexer:
                     j = i
                     while j < len(stripped) and (stripped[j].isalnum() or stripped[j] == '_'): j += 1
                     word = stripped[i:j]
-<<<<<<< Updated upstream
-                    if word in ('fn', 'let', 'mut', 'if', 'elif', 'else', 'while', 'for', 'in', 'struct', 'impl', 'import', 'extern', 'enum', 'return', 'print', 'true', 'false', 'match', 'case', 'default', 'and', 'or', 'not', 'continue', 'defer', 'test'):
-=======
                     if word in ('fn', 'let', 'mut', 'if', 'elif', 'else', 'while', 'for', 'in', 'struct', 'impl', 'import', 'extern', 'enum', 'return', 'print', 'true', 'false', 'match', 'case', 'default', 'and', 'or', 'not', 'continue', 'defer', 'test', 'break', 'assert'):
->>>>>>> Stashed changes
                         self.tokens.append(Token(TokenType.KEYWORD, word, line_num, col))
                     else:
                         self.tokens.append(Token(TokenType.IDENT, word, line_num, col))
                     i = j
                     continue
-<<<<<<< Updated upstream
-                elif i + 1 < len(stripped) and stripped[i:i+2] in ('==', '!=', '<=', '>=', '->', '..', '+=', '-=', '*=', '/=', '|>'):
-=======
-                elif i + 1 < len(stripped) and stripped[i:i+2] in ('==', '!=', '<=', '>=', '->', '..', '+=', '-=', '*=', '/=', '|>', '<<', '>>'):
->>>>>>> Stashed changes
+                elif i + 1 < len(stripped) and stripped[i:i+2] in ('==', '!=', '<=', '>=', '->', '..', '+=', '-=', '*=', '/=', '|>', '<<', '>>', '?.'):
                     self.tokens.append(Token(TokenType.OP, stripped[i:i+2], line_num, col))
                     i += 2
                     continue

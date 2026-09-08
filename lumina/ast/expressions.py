@@ -62,3 +62,9 @@ class TupleExpr:
 class UnaryExpr:
     op: str
     val: any
+
+@dataclass
+class MemberExpr:
+    obj: any
+    member: str
+    is_safe: bool = False # NOVO: Marca se usou o operador ?.

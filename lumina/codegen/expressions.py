@@ -2,7 +2,6 @@ from llvmlite import ir
 from ..ast import NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr, ArrayExpr, IndexExpr, MemberExpr, AddressOfExpr, DerefExpr, TupleExpr, UnaryExpr
 
 class ExpressionCodegen:
-    # NOVO MÉTODO AUXILIAR RECURSIVO
     def resolve_member_ptr(self, node: MemberExpr):
         if isinstance(node.obj, VariableExpr):
             ptr = self.symbol_table.get(node.obj.name)
@@ -27,8 +26,10 @@ class ExpressionCodegen:
             if node.value.startswith('0x') or node.value.startswith('0X'):
                 return ir.Constant(self.i64_ty, int(node.value, 16))
             return ir.Constant(self.i64_ty, int(node.value))
+            
         elif isinstance(node, BoolExpr):
             return ir.Constant(ir.IntType(1), 1 if node.value else 0)
+            
         elif isinstance(node, StringExpr): 
             return self.create_global_string(node.value)
             
@@ -40,10 +41,8 @@ class ExpressionCodegen:
                 return self.builder.xor(val, ir.Constant(ir.IntType(1), 1), name="not_tmp")
             elif node.op == '-':
                 val = self.codegen_expr(node.val)
-                if val.type == self.f64_ty:
-                    return self.builder.fneg(val, name="fneg_tmp")
-                else:
-                    return self.builder.neg(val, name="neg_tmp")
+                if val.type == self.f64_ty: return self.builder.fneg(val, name="fneg_tmp")
+                else: return self.builder.neg(val, name="neg_tmp")
             elif node.op == '+':
                 return self.codegen_expr(node.val)
             
@@ -101,7 +100,6 @@ class ExpressionCodegen:
                 elif node.op == '<<': return self.builder.shl(left, right, name="bw_shl_tmp")
                 elif node.op == '>>': return self.builder.ashr(left, right, name="bw_shr_tmp")
 
-            # NOVO: Comparação de Strings (== e !=)
             if node.op in ('==', '!=') and left.type == self.voidptr_ty and right.type == self.voidptr_ty:
                 cmp_res = self.builder.call(self.strcmp, [left, right], name="strcmp_call")
                 is_eq = self.builder.icmp_signed("==", cmp_res, ir.Constant(self.i32_ty, 0), name="is_eq")
@@ -109,8 +107,7 @@ class ExpressionCodegen:
                 elif node.op == '!=': return self.builder.xor(is_eq, ir.Constant(ir.IntType(1), 1), name="is_neq")
 
             if isinstance(left.type, ir.PointerType) and right.type == self.i64_ty:
-                if node.op == '+':
-                    return self.builder.gep(left, [right], name="ptr_add_tmp")
+                if node.op == '+': return self.builder.gep(left, [right], name="ptr_add_tmp")
                 elif node.op == '-':
                     neg_right = self.builder.neg(right, name="neg_idx")
                     return self.builder.gep(left, [neg_right], name="ptr_sub_tmp")
@@ -197,6 +194,46 @@ class ExpressionCodegen:
                 return self.builder.load(elem_ptr, name="nested_elem_val")
                 
         elif isinstance(node, MemberExpr):
+            # NOVO: Lógica de Navegação Segura (?.)
+            if node.is_safe:
+                # 1. Pega o ponteiro da Struct
+                obj_ptr = self.codegen_expr(node.obj)
+                
+                # NOVO: Converte o ponteiro para i64 para comparar com 0 (NULL) de forma segura
+                if isinstance(obj_ptr.type, ir.PointerType):
+                    obj_int = self.builder.ptrtoint(obj_ptr, self.i64_ty, name="ptr_to_int")
+                else:
+                    obj_int = obj_ptr
+                
+                # 2. Verifica se é NULL (zero)
+                is_null = self.builder.icmp_signed("==", obj_int, ir.Constant(self.i64_ty, 0), name="null_check")
+                
+                # 3. Cria blocos de controle de fluxo
+                then_bb = self.builder.append_basic_block(name="safe.then")
+                else_bb = self.builder.append_basic_block(name="safe.else")
+                end_bb = self.builder.append_basic_block(name="safe.end")
+                
+                self.builder.cbranch(is_null, else_bb, then_bb)
+                
+                # 4. Se NÃO for nulo (then_bb): Carrega o membro normalmente
+                self.builder.position_at_end(then_bb)
+                elem_ptr = self.resolve_member_ptr(node)
+                member_val = self.builder.load(elem_ptr, name="safe_member_val")
+                self.builder.branch(end_bb)
+                
+                # 5. Se FOR nulo (else_bb): Retorna 0
+                self.builder.position_at_end(else_bb)
+                null_val = ir.Constant(self.i64_ty, 0)
+                self.builder.branch(end_bb)
+                
+                # 6. Consolida o resultado (PHI Node)
+                self.builder.position_at_end(end_bb)
+                phi = self.builder.phi(self.i64_ty, name="safe_res")
+                phi.add_incoming(member_val, then_bb)
+                phi.add_incoming(null_val, else_bb)
+                return phi
+                
+            # Acesso normal (sem ?.)
             obj_ptr = self.resolve_member_ptr(node)
             return self.builder.load(obj_ptr, name="member_val")
             
@@ -206,9 +243,11 @@ class ExpressionCodegen:
                 fmt_str = self.create_global_string("%s")
                 self.builder.call(self.scanf, [fmt_str, buf])
                 return self.builder.bitcast(buf, self.voidptr_ty)
+                
             elif node.name == "atoi":
                 arg_val = self.codegen_expr(node.args[0])
                 return self.builder.call(self.atoi, [arg_val], name="atoi_call")
+                
             elif node.name == "len":
                 if isinstance(node.args[0], VariableExpr) and node.args[0].name in self.array_sizes:
                     size = self.array_sizes.get(node.args[0].name, 0)
@@ -218,6 +257,7 @@ class ExpressionCodegen:
                     if ptr.type == self.voidptr_ty:
                         return self.builder.call(self.strlen, [ptr], name="strlen_call")
                     return ir.Constant(self.i64_ty, 0)
+                    
             elif node.name == "free":
                 if isinstance(node.args[0], VariableExpr):
                     var_name = node.args[0].name
@@ -230,16 +270,19 @@ class ExpressionCodegen:
                     ptr = self.builder.bitcast(ptr, self.voidptr_ty, name="manual_free_cast")
                 self.builder.call(self.free, [ptr], name="free_call")
                 return ir.Constant(self.i64_ty, 0)
+                
             elif node.name == "alloc":
                 size_val = self.codegen_expr(node.args[0])
                 size_bytes = self.builder.mul(size_val, ir.Constant(self.i64_ty, 8), name="size_bytes")
                 ptr_i8 = self.builder.call(self.malloc, [size_bytes], name="malloc_ptr")
                 ptr_i64 = self.builder.bitcast(ptr_i8, self.i64_ty.as_pointer(), name="malloc_ptr_i64")
                 return ptr_i64
+                
             elif node.name == "alloc_bytes":
                 size_val = self.codegen_expr(node.args[0])
                 ptr = self.builder.call(self.malloc, [size_val], name="malloc_bytes_ptr")
                 return ptr
+                
             elif node.name == "argv":
                 idx = self.codegen_expr(node.args[0])
                 argv_ptr = self.symbol_table.get('argv')
@@ -247,21 +290,18 @@ class ExpressionCodegen:
                 argv_val = self.builder.load(argv_ptr, name="argv_val")
                 arg_ptr_ptr = self.builder.gep(argv_val, [idx], name="arg_ptr_ptr")
                 return self.builder.load(arg_ptr_ptr, name="arg_val")
+                
             elif node.name == "read_file":
                 filename_ptr = self.codegen_expr(node.args[0])
                 mode_str = self.create_global_string("r")
                 fp = self.builder.call(self.fopen, [filename_ptr, mode_str], name="file_ptr")
                 
-                # NOVO: Verifica se o arquivo existe (fopen não retornou NULL)
                 is_null = self.builder.icmp_signed("==", fp, ir.Constant(self.voidptr_ty, None), name="is_null")
-                
                 then_bb = self.builder.append_basic_block(name="read_file.exists")
                 else_bb = self.builder.append_basic_block(name="read_file.not_exists")
                 end_bb = self.builder.append_basic_block(name="read_file.end")
-                
                 self.builder.cbranch(is_null, else_bb, then_bb)
                 
-                # Arquivo existe: Lê e fecha
                 self.builder.position_at_end(then_bb)
                 buf = self.builder.alloca(ir.ArrayType(self.i8_ty, 4096), name="read_buf")
                 buf_ptr = self.builder.bitcast(buf, self.voidptr_ty, name="buf_ptr")
@@ -269,17 +309,16 @@ class ExpressionCodegen:
                 self.builder.call(self.fclose, [fp])
                 self.builder.branch(end_bb)
                 
-                # Arquivo não existe: Retorna string vazia
                 self.builder.position_at_end(else_bb)
                 empty_str = self.create_global_string("")
                 self.builder.branch(end_bb)
                 
-                # Consolida o resultado (PHI node)
                 self.builder.position_at_end(end_bb)
                 phi = self.builder.phi(self.voidptr_ty, name="read_file_res")
                 phi.add_incoming(buf_ptr, then_bb)
                 phi.add_incoming(empty_str, else_bb)
                 return phi
+                
             elif node.name == "write_file":
                 filename_ptr = self.codegen_expr(node.args[0])
                 content_ptr = self.codegen_expr(node.args[1])
@@ -288,6 +327,7 @@ class ExpressionCodegen:
                 self.builder.call(self.fputs, [content_ptr, fp])
                 self.builder.call(self.fclose, [fp])
                 return ir.Constant(self.i64_ty, 0)
+                
             elif node.name == "int":
                 val = self.codegen_expr(node.args[0])
                 res = self.builder.call(self.atoi, [val], name="atoi_call")
@@ -301,6 +341,7 @@ class ExpressionCodegen:
                 self.builder.store(tag_val, tag_ptr)
                 self.builder.store(res, payload_ptr)
                 return ptr
+                
             elif node.name in self.variant_defs:
                 enum_name, index, payload_type = self.variant_defs[node.name]
                 enum_ty = self.struct_types[enum_name]
@@ -316,10 +357,12 @@ class ExpressionCodegen:
                 else:
                     self.builder.store(ir.Constant(self.i64_ty, 0), payload_ptr)
                 return ptr
+                
             elif node.name == "float":
                 val = self.codegen_expr(node.args[0])
                 if val.type == self.i64_ty: return self.builder.sitofp(val, self.f64_ty, name="float_cast")
                 return val
+                
             elif node.name == "str":
                 buf = self.builder.alloca(ir.ArrayType(self.i8_ty, 256), name="str_cast_buf")
                 buf_ptr = self.builder.bitcast(buf, self.voidptr_ty, name="cast_buf_ptr")
@@ -331,18 +374,16 @@ class ExpressionCodegen:
                     fmt_str = self.create_global_string("%f")
                     self.builder.call(self.sprintf, [buf_ptr, fmt_str, val])
                 return buf_ptr
+                
             elif node.name == "chr":
                 val = self.codegen_expr(node.args[0])
                 buf = self.builder.call(self.malloc, [ir.Constant(self.i64_ty, 2)], name="chr_malloc")
                 fmt_str = self.create_global_string("%c")
                 self.builder.call(self.sprintf, [buf, fmt_str, val], name="chr_sprintf")
                 return buf
+                
             elif node.name == "print":
                 for arg_node in node.args:
-<<<<<<< Updated upstream
-                    # NOVO: Se for uma f-string (ArrayExpr), imprime os elementos separados por espaço
-=======
->>>>>>> Stashed changes
                     if isinstance(arg_node, ArrayExpr):
                         for el in arg_node.elements:
                             arg_val = self.codegen_expr(el)
@@ -366,6 +407,7 @@ class ExpressionCodegen:
                 nl_str = self.create_global_string("\n")
                 self.builder.call(self.printf, [nl_str])
                 return ir.Constant(self.i64_ty, 0)
+                
             elif node.is_method:
                 obj_node = node.args[0]
                 obj_val = self.codegen_expr(obj_node)
@@ -379,6 +421,7 @@ class ExpressionCodegen:
                     args = [obj_val] + [self.codegen_expr(a) for a in node.args[1:]]
                     return self.builder.call(func, args, name=func_name + "_call")
                 raise Exception(f"Método '{func_name}' não encontrado.")
+                
             elif node.name in self.functions_table:
                 func, func_type = self.functions_table[node.name]
                 args = []

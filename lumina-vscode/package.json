@@ -1,22 +1,36 @@
 {
   "name": "lumina",
   "displayName": "Lumina Language Support",
-  "description": "Syntax highlighting for the Lumina programming language",
-  "version": "0.1.0",
+  "description": "Syntax highlighting and LSP for the Lumina programming language",
+  "version": "0.2.0",
   "publisher": "adam-lumina",
-  "license": "MIT",
   "engines": {
     "vscode": "^1.0.0"
   },
   "categories": [
     "Programming Languages"
   ],
+  "activationEvents": [
+    "onLanguage:lumina"
+  ],
+  "main": "./extension.js",
+  "files": [
+    "extension.js",
+    "lumina_lsp.py",
+    "syntaxes/lumina.tmLanguage.json",
+    "language-configuration.json"
+  ],
   "contributes": {
     "languages": [
       {
         "id": "lumina",
-        "aliases": ["Lumina", "lumina"],
-        "extensions": [".lm"],
+        "aliases": [
+          "Lumina",
+          "lumina"
+        ],
+        "extensions": [
+          ".lm"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],
@@ -30,5 +44,8 @@
   },
   "scripts": {
     "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^8.1.0"
   }
 }

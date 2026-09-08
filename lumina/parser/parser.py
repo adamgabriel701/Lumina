@@ -45,6 +45,12 @@ class Parser(ExpressionParser, StatementParser):
                 declarations.append(self.parse_statement())
             elif self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'extern':
                 declarations.append(self.parse_extern())
+            # NOVO: Aceita variáveis globais (let e mut)
+            elif self.current_token().type == TokenType.KEYWORD and self.current_token().value in ('let', 'mut'):
+                declarations.append(self.parse_statement())
+            # NOVO: Aceita blocos de Teste (test)
+            elif self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'test':
+                declarations.append(self.parse_statement())
             else:
                 self.consume()
         return declarations

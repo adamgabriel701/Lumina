@@ -1,45 +1,33 @@
-from ..ast import VarDecl, AssignStmt, ReturnStmt, Function, IfStmt, WhileStmt, ForStmt, StructDecl, VariableExpr, MatchStmt, ImplBlock, DerefExpr, MemberExpr, IndexExpr, ImportStmt, ExternDecl, EnumDecl, BinaryExpr, ContinueStmt, DeferStmt, NumberExpr
+from ..ast import VarDecl, AssignStmt, ReturnStmt, Function, IfStmt, WhileStmt, ForStmt, StructDecl, VariableExpr, MatchStmt, ImplBlock, DerefExpr, MemberExpr, IndexExpr, ImportStmt, ExternDecl, EnumDecl, BinaryExpr, ContinueStmt, DeferStmt, NumberExpr, BreakStmt, AssertStmt
 from ..lexer import TokenType
+from .declarations import DeclarationsParser
+from .control_flow import ControlFlowParser
 
-class StatementParser:
+class StatementParser(DeclarationsParser, ControlFlowParser):
     def parse_statement(self):
         token = self.current_token()
         
         if token.type == TokenType.KEYWORD and token.value == 'struct':
             return self.parse_struct()
-            
         elif token.type == TokenType.KEYWORD and token.value == 'impl':
             return self.parse_impl()
-            
         elif token.type == TokenType.KEYWORD and token.value == 'return':
             self.consume()
+<<<<<<< Updated upstream
             # Suporte a return vazio
+=======
+>>>>>>> Stashed changes
             if self.current_token() and self.current_token().type == TokenType.NEWLINE:
                 self.consume()
                 return ReturnStmt([NumberExpr("0")])
-                
             values = [self.parse_expression()]
             while self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == ',':
                 self.consume()
                 values.append(self.parse_expression())
             self.consume(TokenType.NEWLINE)
             return ReturnStmt(values)
-            
         elif token.type == TokenType.KEYWORD and token.value in ('let', 'mut'):
-            is_mutable = (token.value == 'mut')
-            self.consume()
-            var_name = self.consume(TokenType.IDENT).value
-            var_type = None
-            if self.current_token().type == TokenType.OP and self.current_token().value == ':':
-                self.consume()
-                var_type = self.consume(TokenType.IDENT).value
-            expr = None
-            if self.current_token().type == TokenType.OP and self.current_token().value == '=':
-                self.consume()
-                expr = self.parse_expression()
-            self.consume(TokenType.NEWLINE)
-            return VarDecl(var_name, var_type, expr, is_mutable)
-            
+            return self.parse_let()
         elif token.type == TokenType.KEYWORD and token.value in ('if', 'elif'):
             return self.parse_if()
         elif token.type == TokenType.KEYWORD and token.value == 'while':
@@ -48,7 +36,10 @@ class StatementParser:
             return self.parse_for()
         elif token.type == TokenType.KEYWORD and token.value == 'match':
             return self.parse_match()
+<<<<<<< Updated upstream
             
+=======
+>>>>>>> Stashed changes
         elif token.type == TokenType.OP and token.value == '*':
             node = self.parse_expression()
             if self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == '=':
@@ -58,8 +49,11 @@ class StatementParser:
                 return AssignStmt(node, expr)
             self.consume(TokenType.NEWLINE)
             return node
+<<<<<<< Updated upstream
 
         # Atribuição Composta e Simples
+=======
+>>>>>>> Stashed changes
         elif token.type == TokenType.IDENT and self.peek() and self.peek().type == TokenType.OP and self.peek().value in ('=', '+=', '-=', '*=', '/='):
             name = self.consume(TokenType.IDENT).value
             op = self.consume().value
@@ -68,7 +62,6 @@ class StatementParser:
             if op != '=':
                 expr = BinaryExpr(op, VariableExpr(name), expr)
             return AssignStmt(VariableExpr(name), expr)
-            
         elif token.type == TokenType.IDENT and self.peek() and self.peek().type == TokenType.OP and self.peek().value in ('[', '.'):
             node = self.parse_expression()
             if self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == '=':
@@ -78,20 +71,26 @@ class StatementParser:
                 return AssignStmt(node, expr)
             self.consume(TokenType.NEWLINE)
             return node
+<<<<<<< Updated upstream
             
+=======
+>>>>>>> Stashed changes
         elif token.type == TokenType.KEYWORD and token.value == 'import':
             self.consume()
             filename = self.consume(TokenType.STRING).value
             self.consume(TokenType.NEWLINE)
             return ImportStmt(filename)
-
         elif token.type == TokenType.KEYWORD and token.value == 'extern':
             return self.parse_extern()
+<<<<<<< Updated upstream
             
+=======
+>>>>>>> Stashed changes
         elif token.type == TokenType.KEYWORD and token.value == 'continue':
             self.consume()
             self.consume(TokenType.NEWLINE)
             return ContinueStmt()
+<<<<<<< Updated upstream
             
         # NOVO: Defer
         elif token.type == TokenType.KEYWORD and token.value == 'defer':
@@ -345,3 +344,19 @@ class StatementParser:
             
         self.consume(TokenType.NEWLINE)
         return ExternDecl(name, params, return_type)
+=======
+        elif token.type == TokenType.KEYWORD and token.value == 'break':
+            self.consume()
+            self.consume(TokenType.NEWLINE)
+            return BreakStmt()
+        elif token.type == TokenType.KEYWORD and token.value == 'defer':
+            return self.parse_defer()
+        elif token.type == TokenType.KEYWORD and token.value == 'assert':
+            return self.parse_assert()
+        elif token.type == TokenType.KEYWORD and token.value == 'test':
+            return self.parse_test()
+        else:
+            expr = self.parse_expression()
+            self.consume(TokenType.NEWLINE)
+            return expr
+>>>>>>> Stashed changes

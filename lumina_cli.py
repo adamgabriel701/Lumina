@@ -8,6 +8,7 @@ import ctypes.util
 import re
 import hashlib
 from llvmlite import binding as llvm
+from lumina.ast import Function, VarDecl, AssignStmt, ReturnStmt, IfStmt, WhileStmt, ForStmt, NumberExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr, MemberExpr, IndexExpr
 from lumina.lexer import Lexer
 from lumina.parser import Parser
 from lumina.semantic import SemanticAnalyzer
@@ -77,22 +78,18 @@ def parse_module(filename, current_stack=None):
     resolved_ast = []
     for node in ast:
         if isinstance(node, ImportStmt):
-            # NOVO: Se for da stdlib (std/), tira o .lm do final
             if node.filename.startswith("std/"):
                 cli_dir = os.path.dirname(os.path.abspath(__file__))
-                # Remove o .lm se existir, e depois adiciona o caminho completo
                 clean_name = node.filename.replace("std/", "")
                 if clean_name.endswith(".lm"):
                     clean_name = clean_name[:-3]
                 std_path = os.path.join(cli_dir, "std", clean_name + ".lm")
                 imported_ast = parse_module(std_path, current_stack)
                 
-            # NOVO: Se for um arquivo local, aceita com ou sem .lm
             elif os.path.exists(node.filename if node.filename.endswith(".lm") else node.filename + ".lm"):
                 imported_path = node.filename if node.filename.endswith(".lm") else node.filename + ".lm"
                 imported_ast = parse_module(imported_path, current_stack)
                 
-            # 3. Se for um pacote baixado (lumina_modules/)
             else:
                 mod_path = os.path.join("lumina_modules", node.filename)
                 if not mod_path.endswith(".lm"):
@@ -112,7 +109,6 @@ def parse_module(filename, current_stack=None):
     return resolved_ast
 
 def compile_lumina(filename, output_file="output.ll", use_cache=True):
-    # 3. Suporte a Compilação Incremental/Cache
     cache_dir = ".lumina_cache"
     cache_file = os.path.join(cache_dir, get_cache_hash(filename) + ".ll") if use_cache else None
     
@@ -141,10 +137,8 @@ def compile_lumina(filename, output_file="output.ll", use_cache=True):
     codegen = LLVMCodegen()
     llvm_ir = codegen.generate_module(ast)
     
-    # Otimizações serão aplicadas pelo clang (-O3 -march=native)
     with open(output_file, "w") as f: f.write(llvm_ir)
     
-    # Salva no cache para a próxima execução
     if use_cache:
         os.makedirs(cache_dir, exist_ok=True)
         with open(cache_file, "w") as f: f.write(llvm_ir)
@@ -310,7 +304,7 @@ def cmd_doc():
         
     print("✅ Documentação gerada com sucesso em: docs/index.html")
 
-def cmd_build(entry_file=None):
+def cmd_build(entry_file=None, extra_flags=[]):
     if entry_file:
         entry = entry_file
         project_name = entry_file.replace('.lm', '')
@@ -331,28 +325,43 @@ def cmd_build(entry_file=None):
     llvm_ir = compile_lumina(entry)
     if not llvm_ir: return None
     
-    link_flags = " ".join([f"-l{lib}" for lib in libs])
+    # NOVO: Inclui libs do lumina.json e flags extras da CLI (ex: -L. -lcpptest)
+    link_flags = " ".join([f"-l{lib}" for lib in libs] + extra_flags)
     ir_file = f"{project_name}.ll"
     with open(ir_file, "w") as f: f.write(llvm_ir)
     
-    cmd = f"clang -O3 -march=native -funroll-loops {ir_file} -o {project_name} {link_flags} -lc -lpthread -lgc"
+    # NOVO: Suporte a WebAssembly
+    is_wasm = "--wasm" in extra_flags
     
-    print("\n--- 4. Linkagem Nativa ---")
+    if is_wasm:
+        # Compila para WebAssembly (wasm32). 
+        # -nostdlib: Sem biblioteca padrão do C (sem printf/alloc).
+        # -Wl,--export-all: Exporta todas as funções para o ambiente JS.
+        # NOVO: Adicionado -Wl,--no-entry para suprimir o erro do _start
+        cmd = f"clang --target=wasm32 -O3 -nostdlib -Wl,--no-entry -Wl,--export-all {ir_file} -o {project_name}.wasm"
+        print("\n--- 4. Linkagem WebAssembly ---")
+    else:
+        cmd = f"clang -O3 -march=native -funroll-loops {ir_file} -o {project_name} {link_flags} -lc -lpthread -lgc"
+        print("\n--- 4. Linkagem Nativa ---")
+        
     print(f"Executando: {cmd}")
     try:
         subprocess.run(cmd, shell=True, check=True)
-        print(f"✅ Build concluído: ./{project_name}")
+        if is_wasm:
+            print(f"✅ Build Wasm concluído: ./{project_name}.wasm")
+        else:
+            print(f"✅ Build concluído: ./{project_name}")
         return project_name
     except subprocess.CalledProcessError:
         print("❌ Erro durante a linkagem com o clang.")
         return None
 
-def cmd_run(args, use_jit=False):
+def cmd_run(args, use_jit=False, extra_flags=[]):
     entry = "program.lm"
     
-    if args and not args[0].startswith('--'):
+    if args and not args[0].startswith('-'):
         entry = args[0]
-        args = args[1:]
+        args = [a for a in args if a.startswith('--')]
     elif os.path.exists("lumina.json"):
         with open("lumina.json", "r") as f:
             config = json.load(f)
@@ -366,12 +375,196 @@ def cmd_run(args, use_jit=False):
         
     print(f"🚀 Executando via JIT: {entry}")
     llvm_ir = compile_lumina(entry)
+    
+    # NOVO: Carrega bibliotecas dinâmicas para o JIT
+    for flag in extra_flags:
+        if flag.startswith("-l"):
+            lib_name = flag[2:]
+            lib_path = ctypes.util.find_library(lib_name)
+            if lib_path:
+                llvm.load_library_permanently(lib_path)
+                
     if llvm_ir: run_jit(llvm_ir, args)
+
+def cmd_bind(header_file, output_name):
+    if not os.path.exists(header_file):
+        print(f"❌ Erro: Arquivo '{header_file}' não encontrado.")
+        return
+        
+    with open(header_file, "r") as f:
+        content = f.read()
+        
+    pattern = r'(\w[\w\s\*]*?)\s+(\w+)\s*\(([^)]*)\)\s*;'
+    matches = re.finditer(pattern, content)
+    
+    c_type_map = {
+        "int": "int", "long": "int", "long long": "int", "short": "int", "size_t": "int",
+        "float": "float", "double": "float",
+        "char*": "str", "const char*": "str", "void*": "str", "const void*": "str",
+        "char": "int", "unsigned char": "int", "unsigned int": "int", "unsigned long": "int"
+    }
+    
+    lumina_decls = []
+    
+    for match in matches:
+        c_ret = match.group(1).strip()
+        name = match.group(2).strip()
+        args_str = match.group(3).strip()
+        
+        if name in ("if", "while", "for", "return", "struct", "typedef", "static", "extern", "void"):
+            continue
+            
+        ret_type = c_type_map.get(c_ret, "str")
+        
+        lumina_args = []
+        if args_str and args_str != "void":
+            for arg in args_str.split(','):
+                arg = arg.strip()
+                parts = arg.rsplit(' ', 1)
+                if len(parts) == 2:
+                    arg_type, arg_name = parts[0].strip(), parts[1].strip()
+                    arg_type_clean = arg_type.replace("*", "").strip()
+                    lumina_type = c_type_map.get(arg_type, "str")
+                    lumina_args.append(f"{arg_name}: {lumina_type}")
+                else:
+                    lumina_args.append(f"arg: str")
+                    
+        lumina_decls.append(f"extern fn {name}({', '.join(lumina_args)}) -> {ret_type}")
+        
+    if not lumina_decls:
+        print("Nenhuma função válida encontrada no cabeçalho.")
+        return
+        
+    out_file = f"std/{output_name}.lm"
+    os.makedirs("std", exist_ok=True)
+    with open(out_file, "w") as f:
+        f.write(f"# Auto-gerado de {header_file} pelo Lumina Bind\n\n")
+        f.write("\n".join(lumina_decls))
+        
+    print(f"✅ Bindings gerados com sucesso em {out_file} ({len(lumina_decls)} funções)")
+
+# --- Auto-Formatter (lumina fmt) ---
+def format_node(node, indent_level=0):
+    indent = "    " * indent_level
+    
+    if isinstance(node, (Function, )):
+        params = ", ".join([f"{p[0]}: {p[1]}" for p in node.params])
+        ret = f" -> {node.return_type}" if node.return_type != "void" else ""
+        s = f"{indent}fn {node.name}({params}){ret}:\n"
+        for stmt in node.body:
+            s += format_node(stmt, indent_level + 1)
+        return s
+        
+    elif isinstance(node, VarDecl):
+        mut = "mut " if node.is_mutable else "let "
+        typ = f": {node.var_type}" if node.var_type else ""
+        val = f" = {format_node(node.value, 0)}" if node.value else ""
+        return f"{indent}{mut}{node.name}{typ}{val}\n"
+        
+    elif isinstance(node, AssignStmt):
+        target = format_node(node.target, 0)
+        val = format_node(node.value, 0)
+        return f"{indent}{target} = {val}\n"
+        
+    elif isinstance(node, ReturnStmt):
+        vals = ", ".join([format_node(v, 0) for v in node.values])
+        return f"{indent}return {vals}\n"
+        
+    elif isinstance(node, IfStmt):
+        cond = format_node(node.condition, 0)
+        s = f"{indent}if {cond}:\n"
+        for stmt in node.then_body:
+            s += format_node(stmt, indent_level + 1)
+        if node.else_body:
+            s += f"{indent}else:\n"
+            for stmt in node.else_body:
+                s += format_node(stmt, indent_level + 1)
+        return s
+        
+    elif isinstance(node, WhileStmt):
+        cond = format_node(node.condition, 0)
+        s = f"{indent}while {cond}:\n"
+        for stmt in node.body:
+            s += format_node(stmt, indent_level + 1)
+        return s
+        
+    elif isinstance(node, ForStmt):
+        start = format_node(node.start, 0)
+        end = format_node(node.end, 0)
+        s = f"{indent}for {node.var_name} in {start}..{end}:\n"
+        for stmt in node.body:
+            s += format_node(stmt, indent_level + 1)
+        return s
+        
+    # NOVO: Expressões sabem se devem adicionar indentação e \n baseado no indent_level
+    elif isinstance(node, NumberExpr):
+        if indent_level > 0: return f"{indent}{node.value}\n"
+        return node.value
+        
+    elif isinstance(node, StringExpr):
+        if indent_level > 0: return f"{indent}\"{node.value}\"\n"
+        return f"\"{node.value}\""
+        
+    elif isinstance(node, VariableExpr):
+        if indent_level > 0: return f"{indent}{node.name}\n"
+        return node.name
+        
+    elif isinstance(node, BinaryExpr):
+        left = format_node(node.left, 0)
+        right = format_node(node.right, 0)
+        if indent_level > 0: return f"{indent}{left} {node.op} {right}\n"
+        return f"{left} {node.op} {right}"
+        
+    elif isinstance(node, CallExpr):
+        args = ", ".join([format_node(a, 0) for a in node.args])
+        if indent_level > 0: return f"{indent}{node.name}({args})\n"
+        return f"{node.name}({args})"
+        
+    elif isinstance(node, MemberExpr):
+        obj = format_node(node.obj, 0)
+        if indent_level > 0: return f"{indent}{obj}.{node.member}\n"
+        return f"{obj}.{node.member}"
+        
+    elif isinstance(node, IndexExpr):
+        arr = format_node(node.array, 0)
+        idx = format_node(node.index, 0)
+        if indent_level > 0: return f"{indent}{arr}[{idx}]\n"
+        return f"{arr}[{idx}]"
+        
+    return f"{indent}{str(node)}\n"
+
+def cmd_fmt(filename):
+    if not os.path.exists(filename):
+        print(f"❌ Erro: Arquivo '{filename}' não encontrado.")
+        return
+        
+    with open(filename, "r") as f:
+        code = f.read()
+        
+    try:
+        lexer = Lexer(code)
+        tokens = lexer.tokenize()
+        parser = Parser(tokens, filename, code)
+        ast = parser.parse()
+        
+        formatted_code = ""
+        for node in ast:
+            formatted_code += format_node(node)
+            
+        # Salva o código formatado de volta no arquivo
+        with open(filename, "w") as f:
+            f.write(formatted_code)
+            
+        print(f"✅ Arquivo '{filename}' formatado com sucesso!")
+        
+    except LuminaError as e:
+        print("❌ Não foi possível formatar devido a erros de sintaxe:")
+        print(e)
 
 def main():
     if len(sys.argv) < 2:
         print("Uso: python3 lumina_cli.py <comando> [argumentos]")
-        print("Comandos: new, build, run, jit, doc, install")
+        print("Comandos: new, build, run, jit, doc, install, bind")
         return
 
     command = sys.argv[1]
@@ -384,20 +577,47 @@ def main():
         cmd_new(args[0])
         
     elif command == "build":
-        entry_file = args[0] if args else None
-        cmd_build(entry_file)
+        if not args:
+            entry_file = None
+            extra_flags = []
+        else:
+            entry_file = None
+            # Pega o primeiro argumento que não começa com '-' como arquivo de entrada
+            for arg in args:
+                if not arg.startswith('-'):
+                    entry_file = arg
+                    break
+            extra_flags = [arg for arg in args if arg.startswith('-')]
+        cmd_build(entry_file, extra_flags)
         
     elif command == "run":
-        cmd_run(args, use_jit=False)
+        entry = args[0] if args and not args[0].startswith('-') else None
+        extra_flags = [arg for arg in args if arg.startswith('-') and arg != '--run']
+        cmd_run(args, use_jit=False, extra_flags=extra_flags)
         
     elif command == "jit":
-        cmd_run(args, use_jit=True)
+        entry = args[0] if args and not args[0].startswith('-') else None
+        extra_flags = [arg for arg in args if arg.startswith('-') and arg != '--run']
+        cmd_run(args, use_jit=True, extra_flags=extra_flags)
         
     elif command == "doc":
         cmd_doc()
         
     elif command == "install":
         cmd_install()
+        
+    elif command == "bind":
+        if len(args) < 2:
+            print("Uso: python3 lumina_cli.py bind <c_header.h> <nome_modulo>")
+            return
+        cmd_bind(args[0], args[1])
+
+    # NOVO COMANDO NA CLI
+    elif command == "fmt":
+        if len(args) < 1:
+            print("Uso: python3 lumina_cli.py fmt <arquivo.lm>")
+            return
+        cmd_fmt(args[0])
         
     else:
         print(f"Comando desconhecido: {command}")

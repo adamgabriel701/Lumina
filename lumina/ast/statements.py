@@ -88,3 +88,16 @@ class Function:
     params: List[tuple]
     return_type: str
     body: List[any]
+
+@dataclass
+class ContinueStmt:
+    pass
+
+@dataclass
+class BreakStmt:
+    pass
+
+# NOVO NÓ DE ASSERT
+@dataclass
+class AssertStmt:
+    condition: any

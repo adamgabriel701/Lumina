@@ -16,8 +16,17 @@ class ExpressionParser:
         return node
 
     def parse_logical(self):
-        node = self.parse_comparison()
+        node = self.parse_bitwise()
         while self.current_token() and self.current_token().type == TokenType.KEYWORD and self.current_token().value in ('and', 'or'):
+            op = self.consume().value
+            right = self.parse_bitwise()
+            node = BinaryExpr(op, node, right)
+        return node
+
+    # NOVO: Operadores Bitwise (&, |, ^, <<, >>)
+    def parse_bitwise(self):
+        node = self.parse_comparison()
+        while self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value in ('&', '|', '^', '<<', '>>'):
             op = self.consume().value
             right = self.parse_comparison()
             node = BinaryExpr(op, node, right)

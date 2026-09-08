@@ -24,45 +24,31 @@ class ExpressionCodegen:
     def codegen_expr(self, node):
         if isinstance(node, NumberExpr):
             if node.is_float: return ir.Constant(self.f64_ty, float(node.value))
+            if node.value.startswith('0x') or node.value.startswith('0X'):
+                return ir.Constant(self.i64_ty, int(node.value, 16))
             return ir.Constant(self.i64_ty, int(node.value))
         elif isinstance(node, BoolExpr):
             return ir.Constant(ir.IntType(1), 1 if node.value else 0)
         elif isinstance(node, StringExpr): 
             return self.create_global_string(node.value)
-
-        # NOVO: Operadores Unários (-, +, not)
+            
         elif isinstance(node, UnaryExpr):
             if node.op == 'not':
                 val = self.codegen_expr(node.val)
                 if val.type != ir.IntType(1):
                     val = self.builder.icmp_signed("!=", val, ir.Constant(val.type, 0), name="not_cond")
                 return self.builder.xor(val, ir.Constant(ir.IntType(1), 1), name="not_tmp")
-                
-            # NOVO: Negação Numérica (ex: -1)
             elif node.op == '-':
                 val = self.codegen_expr(node.val)
                 if val.type == self.f64_ty:
                     return self.builder.fneg(val, name="fneg_tmp")
                 else:
                     return self.builder.neg(val, name="neg_tmp")
-                    
-            # NOVO: Positivo Numérico (ex: +1), apenas retorna o valor
             elif node.op == '+':
                 return self.codegen_expr(node.val)
             
-        # NOVO: Operador NOT
-        elif isinstance(node, UnaryExpr):
-            if node.op == 'not':
-                val = self.codegen_expr(node.val)
-                # Garante que o valor é um booleano (i1) antes de inverter
-                if val.type != ir.IntType(1):
-                    val = self.builder.icmp_signed("!=", val, ir.Constant(val.type, 0), name="not_cond")
-                # Inverte o booleano (XOR com True)
-                return self.builder.xor(val, ir.Constant(ir.IntType(1), 1), name="not_tmp")
-            
         elif isinstance(node, AddressOfExpr):
             if isinstance(node.val, VariableExpr):
-                # NOVO: Se for o nome de uma função, usa ptrtoint para obter o endereço de memória
                 if node.val.name in self.functions_table:
                     func, _ = self.functions_table[node.val.name]
                     return self.builder.ptrtoint(func, self.i64_ty, name="fn_ptr_int")
@@ -79,21 +65,20 @@ class ExpressionCodegen:
             return self.builder.load(ptr, name="deref_val")
             
         elif isinstance(node, VariableExpr):
-            # NOVO: Se a "variável" for na verdade um construtor de Enum sem argumentos (ex: None)
             if node.name in self.variant_defs:
                 enum_name, index, payload_type = self.variant_defs[node.name]
                 enum_ty = self.struct_types[enum_name]
-                
                 ptr = self.builder.alloca(enum_ty, name="enum_tmp")
                 tag_ptr = self.builder.gep(ptr, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 0)])
                 payload_ptr = self.builder.gep(ptr, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 1)])
-                
                 self.builder.store(ir.Constant(self.i32_ty, index), tag_ptr)
                 self.builder.store(ir.Constant(self.i64_ty, 0), payload_ptr)
                 return ptr
                 
             ptr = self.symbol_table.get(node.name)
             if not ptr: raise Exception(f"Variável '{node.name}' não declarada.")
+            if isinstance(ptr, ir.GlobalVariable):
+                return self.builder.load(ptr, name=node.name + "_gval")
             if isinstance(ptr.type.pointee, ir.IdentifiedStructType): return ptr
             return self.builder.load(ptr, name=node.name + "_val")
             
@@ -101,18 +86,28 @@ class ExpressionCodegen:
             left = self.codegen_expr(node.left)
             right = self.codegen_expr(node.right)
             
-            # NOVO: Operadores Lógicos (and, or)
             if node.op in ('and', 'or'):
-                # Garante que ambos os lados são i1 (booleanos no LLVM)
                 if left.type != ir.IntType(1):
                     left = self.builder.icmp_signed("!=", left, ir.Constant(left.type, 0), name="and_left_cond")
                 if right.type != ir.IntType(1):
                     right = self.builder.icmp_signed("!=", right, ir.Constant(right.type, 0), name="and_right_cond")
-                    
                 if node.op == 'and': return self.builder.and_(left, right, name="and_tmp")
                 elif node.op == 'or': return self.builder.or_(left, right, name="or_tmp")
-            
-            # Aritmética de Ponteiros (ptr + int)
+                
+            if node.op in ('&', '|', '^', '<<', '>>'):
+                if node.op == '&': return self.builder.and_(left, right, name="bw_and_tmp")
+                elif node.op == '|': return self.builder.or_(left, right, name="bw_or_tmp")
+                elif node.op == '^': return self.builder.xor(left, right, name="bw_xor_tmp")
+                elif node.op == '<<': return self.builder.shl(left, right, name="bw_shl_tmp")
+                elif node.op == '>>': return self.builder.ashr(left, right, name="bw_shr_tmp")
+
+            # NOVO: Comparação de Strings (== e !=)
+            if node.op in ('==', '!=') and left.type == self.voidptr_ty and right.type == self.voidptr_ty:
+                cmp_res = self.builder.call(self.strcmp, [left, right], name="strcmp_call")
+                is_eq = self.builder.icmp_signed("==", cmp_res, ir.Constant(self.i32_ty, 0), name="is_eq")
+                if node.op == '==': return is_eq
+                elif node.op == '!=': return self.builder.xor(is_eq, ir.Constant(ir.IntType(1), 1), name="is_neq")
+
             if isinstance(left.type, ir.PointerType) and right.type == self.i64_ty:
                 if node.op == '+':
                     return self.builder.gep(left, [right], name="ptr_add_tmp")
@@ -120,35 +115,23 @@ class ExpressionCodegen:
                     neg_right = self.builder.neg(right, name="neg_idx")
                     return self.builder.gep(left, [neg_right], name="ptr_sub_tmp")
                     
-            # NOVO: Concatenação Dinâmica de Strings (100% robusto com snprintf e strcpy)
             if node.op == '+' and (isinstance(node.left, StringExpr) or isinstance(node.right, StringExpr) or left.type == self.voidptr_ty or right.type == self.voidptr_ty):
-                
-                # Se o lado direito for um inteiro (i64), converte para string em um buffer isolado
                 if right.type == self.i64_ty:
                     int_buf = self.builder.alloca(ir.ArrayType(self.i8_ty, 32), name="int_buf")
                     int_buf_ptr = self.builder.bitcast(int_buf, self.voidptr_ty, name="int_ptr")
                     fmt_int = self.create_global_string("%ld")
-                    # NOVO: Usa snprintf para evitar qualquer estouro de memória
                     self.builder.call(self.snprintf, [int_buf_ptr, ir.Constant(self.i64_ty, 32), fmt_int, right], name="int_to_str")
                     right = int_buf_ptr
-                    
-                # Se o lado esquerdo for inteiro, inverte para ficar string + string
                 if left.type == self.i64_ty and right.type == self.voidptr_ty:
                     left, right = right, left
-                    
-                # Se ambos forem strings, aloca um buffer grande e usa strcpy + strcat
                 if left.type == self.voidptr_ty and right.type == self.voidptr_ty:
-                    # Aloca 256 bytes no Heap
                     buf = self.builder.call(self.malloc, [ir.Constant(self.i64_ty, 256)], name="concat_buf")
-                    # NOVO: Copia a string da esquerda para o buffer de destino
                     self.builder.call(self.strcpy, [buf, left], name="copy_left")
-                    # NOVO: Concatena a string da direita no final do buffer
                     self.builder.call(self.strcat, [buf, right], name="cat_right")
                     return buf
-                
-            # Atribuição Composta (+=, -=, etc)
+
             if node.op in ('+=', '-=', '*=', '/='):
-                op = node.op[0] # Pega o primeiro caractere: '+', '-', '*', '/'
+                op = node.op[0]
                 if left.type == self.f64_ty or right.type == self.f64_ty:
                     left = self.to_float_if_needed(left)
                     right = self.to_float_if_needed(right)
@@ -175,14 +158,12 @@ class ExpressionCodegen:
                 elif node.op == '-': return self.builder.sub(left, right, name="sub_tmp")
                 elif node.op == '*': return self.builder.mul(left, right, name="mul_tmp")
                 elif node.op == '/': return self.builder.sdiv(left, right, name="div_tmp")
-                # NOVO: Operador de Módulo (%)
                 elif node.op == '%': return self.builder.srem(left, right, name="mod_tmp")
                 elif node.op in ('==', '!=', '<', '>', '<=', '>='): return self.builder.icmp_signed(node.op, left, right, name="cmp_tmp")
                 
         elif isinstance(node, IndexExpr):
             if isinstance(node.array, VariableExpr):
                 if node.array.name in self.array_sizes:
-                    # Array estático na pilha
                     arr_ptr = self.symbol_table.get(node.array.name)
                     idx_val = self.codegen_expr(node.index)
                     if idx_val.type != self.i64_ty: idx_val = self.builder.fptosi(idx_val, self.i64_ty, name="idx_int")
@@ -193,18 +174,18 @@ class ExpressionCodegen:
                     idx_val = self.codegen_expr(node.index)
                     if idx_val.type != self.i64_ty: idx_val = self.builder.fptosi(idx_val, self.i64_ty, name="idx_int")
                     
-                    # NOVO: Se for string (i8*), lê o caractere (i8) e converte para i64 (int)
-                    # Verifica se NÃO é um array de inteiros do heap
-                    if ptr.type == self.voidptr_ty and node.array.name not in self.heap_int_arrays:
+                    if isinstance(ptr.type, ir.PointerType) and ptr.type.pointee == self.i64_ty:
+                        elem_ptr = self.builder.gep(ptr, [idx_val], name="heap_elem_ptr")
+                        return self.builder.load(elem_ptr, name="heap_elem_val")
+                        
+                    elif ptr.type == self.voidptr_ty:
                         char_ptr = self.builder.gep(ptr, [idx_val], name="char_ptr")
                         char_val = self.builder.load(char_ptr, name="char_val")
-                        # Converte o byte (i8) para inteiro (i64) para podermos comparar na Lumina
                         return self.builder.zext(char_val, self.i64_ty, name="char_as_int")
                         
-                    # Se for array do Heap (i64*)
-                    # NOVO: O alloc já retorna i64*, então não precisamos mais do bitcast aqui!
-                    elem_ptr = self.builder.gep(ptr, [idx_val], name="heap_elem_ptr")
-                    return self.builder.load(elem_ptr, name="heap_elem_val")
+                    else:
+                        elem_ptr = self.builder.gep(ptr, [idx_val], name="elem_ptr")
+                        return self.builder.load(elem_ptr, name="elem_val")
             else:
                 ptr = self.codegen_expr(node.array)
                 idx_val = self.codegen_expr(node.index)
@@ -233,13 +214,11 @@ class ExpressionCodegen:
                     size = self.array_sizes.get(node.args[0].name, 0)
                     return ir.Constant(self.i64_ty, size)
                 else:
-                    # NOVO: Se for uma string, chama strlen do C
                     ptr = self.codegen_expr(node.args[0])
                     if ptr.type == self.voidptr_ty:
                         return self.builder.call(self.strlen, [ptr], name="strlen_call")
                     return ir.Constant(self.i64_ty, 0)
             elif node.name == "free":
-                # NOVO: Se o usuário chamou free manualmente, remove da pilha de auto-free
                 if isinstance(node.args[0], VariableExpr):
                     var_name = node.args[0].name
                     for s in self.cleanup_vars:
@@ -247,7 +226,6 @@ class ExpressionCodegen:
                             s.remove(var_name)
                             break
                 ptr = self.codegen_expr(node.args[0])
-                # CORREÇÃO: Garante que o ponteiro seja i8* (void*) antes de chamar o free
                 if ptr.type != self.voidptr_ty:
                     ptr = self.builder.bitcast(ptr, self.voidptr_ty, name="manual_free_cast")
                 self.builder.call(self.free, [ptr], name="free_call")
@@ -256,17 +234,12 @@ class ExpressionCodegen:
                 size_val = self.codegen_expr(node.args[0])
                 size_bytes = self.builder.mul(size_val, ir.Constant(self.i64_ty, 8), name="size_bytes")
                 ptr_i8 = self.builder.call(self.malloc, [size_bytes], name="malloc_ptr")
-                # NOVO: Retorna i64* diretamente, removendo bitcasts de dentro dos loops!
                 ptr_i64 = self.builder.bitcast(ptr_i8, self.i64_ty.as_pointer(), name="malloc_ptr_i64")
                 return ptr_i64
-                
-            # NOVO: Aloca exatamente a quantidade de bytes passada (1 byte por índice)
             elif node.name == "alloc_bytes":
                 size_val = self.codegen_expr(node.args[0])
                 ptr = self.builder.call(self.malloc, [size_val], name="malloc_bytes_ptr")
                 return ptr
-                
-            # NOVO: Lê argumentos da linha de comando (argv)
             elif node.name == "argv":
                 idx = self.codegen_expr(node.args[0])
                 argv_ptr = self.symbol_table.get('argv')
@@ -274,19 +247,39 @@ class ExpressionCodegen:
                 argv_val = self.builder.load(argv_ptr, name="argv_val")
                 arg_ptr_ptr = self.builder.gep(argv_val, [idx], name="arg_ptr_ptr")
                 return self.builder.load(arg_ptr_ptr, name="arg_val")
-                
-            # NOVO: Lê um arquivo do disco
             elif node.name == "read_file":
                 filename_ptr = self.codegen_expr(node.args[0])
                 mode_str = self.create_global_string("r")
                 fp = self.builder.call(self.fopen, [filename_ptr, mode_str], name="file_ptr")
+                
+                # NOVO: Verifica se o arquivo existe (fopen não retornou NULL)
+                is_null = self.builder.icmp_signed("==", fp, ir.Constant(self.voidptr_ty, None), name="is_null")
+                
+                then_bb = self.builder.append_basic_block(name="read_file.exists")
+                else_bb = self.builder.append_basic_block(name="read_file.not_exists")
+                end_bb = self.builder.append_basic_block(name="read_file.end")
+                
+                self.builder.cbranch(is_null, else_bb, then_bb)
+                
+                # Arquivo existe: Lê e fecha
+                self.builder.position_at_end(then_bb)
                 buf = self.builder.alloca(ir.ArrayType(self.i8_ty, 4096), name="read_buf")
                 buf_ptr = self.builder.bitcast(buf, self.voidptr_ty, name="buf_ptr")
                 self.builder.call(self.fgets, [buf_ptr, ir.Constant(self.i32_ty, 4096), fp])
                 self.builder.call(self.fclose, [fp])
-                return buf_ptr
+                self.builder.branch(end_bb)
                 
-            # NOVO: Escreve em um arquivo do disco
+                # Arquivo não existe: Retorna string vazia
+                self.builder.position_at_end(else_bb)
+                empty_str = self.create_global_string("")
+                self.builder.branch(end_bb)
+                
+                # Consolida o resultado (PHI node)
+                self.builder.position_at_end(end_bb)
+                phi = self.builder.phi(self.voidptr_ty, name="read_file_res")
+                phi.add_incoming(buf_ptr, then_bb)
+                phi.add_incoming(empty_str, else_bb)
+                return phi
             elif node.name == "write_file":
                 filename_ptr = self.codegen_expr(node.args[0])
                 content_ptr = self.codegen_expr(node.args[1])
@@ -295,44 +288,26 @@ class ExpressionCodegen:
                 self.builder.call(self.fputs, [content_ptr, fp])
                 self.builder.call(self.fclose, [fp])
                 return ir.Constant(self.i64_ty, 0)
-                
-            # NOVO: Casts de Tipo
             elif node.name == "int":
                 val = self.codegen_expr(node.args[0])
-                # int("abc") -> None
-                # int("42")  -> Some(42)
-                # Como não temos a função strtol do C com checagem de erro aqui, 
-                # vamos simplificar convertendo com atoi. Se for 0, dizemos que é None.
                 res = self.builder.call(self.atoi, [val], name="atoi_call")
-                
-                # Cria a struct Option na memória
                 opt_ty = self.struct_types.get("Option")
                 if not opt_ty: raise Exception("Tipo Option não declarado.")
                 ptr = self.builder.alloca(opt_ty, name="opt_tmp")
-                
-                # Se res == 0, assumimos que falhou (None). Senão, Some(res).
                 is_zero = self.builder.icmp_signed("==", res, ir.Constant(self.i64_ty, 0), name="is_zero")
-                
                 tag_ptr = self.builder.gep(ptr, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 0)])
                 payload_ptr = self.builder.gep(ptr, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 1)])
-                
-                # Tag: 0 para None, 1 para Some
                 tag_val = self.builder.zext(is_zero, self.i32_ty, name="tag_val")
                 self.builder.store(tag_val, tag_ptr)
                 self.builder.store(res, payload_ptr)
                 return ptr
-            # NOVO: Construtores de Enum (Some, None, Ok, Err)
             elif node.name in self.variant_defs:
                 enum_name, index, payload_type = self.variant_defs[node.name]
                 enum_ty = self.struct_types[enum_name]
-                
                 ptr = self.builder.alloca(enum_ty, name="enum_tmp")
                 tag_ptr = self.builder.gep(ptr, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 0)])
                 payload_ptr = self.builder.gep(ptr, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 1)])
-                
                 self.builder.store(ir.Constant(self.i32_ty, index), tag_ptr)
-                
-                # Se tiver argumento (ex: Some(10)), guardamos no payload
                 if node.args:
                     val = self.codegen_expr(node.args[0])
                     if val.type != self.i64_ty:
@@ -340,7 +315,6 @@ class ExpressionCodegen:
                     self.builder.store(val, payload_ptr)
                 else:
                     self.builder.store(ir.Constant(self.i64_ty, 0), payload_ptr)
-                    
                 return ptr
             elif node.name == "float":
                 val = self.codegen_expr(node.args[0])
@@ -357,19 +331,18 @@ class ExpressionCodegen:
                     fmt_str = self.create_global_string("%f")
                     self.builder.call(self.sprintf, [buf_ptr, fmt_str, val])
                 return buf_ptr
-                
-            # NOVO: Converte Int (ASCII) para String de 1 caractere
             elif node.name == "chr":
                 val = self.codegen_expr(node.args[0])
-                # Aloca 2 bytes no Heap (1 para o char, 1 para o null terminator)
                 buf = self.builder.call(self.malloc, [ir.Constant(self.i64_ty, 2)], name="chr_malloc")
                 fmt_str = self.create_global_string("%c")
                 self.builder.call(self.sprintf, [buf, fmt_str, val], name="chr_sprintf")
                 return buf
-
             elif node.name == "print":
                 for arg_node in node.args:
+<<<<<<< Updated upstream
                     # NOVO: Se for uma f-string (ArrayExpr), imprime os elementos separados por espaço
+=======
+>>>>>>> Stashed changes
                     if isinstance(arg_node, ArrayExpr):
                         for el in arg_node.elements:
                             arg_val = self.codegen_expr(el)
@@ -413,12 +386,10 @@ class ExpressionCodegen:
                     arg_val = self.codegen_expr(arg_node)
                     if func_type.args[i] == self.f64_ty and arg_val.type == self.i64_ty: 
                         arg_val = self.to_float_if_needed(arg_val)
-                        
-                    # NOVO: Se a função esperar um ponteiro genérico (i8* / void*) 
-                    # e recebemos um ponteiro tipado (i64*), faz o bitcast automaticamente!
+                    elif func_type.args[i] == self.i64_ty.as_pointer() and arg_val.type == self.voidptr_ty:
+                        arg_val = self.builder.bitcast(arg_val, self.i64_ty.as_pointer(), name="arg_ptr_cast")
                     elif func_type.args[i] == self.voidptr_ty and isinstance(arg_val.type, ir.PointerType) and arg_val.type != self.voidptr_ty:
                         arg_val = self.builder.bitcast(arg_val, self.voidptr_ty, name="arg_void_cast")
-                        
                     args.append(arg_val)
                 return self.builder.call(func, args, name=node.name + "_call")
                 

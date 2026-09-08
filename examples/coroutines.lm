@@ -1,0 +1,29 @@
+import "std/async"
+
+# NOVO: Variável global! Não vive na Stack, então não é resetada pelo swapcontext.
+mut resumed = 0
+
+fn task_a():
+    mut i = 0
+    while i < 3:
+        print("Task A:", i)
+        i += 1
+        # Cede a CPU de volta para a main
+        swapcontext(scheduler_ctx, main_ctx)
+
+fn main() -> int:
+    print("Iniciando Green Threads...")
+    
+    # Salva o contexto atual (main_ctx). 
+    # Quando o swapcontext for chamado, a CPU voltará para esta exata linha!
+    getcontext(main_ctx)
+    
+    # Se voltou aqui via swapcontext, resumed será 1 (porque é global)
+    if resumed == 0:
+        resumed = 1
+        print("Iniciando Task A...")
+        task_a()
+        
+    print("Task A concluida ou cedeu CPU. Continuando na main...")
+    print("Fim do escalonador.")
+    return 0

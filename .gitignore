@@ -1,61 +1,42 @@
-# ==========================================
-# Python & Caches
-# ==========================================
-__pycache__/
-*.py[cod]
-*$py.class
-.pytest_cache/
-.venv/
-venv/
-ENV/
-
-# ==========================================
-# Arquivos de Compilação & LLVM IR
-# ==========================================
+# Binários e Arquivos Temporários
 *.ll
-*.bc
-*.s
 *.o
-*.obj
+*.so
+*.out
+*.wasm
+programa_final
 output.ll
 
-# Executáveis gerados por testes locais ou CLI
-programa_final
-a.out
+# Caches
+.lumina_cache/
+__pycache__/
+*.pyc
 
-# ==========================================
-# Benchmarks (Binários Compilados)
-# ==========================================
-benchmarks/fib
-benchmarks/fib_c
-benchmarks/fib_cpp
-benchmarks/fib_go
-benchmarks/fib_rs
-benchmarks/loop
-benchmarks/loop_c
-benchmarks/loop_cpp
-benchmarks/loop_go
-benchmarks/loop_rs
+# Arquivos de Testes Locais (binários gerados sem extensão)
+/app
+/proxy
+/database
+/search_engine
+/sql_engine
+/coroutines
+/threads
+/vm
+/chip8
+/bits
+/break_test
+/features
+/ffi_test
+/gc_test
+/quicksort
+/test_runner
+/wasm_math
 
-# ==========================================
-# Módulos & Extensão do VS Code
-# ==========================================
-*.vsix
-lumina-vscode/node_modules/
-lumina-vscode/out/
-lumina_modules/
-
-# ==========================================
-# Logs e Arquivos Temporários
-# ==========================================
-*.log
+# Outputs de Bancos de Dados e Logs
+*.txt
+lumina.wal
+lumina_db.txt
 log.txt
-.DS_Store
-Thumbs.db
 
-# ==========================================
-# IDEs e Ambientes de Desenvolvimento
-# ==========================================
-.vscode/
-.idea/
-.devcontainer/
+# Node e VS Code
+node_modules/
+*.vsix

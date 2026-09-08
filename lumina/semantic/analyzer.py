@@ -1,5 +1,5 @@
 from ..ast import NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr, ArrayExpr, IndexExpr, MemberExpr, AddressOfExpr, DerefExpr, UnaryExpr
-from ..ast import ReturnStmt, Function, VarDecl, AssignStmt, IfStmt, WhileStmt, ForStmt, MatchStmt, StructDecl, ImplBlock, ExternDecl, EnumDecl, ContinueStmt, DeferStmt
+from ..ast import ReturnStmt, Function, VarDecl, AssignStmt, IfStmt, WhileStmt, ForStmt, MatchStmt, StructDecl, ImplBlock, ExternDecl, EnumDecl, ContinueStmt, DeferStmt, BreakStmt, AssertStmt
 from ..errors import LuminaError
 
 class SemanticAnalyzer:
@@ -12,8 +12,8 @@ class SemanticAnalyzer:
         self.source_code = source_code
 
     def analyze(self, declarations):
+        # 1. Registra funções e structs primeiro
         for decl in declarations:
-            # NOVO: Registra funções normais E externas importadas de outros módulos
             if isinstance(decl, (Function, ExternDecl)):
                 self.functions.add(decl.name)
             elif isinstance(decl, StructDecl):
@@ -21,13 +21,21 @@ class SemanticAnalyzer:
                 self.struct_defs[decl.name] = decl
             elif isinstance(decl, EnumDecl):
                 self.structs.add(decl.name)
-                # Registra os construtores (ex: Some, None) como funções válidas
                 for v_name, _ in decl.variants:
                     self.functions.add(v_name)
             elif isinstance(decl, ImplBlock):
                 for method in decl.methods:
                     self.functions.add(method.name)
                     
+        # 2. Registra Variáveis Globais no escopo base (scopes[0])
+        for decl in declarations:
+            if isinstance(decl, VarDecl):
+                if decl.var_type is not None and decl.var_type not in ("int", "float", "bool", "str", "ptr") and decl.var_type not in self.structs:
+                    raise LuminaError(f"Tipo '{decl.var_type}' não declarado.", self.filename, 0, 0, self.source_code)
+                if decl.value: self.analyze_expr(decl.value)
+                self.declare_var(decl.name, decl.var_type, decl.is_mutable)
+                
+        # 3. Analisa funções (mantendo as globais no escopo base)
         for decl in declarations:
             if isinstance(decl, Function):
                 self.analyze_function(decl)
@@ -37,12 +45,17 @@ class SemanticAnalyzer:
     def declare_var(self, name, var_type, is_mutable): 
         self.scopes[-1][name] = {'type': var_type, 'mutable': is_mutable}
     def get_var_info(self, name):
+        # Procura de dentro para fora (escopo local -> escopo global)
         for scope in reversed(self.scopes):
             if name in scope: return scope[name]
         return None
 
     def analyze_function(self, node: Function):
-        self.scopes = [{}]
+        # Reseta os escopos, mas mantém as variáveis globais (que estão no escopo 0 original)
+        # Para isso, copiamos o escopo global atual para o novo escopo base
+        global_scope = self.scopes[0] if self.scopes else {}
+        self.scopes = [global_scope.copy()]
+        
         for p_name, p_type in node.params:
             self.declare_var(p_name, p_type, True)
         for stmt in node.body:
@@ -50,7 +63,7 @@ class SemanticAnalyzer:
 
     def analyze_stmt(self, node):
         if isinstance(node, VarDecl):
-            if node.var_type is not None and node.var_type not in ("int", "float", "bool", "str") and node.var_type not in self.structs:
+            if node.var_type is not None and node.var_type not in ("int", "float", "bool", "str", "ptr") and node.var_type not in self.structs:
                 raise LuminaError(f"Tipo '{node.var_type}' não declarado.", self.filename, 0, 0, self.source_code)
             if node.value: self.analyze_expr(node.value)
             self.declare_var(node.name, node.var_type, node.is_mutable)
@@ -97,23 +110,26 @@ class SemanticAnalyzer:
             self.pop_scope()
         elif isinstance(node, MatchStmt):
             self.analyze_expr(node.condition)
-            # CORREÇÃO: Agora desempacota 3 valores (variant_name, var_name, body)
             for variant_name, var_name, body in node.cases:
                 self.push_scope()
-                # Se houver extração de variável (ex: case Some(x):), declara a variável x
                 if var_name:
-                    self.declare_var(var_name, "int", False) # Simplificado para int
+                    self.declare_var(var_name, "int", False)
                 for stmt in body: self.analyze_stmt(stmt)
                 self.pop_scope()
             if node.default:
                 self.push_scope()
                 for stmt in node.default: self.analyze_stmt(stmt)
                 self.pop_scope()
-        # NOVO: Continue
         elif isinstance(node, ContinueStmt):
             pass
             
-        # NOVO: Defer
+        # NOVO: Break
+        elif isinstance(node, BreakStmt):
+            pass
+            
+        # NOVO: Assert
+        elif isinstance(node, AssertStmt):
+            self.analyze_expr(node.condition)
         elif isinstance(node, DeferStmt):
             for stmt in node.body:
                 self.analyze_stmt(stmt)
@@ -124,7 +140,6 @@ class SemanticAnalyzer:
         if isinstance(node, (NumberExpr, BoolExpr, StringExpr)): return
         elif isinstance(node, VariableExpr):
             if not self.get_var_info(node.name):
-                # NOVO: Erro Semântico com Linha e Coluna exatas!
                 raise LuminaError(f"Variável '{node.name}' não declarada.", self.filename, node.line, node.col, self.source_code)
         elif isinstance(node, BinaryExpr):
             self.analyze_expr(node.left)
@@ -169,10 +184,8 @@ class SemanticAnalyzer:
             return struct_def.fields[node.member]
             
         elif isinstance(node, AddressOfExpr):
-            # NOVO: Se for o nome de uma função (ex: &worker), está tudo bem!
             if isinstance(node.val, VariableExpr) and node.val.name in self.functions:
                 return
-            # Senão, analisa como expressão normal (ex: &minha_variavel)
             self.analyze_expr(node.val)
         elif isinstance(node, DerefExpr):
             self.analyze_expr(node.val)

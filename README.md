@@ -8,48 +8,28 @@
 
 **Lumina** é uma linguagem de programação de sistemas de propósito geral, focada em alta performance, ergonomia moderna, concorrência e segurança de memória. Ela combina a sintaxe limpa e expressiva baseada em indentação (estilo Python/Nim) com o poder de baixo nível e otimização industrial do backend **LLVM**.
 
-<<<<<<< Updated upstream
-A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums), operadores modernos (`|>`, `defer`, f-strings), interoperabilidade nativa com C (FFI), multithreading nativo (POSIX Threads), compilação incremental com cache inteligente e um ecossistema completo de ferramentas no CLI.
-=======
-A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums), operadores modernos (`|>`, `defer`, f-strings), interoperabilidade nativa com C/C++ (FFI), suporte a Green Threads (Corrotinas), compilação incremental com cache inteligente e um ecossistema completo de ferramentas no CLI.
->>>>>>> Stashed changes
+A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums), operadores modernos (`|>`, `defer`, f-strings), interoperabilidade nativa com C/C++ (FFI), suporte a Green Threads (Corrotinas), compilação incremental, e é **Cross-Platform** (compila para binários nativos x86_64/ARM e para WebAssembly).
 
 ---
 
 ## ✨ Funcionalidades Principais
 
 * **Sintaxe Limpa & Ergonômica:** Escopo definido por indentação significativa. Sem chaves `{}` ou pontos e vírgulas `;`.
-* **Tipagem Estática com Inferência:** O compilador deduz os tipos automaticamente sem perder a segurança e performance de tempo de compilação.
-* **Tipos Algébricos (ADTs) & Pattern Matching:** Defina `enum`s contendo dados/payloads (ex: `Some(int)`, `None`) e extraia valores com `match`.
+* **Tipagem Estática com Inferência:** O compilador deduz os tipos automaticamente.
+* **Tipos Algébricos (ADTs) & Pattern Matching:** `enum`s com payloads (ex: `Some(int)`, `None`) e extração via `match`.
 * **Ergonomia Moderna:**
-<<<<<<< Updated upstream
-  * **F-strings Nativas:** Interpolação direta: `print("Usuário {id} logou.")`.
-  * **Operador Pipe (`|>`):** Composição de funções estilo Elixir/F#: `5 |> dobrar |> imprimir`.
-  * **Defer:** Garante a execução de limpeza ao sair do escopo: `defer close(fd)`.
-  * **Test Runner:** Blocos `test "nome":` nativos para testes integrados.
-* **Gerenciamento de Memória Automático (Garbage Collector):**
-  * Integração nativa com o **Boehm GC** (`libgc`). A memória alocada dinamicamente é limpa automaticamente em segundo plano, eliminando vazamentos de memória sem a necessidade de chamadas manuais de `free()`.
-* **Concorrência e Redes (I/O Nativo):**
-  * **Multithreading:** Suporte a criação de threads nativas do SO via FFI com `pthread_create` e `pthread_join`, incluindo ponteiros de função (`&worker`).
-  * **Web Framework:** Módulo `std/http` para criação de servidores TCP/HTTP de altíssima performance direto no kernel (POSIX Sockets).
-* **Pipeline LLVM Avançado & Cache Incremental:**
-  * **Otimizações Agressivas:** Gera código intermediário (IR) limpo e delega ao `clang -O3 -march=native` a vetorização de loops (AVX/SSE) e promoção a registradores (`mem2reg`).
-  * **Constant Folding:** Contas matemáticas com literais são resolvidas em tempo de compilação.
-  * **Compilação Incremental:** Sistema de hashing MD5 (`.lumina_cache`) que pula a recompilação se nenhum arquivo dependente for modificado.
-* **Ecossistema Integrado:** CLI unificada, gerenciador de dependências Git, gerador de documentação HTML, execução JIT instantânea e extensão do VS Code.
-=======
   * **F-strings Nativas:** `print("Usuário {id} logou.")`.
-  * **Operador Pipe (`|>`):** Composição de funções: `5 |> dobrar |> imprimir`.
-  * **Defer:** Garante a execução de limpeza ao sair do escopo: `defer close(fd)`.
-  * **Test Runner & Assert:** Blocos `test "nome":` nativos e verificação `assert(condicao)`.
-* **Gerenciamento de Memória Automático:** Integração nativa com o **Boehm GC** (`libgc`). A memória alocada dinamicamente é limpa automaticamente, eliminando vazamentos de memória.
-* **Concorrência e Redes (I/O Nativo):**
-  * **Multithreading:** Threads nativas do SO via FFI com `pthread_create` e ponteiros de função (`&worker`).
-  * **Green Threads:** Suporte a Corrotinas via troca de contexto de CPU (`ucontext`), a base para um runtime Async/Await.
-  * **Web Framework:** Módulo `std/http` para criação de servidores TCP/HTTP de altíssima performance direto no kernel (POSIX Sockets).
-* **Pipeline LLVM Avançado & Cache Incremental:** Gera código intermediário (IR) limpo e delega ao `clang -O3 -march=native` a vetorização de loops e promoção a registradores. Sistema de hashing MD5 (`.lumina_cache`) para compilação instantânea.
-* **Ecossistema Integrado:** CLI unificada, gerenciador de dependências Git, auto-documentador HTML, auto-gerador de Bindings C (`lumina bind`) e extensão do VS Code com **LSP (Autocomplete e Diagnóstico em tempo real)**.
->>>>>>> Stashed changes
+  * **Operador Pipe (`|>`):** `5 |> dobrar |> imprimir`.
+  * **Defer & Assert:** Garantia de limpeza e testes nativos.
+  * **Auto-Formatter:** `lumina fmt` formata o código automaticamente.
+* **Gerenciamento de Memória Automático:** Integração nativa com o **Boehm GC**.
+* **Concorrência e Redes:**
+  * **Multithreading:** Threads nativas do SO via `pthread_create`.
+  * **Green Threads:** Suporte a Corrotinas via troca de contexto de CPU (`ucontext`).
+  * **Web Framework & Proxy:** Servidores TCP/HTTP e Proxy Reverso de baixa latência.
+* **Pipeline LLVM Avançado & Cache:** Otimizações `clang -O3 -march=native` e hashing MD5 para compilação instantânea.
+* **Ecossistema Integrado:** CLI, Gerenciador de Pacotes Git, Auto-documentador HTML, Auto-Gerador de Bindings C e Extensão VS Code com **LSP (Autocomplete)**.
+* **Cross-Platform (Wasm):** Compila para `.wasm`, rodando em navegadores e Node.js.
 
 ---
 
@@ -64,7 +44,7 @@ Para isolar a qualidade do código gerado, tanto a Lumina quanto o C foram compi
 | **Matrizes** (200x200) | **0.0066s** | 0.0102s | **0.0073s** | 0.0168s | 0.0551s | - |
 | **Fibonacci** (N=35) | 0.0400s | 0.0362s | **0.0400s** 🥇 | 0.0713s | 0.2364s | 1.4574s |
 
-*Resultado: A Lumina supera o C em loops matemáticos e acesso a memória otimizado, e destrói o Rust em 3 dos 4 testes.*
+*Resultado: A Lumina supera o C em loops matemáticos e acesso a memória, e destrói o Rust em 3 dos 4 testes.*
 
 ---
 
@@ -72,67 +52,27 @@ Para isolar a qualidade do código gerado, tanto a Lumina quanto o C foram compi
 
 ### Pré-requisitos
 * **Python 3.10+** e `llvmlite` (`pip install llvmlite`)
-* **LLVM** e **Clang** instalados e acessíveis no `PATH`
-* **Boehm GC** instalado (`sudo apt install libgc-dev`)
-* **Git** (para o gerenciador de pacotes)
+* **LLVM** e **Clang** no `PATH`
+* **Boehm GC** (`sudo apt install libgc-dev`)
+* **Git**
 
 ### Comandos Principais
 ```bash
-<<<<<<< Updated upstream
-lumina new meu_projeto
-cd meu_projeto
-```
-
-#### 2. Gerenciar Dependências Remotas
-Declare repositórios remotos do GitHub no arquivo `lumina.json`:
-```json
-{
-  "dependencies": {
-    "utils": "github:usuario/repo"
-  }
-}
-```
-Baixe os pacotes para `lumina_modules/`:
-```bash
-lumina install
-```
-
-#### 3. Execução Instantânea via JIT
-Compila e executa diretamente na memória RAM sem gerar arquivos intermediários no disco.
-```bash
-lumina jit
-```
-
-#### 4. Compilar para Binário Nativo Otimizado
-Aplica as otimizações em memória, utiliza o cache incremental (`.lumina_cache`) e invoca o `clang -O3` para gerar o executável final:
-```bash
-lumina build
-./meu_projeto
-```
-
-#### 5. Gerar Portal de Documentação HTML
-Extrai comentários iniciados em `##` do código e cria a página web em `docs/index.html`:
-```bash
-lumina doc
-=======
-lumina new meu_projeto      # Cria a estrutura inicial (lumina.json + main.lm)
-lumina install              # Baixa dependências do GitHub para lumina_modules/
-lumina bind header.h nome    # Gera bindings FFI a partir de um arquivo C/C++
+lumina new meu_projeto      # Cria a estrutura inicial
+lumina install              # Baixa dependências do GitHub
+lumina bind header.h nome   # Gera bindings FFI a partir de um arquivo C
+lumina fmt arquivo.lm       # Formata o código automaticamente
 lumina jit                  # Executa instantaneamente na memória RAM
 lumina build                # Compila para binário nativo otimizado (-O3)
-lumina doc                  # Gera portal de documentação HTML em docs/index.html
->>>>>>> Stashed changes
+lumina build app.lm --wasm  # Compila para WebAssembly (.wasm)
+lumina doc                  # Gera portal de documentação HTML
 ```
 
 ---
 
 ## 🛠️ Exemplos de Código
 
-<<<<<<< Updated upstream
 ### 1. Ergonomia Moderna (Pipe, F-strings, Defer)
-=======
-### 1. Ergonomia Moderna (Pipe, F-strings, Defer, Assert)
->>>>>>> Stashed changes
 ```lumina
 fn dobrar(x: int) -> int:
     return x * 2
@@ -140,39 +80,29 @@ fn dobrar(x: int) -> int:
 fn processar_dados(id: int):
     defer print("Liberando recursos do ID:", id)
     print("Processando dados para o usuario {id}...")
-    return
 
 fn main() -> int:
     processar_dados(1)
-    
-    # Operador Pipe (|>)
     let resultado = 5 |> dobrar |> dobrar
     print("Resultado do Pipe: {resultado}")
     return 0
 ```
 
-<<<<<<< Updated upstream
-### 2. Multithreading Nativo (POSIX Threads)
-A Lumina suporta concorrência real passando ponteiros de função (`&worker`) diretamente para a API do C:
-=======
-### 2. Banco de Dados Nativo com WAL (Write-Ahead Logging)
-```lumina
-import "std/fs"
-
-let wal_file = "lumina.wal"
-mut tabela = alloc(100)
-mut total_registros = 0
-
-fn put(chave: int, valor: int):
-    let log_entry = "PUT " + chave + "," + valor + "\n"
-    write_file(wal_file, log_entry) # Persiste no disco (WAL)
-    tabela[total_registros] = chave # Commita em memória
-    tabela[total_registros + 1] = valor
-    total_registros += 2
+### 2. WebAssembly (Node.js)
+Compile com `--wasm` e carregue no Node.js:
+```javascript
+const fs = require('fs');
+async function run() {
+    const wasmBuffer = fs.readFileSync('wasm_math.wasm');
+    const { instance } = await WebAssembly.instantiate(wasmBuffer, {});
+    const fib = instance.exports.fib;
+    const result = fib(10n); // Usa BigInt pois a Lumina usa inteiros de 64 bits
+    console.log("🚀 Fibonacci(10):", result);
+}
+run();
 ```
 
 ### 3. Multithreading Nativo (POSIX Threads)
->>>>>>> Stashed changes
 ```lumina
 extern fn pthread_create(thread: str, attr: int, start_routine: int, arg: str) -> int
 extern fn pthread_join(thread: int, retval: int) -> int
@@ -189,40 +119,17 @@ fn main() -> int:
     return 0
 ```
 
-<<<<<<< Updated upstream
-### 3. Web Framework HTTP Nativo
-Um servidor web rodando direto no kernel do Linux, sem Apache ou Node.js:
-```lumina
-import "std/http"
-
-fn main() -> int:
-    let server_fd = iniciar(8080)
-    mut request_buffer = alloc_bytes(1024)
-    
-    while true:
-        let client_fd = accept(server_fd, ...)
-        recv(client_fd, request_buffer, 1024, 0)
-        
-        # Roteamento HTTP
-        if request_buffer[5] == 32: # "GET / "
-            responder(client_fd, "<h1>Bem-vindo!</h1>")
-            continue
-            
-        not_found(client_fd)
-```
-
-=======
->>>>>>> Stashed changes
 ---
 
 ## 📦 Standard Library (`std/`)
 
 A Lumina conta com uma biblioteca padrão modularizada escrita na própria linguagem, encapsulando chamadas de sistema e bibliotecas C nativas de forma segura:
 
-* `std/math`: Funções matemáticas (sqrt, sin, cos).
-* `std/fs`: Manipulação de arquivos (read_file, write_file).
-* `std/http`: Web Framework HTTP nativo (Servidor TCP, Rotas, Respostas HTTP).
-* `std/async`: Green Threads e troca de contexto de CPU (ucontext).
+* `std/math`: Funções matemáticas.
+* `std/fs`: Manipulação de arquivos.
+* `std/http`: Web Framework HTTP nativo.
+* `std/net`: Sockets TCP e Proxy Reverso.
+* `std/async`: Green Threads e troca de contexto (ucontext).
 * `std/sqlite`: Bindings para banco de dados SQLite.
 * `std/raylib`: Bindings para engine gráfica Raylib.
 
@@ -234,22 +141,13 @@ A Lumina conta com uma biblioteca padrão modularizada escrita na própria lingu
 Lumina/
 ├── lumina_cli.py            # CLI, Build System, Cache e Package Manager
 ├── lumina_lsp.py            # Language Server Protocol (Autocomplete e Diagnóstico)
-├── std/                     # Standard Library (http.lm, async.lm, fs.lm, etc)
+├── lumina/                  # Núcleo do Compilador (Lexer, Parser, Semantic, Codegen)
+├── std/                     # Standard Library (.lm)
 ├── benchmarks/              # Suíte de benchmarks (Lumina vs C, Rust, Go)
-├── examples/                # Exemplos de código (server, database, chip8, ffi, etc)
-├── lumina/                  # Núcleo do Compilador
-│   ├── errors.py            # Erros amigáveis com indicação de linha e coluna (Rust-style)
-<<<<<<< Updated upstream
-│   ├── lexer/               # Análise Léxica (Tokens, INDENT/DEDENT)
-│   ├── parser/              # Análise Sintática e Construção da AST (F-strings, Pipe)
-=======
-│   ├── lexer/               # Análise Léxica (Tokens, INDENT/DEDENT, F-strings)
-│   ├── parser/              # Análise Sintática e Construção da AST (Mixins)
->>>>>>> Stashed changes
-│   ├── semantic/            # Analisador Semântico (Escopos, Mutabilidade, Tipos)
-│   └── codegen/             # Geração de código LLVM IR (GC, Enums, FFI, Threads)
-├── lumina-vscode/           # Extensão VS Code (Syntax Highlight + LSP Client)
-└── tests/                   # Suíte de testes funcionais e de regressão
+├── examples/                # Exemplos de código (Proxy, SQL, Wasm, etc)
+├── tests/                   # Suíte de testes funcionais
+├── scripts/                 # Scripts de automação
+└── lumina-vscode/           # Extensão VS Code (Syntax + LSP Client)
 ```
 
 ---
@@ -266,5 +164,4 @@ A Lumina oferece suporte a realce de sintaxe, regras de indentação, **Autocomp
 ---
 
 ## 📜 Licença
-
 Este projeto é distribuído sob a Licença **MIT**. Para mais detalhes, consulte o arquivo [LICENSE](LICENSE).

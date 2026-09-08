@@ -51,6 +51,9 @@ class Parser(ExpressionParser, StatementParser):
             # NOVO: Aceita blocos de Teste (test)
             elif self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'test':
                 declarations.append(self.parse_statement())
+            # NOVO: Aceita blocos de Bench
+            elif self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'bench':
+                declarations.append(self.parse_statement())
             else:
                 self.consume()
         return declarations

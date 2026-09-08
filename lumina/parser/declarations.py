@@ -1,7 +1,20 @@
-from ..ast import VarDecl, AssignStmt, Function, StructDecl, ImplBlock, ImportStmt, ExternDecl, EnumDecl, BinaryExpr, VariableExpr, DeferStmt, NumberExpr, AssertStmt
+from ..ast import VarDecl, AssignStmt, Function, StructDecl, ImplBlock, ImportStmt, ExternDecl, EnumDecl, BinaryExpr, VariableExpr, DeferStmt, NumberExpr, AssertStmt, BenchStmt
 from ..lexer import TokenType
 
 class DeclarationsParser:
+    def parse_type_params(self):
+        params = []
+        if self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == '<':
+            self.consume() # '<'
+            while True:
+                params.append(self.consume(TokenType.IDENT).value)
+                if self.current_token().type == TokenType.OP and self.current_token().value == ',':
+                    self.consume()
+                else:
+                    break
+            self.consume(TokenType.OP) # '>'
+        return params if params else None
+    
     def parse_let(self):
         token = self.current_token()
         is_mutable = (token.value == 'mut')
@@ -57,9 +70,13 @@ class DeclarationsParser:
         return Function(f"test_{test_name.replace(' ', '_')}", [], "int", body)
 
     def parse_struct(self):
-        self.consume()
+        self.consume() # 'struct'
         name = self.consume(TokenType.IDENT).value
-        self.consume(TokenType.OP)
+        
+        # NOVO: Lê os parâmetros de tipo (ex: <T>)
+        type_params = self.parse_type_params()
+        
+        self.consume(TokenType.OP) # ':'
         self.consume(TokenType.NEWLINE)
         self.consume(TokenType.INDENT)
         fields = {}
@@ -71,7 +88,7 @@ class DeclarationsParser:
             fields[field_name] = field_type
             self.consume(TokenType.NEWLINE)
         self.consume(TokenType.DEDENT)
-        return StructDecl(name, fields)
+        return StructDecl(name, fields, type_params)
 
     def parse_impl(self):
         self.consume()
@@ -116,10 +133,14 @@ class DeclarationsParser:
         return EnumDecl(name, variants)
 
     def parse_function(self):
-        self.consume(TokenType.KEYWORD)
+        self.consume(TokenType.KEYWORD) # 'fn'
         name = self.consume(TokenType.IDENT).value
+        
+        # NOVO: Lê os parâmetros de tipo (ex: <T>)
+        type_params = self.parse_type_params()
+        
         params = []
-        self.consume(TokenType.OP)
+        self.consume(TokenType.OP) # '('
         if self.current_token().type != TokenType.OP or self.current_token().value != ')':
             while True:
                 p_name = self.consume(TokenType.IDENT).value
@@ -167,3 +188,16 @@ class DeclarationsParser:
             
         self.consume(TokenType.NEWLINE)
         return ExternDecl(name, params, return_type)
+
+    def parse_bench(self):
+        self.consume() # 'bench'
+        bench_name = self.consume(TokenType.STRING).value
+        self.consume(TokenType.OP) # ':'
+        self.consume(TokenType.NEWLINE)
+        self.consume(TokenType.INDENT)
+        body = []
+        while self.current_token() and self.current_token().type != TokenType.DEDENT:
+            if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
+            body.append(self.parse_statement())
+        self.consume(TokenType.DEDENT)
+        return BenchStmt(bench_name, body)

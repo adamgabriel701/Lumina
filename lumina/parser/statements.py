@@ -77,6 +77,10 @@ class StatementParser(DeclarationsParser, ControlFlowParser):
             return self.parse_defer()
         elif token.type == TokenType.KEYWORD and token.value == 'assert':
             return self.parse_assert()
+            
+        # NOVO: Bench
+        elif token.type == TokenType.KEYWORD and token.value == 'bench':
+            return self.parse_bench()
         elif token.type == TokenType.KEYWORD and token.value == 'test':
             return self.parse_test()
         else:

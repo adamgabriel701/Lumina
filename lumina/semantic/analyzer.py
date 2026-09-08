@@ -1,5 +1,5 @@
 from ..ast import NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr, ArrayExpr, IndexExpr, MemberExpr, AddressOfExpr, DerefExpr, UnaryExpr
-from ..ast import ReturnStmt, Function, VarDecl, AssignStmt, IfStmt, WhileStmt, ForStmt, MatchStmt, StructDecl, ImplBlock, ExternDecl, EnumDecl, ContinueStmt, DeferStmt, BreakStmt, AssertStmt
+from ..ast import ReturnStmt, Function, VarDecl, AssignStmt, IfStmt, WhileStmt, ForStmt, MatchStmt, StructDecl, ImplBlock, ExternDecl, EnumDecl, ContinueStmt, DeferStmt, BreakStmt, AssertStmt, BenchStmt
 from ..errors import LuminaError
 
 class SemanticAnalyzer:
@@ -130,6 +130,11 @@ class SemanticAnalyzer:
         # NOVO: Assert
         elif isinstance(node, AssertStmt):
             self.analyze_expr(node.condition)
+            
+        # NOVO: Bench
+        elif isinstance(node, BenchStmt):
+            for stmt in node.body:
+                self.analyze_stmt(stmt)
         elif isinstance(node, DeferStmt):
             for stmt in node.body:
                 self.analyze_stmt(stmt)

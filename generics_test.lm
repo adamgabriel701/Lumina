@@ -1,0 +1,18 @@
+# Struct Genérica: Pode guardar qualquer tipo de ponteiro
+struct Box<T>:
+    data: T
+
+# Função Genérica: Recebe qualquer ponteiro e retorna o mesmo
+fn put<T>(b: Box, val: T):
+    b.data = val
+
+fn main() -> int:
+    # Cria uma Box
+    mut b: Box
+    
+    # Guarda um inteiro (convertido para ponteiro genérico)
+    let x = 42
+    put(b, &x)
+    print("Box armazena um ponteiro para o inteiro 42!")
+    
+    return 0

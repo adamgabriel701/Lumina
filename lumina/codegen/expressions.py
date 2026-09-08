@@ -434,6 +434,13 @@ class ExpressionCodegen:
                     elif func_type.args[i] == self.voidptr_ty and isinstance(arg_val.type, ir.PointerType) and arg_val.type != self.voidptr_ty:
                         arg_val = self.builder.bitcast(arg_val, self.voidptr_ty, name="arg_void_cast")
                     args.append(arg_val)
-                return self.builder.call(func, args, name=node.name + "_call")
+                
+                # NOVO: Se for um retorno direto, usa 'tail call' para ativar o TCO do LLVM!
+                tail_flag = getattr(self, 'is_tail_return', False)
+                
+                # O llvmlite exige que o tail call seja o último instruction do bloco
+                # Como logo abaixo virá o ret, isso é seguro.
+                call_instr = self.builder.call(func, args, name=node.name + "_call", tail=tail_flag)
+                return call_instr
                 
         raise Exception(f"Nó não suportado no Codegen: {type(node)}")

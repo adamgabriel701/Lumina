@@ -1,0 +1,13 @@
+# Soma recursiva de 1 até N (Tail Recursive)
+fn sum_rec(n: int, acc: int) -> int:
+    if n == 0:
+        return acc
+    # A chamada de cauda é o retorno direto da função
+    return sum_rec(n - 1, acc + n)
+
+fn main() -> int:
+    print("Iniciando TCO Test...")
+    # 1 milhão de recursões! Sem TCO, isso derrubaria a pilha.
+    let res = sum_rec(1000000, 0)
+    print("Soma 1 até 1M:", res)
+    return 0

@@ -45,6 +45,7 @@ class MatchStmt:
 class StructDecl:
     name: str
     fields: Dict[str, str]
+    type_params: Optional[List[str]] = None # NOVO
 
 @dataclass
 class Function:
@@ -52,6 +53,7 @@ class Function:
     params: List[tuple]
     return_type: str
     body: List[any]
+    type_params: Optional[List[str]] = None # NOVO
 
 @dataclass
 class ImplBlock:
@@ -101,3 +103,9 @@ class BreakStmt:
 @dataclass
 class AssertStmt:
     condition: any
+
+# NOVO NÓ DE BENCHMARK
+@dataclass
+class BenchStmt:
+    name: str
+    body: List[any]

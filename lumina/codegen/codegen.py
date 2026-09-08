@@ -31,6 +31,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen):
         self.continue_block = None
         self.break_block = None
         self.deferred_stmts = []
+        self.is_tail_return = False # NOVO: Flag para TCO
 
     # MÉTODO PARA CRIAR ENUMS ATUALIZADO
     def create_enum(self, node: EnumDecl):
@@ -71,10 +72,11 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen):
         if type_name == "int": return self.i64_ty
         elif type_name == "float": return self.f64_ty
         elif type_name == "str": return self.voidptr_ty 
-        # NOVO: ptr é um ponteiro nativo para inteiros (i64*)
         elif type_name == "ptr": return self.i64_ty.as_pointer()
+        # NOVO: Suporte a void e Genéricos (Type Erasure)
+        elif type_name == "void": return ir.VoidType()
         elif type_name in self.struct_types: return self.struct_types[type_name]
-        return self.i64_ty
+        return self.voidptr_ty # Default para Genéricos (T)
 
     def get_llvm_param_type(self, type_name):
         if type_name in self.struct_types: 
@@ -250,4 +252,10 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen):
         if not self.builder.block.is_terminated:
             for scope in self.cleanup_vars:
                 self.cleanup_block(scope)
-            self.builder.ret(ir.Constant(ret_ty, 0))
+            # NOVO: Se for void, usa ret_void(). Senão, retorna 0 ou null.
+            if ret_ty == ir.VoidType():
+                self.builder.ret_void()
+            elif isinstance(ret_ty, ir.PointerType):
+                self.builder.ret(ir.Constant(ret_ty, None)) # Retorna ponteiro nulo (null)
+            else:
+                self.builder.ret(ir.Constant(ret_ty, 0))

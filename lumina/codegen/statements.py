@@ -1,5 +1,5 @@
 from llvmlite import ir
-from ..ast import VarDecl, AssignStmt, ReturnStmt, IfStmt, WhileStmt, ForStmt, MemberExpr, ArrayExpr, MatchStmt, DerefExpr, IndexExpr, VariableExpr, CallExpr, ContinueStmt, DeferStmt, BreakStmt, AssertStmt
+from ..ast import VarDecl, AssignStmt, ReturnStmt, IfStmt, WhileStmt, ForStmt, MemberExpr, ArrayExpr, MatchStmt, DerefExpr, IndexExpr, VariableExpr, CallExpr, ContinueStmt, DeferStmt, BreakStmt, AssertStmt, BenchStmt
 from .control_flow import ControlFlowCodegen
 
 class StatementCodegen(ControlFlowCodegen):
@@ -88,7 +88,11 @@ class StatementCodegen(ControlFlowCodegen):
                 for stmt in body: self.codegen_stmt(stmt)
             self.deferred_stmts.clear()
             
+            # NOVO: Liga a flag de TCO antes de avaliar o retorno
+            self.is_tail_return = True
             val = self.codegen_expr(node.values[0])
+            self.is_tail_return = False
+            
             if isinstance(val.type, ir.PointerType) and isinstance(val.type.pointee, ir.IdentifiedStructType):
                 val = self.builder.load(val, name="ret_val")
             for scope in self.cleanup_vars:
@@ -140,6 +144,43 @@ class StatementCodegen(ControlFlowCodegen):
             self.builder.branch(end_bb)
             
             self.builder.position_at_end(end_bb)
+
+        # NOVO: BenchStmt
+        elif isinstance(node, BenchStmt):
+            # Declara clock() do C (retorna clock_t, que é um long/int)
+            clock_fn = self.functions_table.get("clock")
+            if not clock_fn:
+                clock_ty = ir.FunctionType(self.i64_ty, [])
+                clock_fn = (ir.Function(self.module, clock_ty, name="clock"), clock_ty)
+                self.functions_table["clock"] = clock_fn
             
+            # Constante CLOCKS_PER_SEC (geralmente 1000000 no Linux)
+            cps = ir.Constant(self.i64_ty, 1000000)
+            
+            # Pega o tempo inicial
+            start_time = self.builder.call(clock_fn[0], [], name="bench_start")
+            
+            # Executa o corpo do benchmark (APENAS 1 VEZ)
+            for stmt in node.body:
+                self.codegen_stmt(stmt)
+            
+            # Pega o tempo final
+            end_time = self.builder.call(clock_fn[0], [], name="bench_end")
+            
+            diff = self.builder.sub(end_time, start_time, name="bench_diff")
+            
+            # NOVO: Converte para float (f64) para obter precisão decimal
+            diff_f = self.builder.sitofp(diff, self.f64_ty, name="bench_diff_f")
+            
+            # Divide por CLOCKS_PER_SEC (1.000.000) para obter segundos
+            sec = self.builder.fdiv(diff_f, ir.Constant(self.f64_ty, 1000000.0), name="bench_sec")
+            
+            print_msg = self.create_global_string("Benchmark '" + node.name + "': ")
+            self.builder.call(self.printf, [print_msg])
+            
+            # Imprime em segundos com casa decimal
+            fmt_sec = self.create_global_string("%f segundos\n")
+            self.builder.call(self.printf, [fmt_sec, sec])
+
         else:
             self.codegen_expr(node)

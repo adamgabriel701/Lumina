@@ -8,7 +8,7 @@
 
 **Lumina** é uma linguagem de programação de sistemas de propósito geral, focada em alta performance, ergonomia moderna, concorrência e segurança de memória. Ela combina a sintaxe limpa e expressiva baseada em indentação (estilo Python/Nim) com o poder de baixo nível e otimização industrial do backend **LLVM**.
 
-A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums), operadores modernos (`|>`, `defer`, `?.`, `?`), Generics (`<T>`), interoperabilidade nativa com C/C++ (FFI), suporte a Green Threads e I/O Assíncrono (`epoll`), um REPL interativo, um Web Playground, compilação incremental, e é **Cross-Platform** (compila para binários nativos x86_64/ARM e para WebAssembly).
+A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums), operadores modernos (`|>`, `defer`, `?.`, `?`), Generics (`<T>`), interoperabilidade nativa com C/C++ (FFI), suporte a Green Threads e I/O Assíncrono (`epoll`), um REPL interativo, um Web Playground, compilação incremental, e é **Cross-Platform** (compila para binários nativos x86_64/ARM, WebAssembly e Bare-Metal).
 
 ---
 
@@ -33,8 +33,8 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
   * **Async I/O:** Event Loop não-bloqueante de baixa latência usando `epoll` do Linux.
   * **Web Framework & Proxy:** Servidores TCP/HTTP e Proxy Reverso.
 * **Pipeline LLVM Avançado & Cache:** Otimizações `clang -O3 -march=native` e hashing MD5 para compilação instantânea.
-* **Ecossistema Integrado:** CLI, REPL, Web Playground (JIT), Gerenciador de Pacotes Git, Auto-documentador HTML, Auto-Gerador de Bindings C, Native Benchmarking (`bench`) e Extensão VS Code com **LSP (Autocomplete)**.
-* **Cross-Platform (Wasm):** Compila para `.wasm`, rodando em navegadores e Node.js.
+* **Ecossistema Integrado:** CLI (`lumina.toml`), REPL, Web Playground (JIT), Gerenciador de Pacotes Git, Auto-documentador HTML, Auto-Gerador de Bindings C, Native Benchmarking (`bench`) e Extensão VS Code com **LSP (Autocomplete)**.
+* **Cross-Platform:** Compila para binários nativos x86_64/ARM, WebAssembly (`.wasm`) e Bare-Metal (`--no-gc` para Kernel/Embarcados).
 
 ---
 
@@ -63,7 +63,7 @@ Para isolar a qualidade do código gerado, tanto a Lumina quanto o C foram compi
 
 ### Comandos Principais
 ```bash
-lumina new meu_projeto      # Cria a estrutura inicial
+lumina new meu_projeto      # Cria a estrutura inicial (com lumina.toml)
 lumina install              # Baixa dependências do GitHub
 lumina bind header.h nome   # Gera bindings FFI a partir de um arquivo C
 lumina fmt arquivo.lm       # Formata o código automaticamente
@@ -73,6 +73,7 @@ lumina repl                 # Inicia o console interativo (REPL JIT)
 lumina jit                  # Executa instantaneamente na memória RAM
 lumina build                # Compila para binário nativo otimizado (-O3)
 lumina build app.lm --wasm  # Compila para WebAssembly (.wasm)
+lumina build app.lm --no-gc # Compila para Bare-Metal (sem Garbage Collector)
 lumina doc                  # Gera portal de documentação HTML
 ```
 
@@ -124,23 +125,22 @@ fn processar() -> Result:
     return Ok(100)
 ```
 
-### 3. Generics e Native Benchmarking
+### 3. Async I/O com Event Loop (`epoll`)
 ```lumina
-struct Box<T>:
-    data: T
-
-fn somar(n: int) -> int:
-    mut total = 0
-    mut i = 0
-    while i < n:
-        total += i
-        i += 1
-    return total
+import "std/http"
+import "std/epoll"
 
 fn main() -> int:
-    bench "somar 1 milhao":
-        let res = somar(1000000)
-        print("Resultado:", res)
+    let server_fd = iniciar(8080)
+    let epfd = criar()
+    adicionar(epfd, server_fd)
+    
+    # Event Loop não-bloqueante (a CPU dorme até ter dados)
+    while true:
+        let events_ptr = esperar(epfd, 10)
+        if events_ptr != 0:
+            let client_fd = accept(server_fd, ...)
+            # ... processa e responde ...
     return 0
 ```
 

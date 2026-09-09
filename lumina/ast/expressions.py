@@ -59,6 +59,30 @@ class DerefExpr:
 class PropagateExpr:
     val: any
 
+# NOVO NÓ PARA METAPROGRAMAÇÃO
+@dataclass
+class ComptimeExpr:
+    expr: any
+
+# NOVO NÓ PARA STRUCT LITERALS
+@dataclass
+class StructLiteralExpr:
+    struct_name: str
+    fields: List[tuple]
+
+# NOVO NÓ PARA CASTING DE TIPOS
+@dataclass
+class CastExpr:
+    expr: any
+    target_type: str
+
+# NOVO NÓ PARA MATCH EXPRESSION
+@dataclass
+class MatchExpr:
+    condition: any
+    cases: List[tuple] # (valor, expressao_de_retorno)
+    default: any
+
 @dataclass
 class TupleExpr:
     elements: List[any]

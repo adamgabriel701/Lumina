@@ -43,64 +43,52 @@ class ControlFlowParser:
         self.consume()
         var_name = self.consume(TokenType.IDENT).value
         self.consume(TokenType.KEYWORD)
-        start = self.parse_expression()
-        self.consume(TokenType.OP)
-        end = self.parse_expression()
-        self.consume(TokenType.OP)
-        self.consume(TokenType.NEWLINE)
-        self.consume(TokenType.INDENT)
-        body = []
-        while self.current_token() and self.current_token().type != TokenType.DEDENT:
-            if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
-            body.append(self.parse_statement())
-        self.consume(TokenType.DEDENT)
-        return ForStmt(var_name, start, end, body)
+        expr = self.parse_expression()
+        if self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == '..':
+            self.consume()
+            end = self.parse_expression()
+            self.consume(TokenType.OP); self.consume(TokenType.NEWLINE); self.consume(TokenType.INDENT)
+            body = []
+            while self.current_token() and self.current_token().type != TokenType.DEDENT:
+                if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
+                body.append(self.parse_statement())
+            self.consume(TokenType.DEDENT)
+            return ForStmt(var_name, expr, end, body)
+        else:
+            self.consume(TokenType.OP); self.consume(TokenType.NEWLINE); self.consume(TokenType.INDENT)
+            body = []
+            while self.current_token() and self.current_token().type != TokenType.DEDENT:
+                if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
+                body.append(self.parse_statement())
+            self.consume(TokenType.DEDENT)
+            return ForStmt(var_name, None, None, body, iterable=expr)
 
     def parse_match(self):
         self.consume()
         condition = self.parse_expression()
-        self.consume(TokenType.OP)
-        self.consume(TokenType.NEWLINE)
-        self.consume(TokenType.INDENT)
-        
-        cases = []
-        default = None
-        
+        self.consume(TokenType.OP); self.consume(TokenType.NEWLINE); self.consume(TokenType.INDENT)
+        cases, default = [], None
         while self.current_token() and self.current_token().type != TokenType.DEDENT:
             if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
-                
             if self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'case':
                 self.consume()
                 variant_name = self.consume(TokenType.IDENT).value
                 var_name = None
-                
                 if self.current_token().type == TokenType.OP and self.current_token().value == '(':
-                    self.consume()
-                    var_name = self.consume(TokenType.IDENT).value
-                    self.consume(TokenType.OP)
-                    
-                self.consume(TokenType.OP)
-                self.consume(TokenType.NEWLINE)
-                self.consume(TokenType.INDENT)
-                
+                    self.consume(); var_name = self.consume(TokenType.IDENT).value; self.consume(TokenType.OP)
+                self.consume(TokenType.OP); self.consume(TokenType.NEWLINE); self.consume(TokenType.INDENT)
                 body = []
                 while self.current_token() and self.current_token().type != TokenType.DEDENT:
                     if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
                     body.append(self.parse_statement())
                 self.consume(TokenType.DEDENT)
                 cases.append((variant_name, var_name, body))
-                
             elif self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'default':
-                self.consume()
-                self.consume(TokenType.OP)
-                self.consume(TokenType.NEWLINE)
-                self.consume(TokenType.INDENT)
-                
+                self.consume(); self.consume(TokenType.OP); self.consume(TokenType.NEWLINE); self.consume(TokenType.INDENT)
                 default = []
                 while self.current_token() and self.current_token().type != TokenType.DEDENT:
                     if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
                     default.append(self.parse_statement())
                 self.consume(TokenType.DEDENT)
-                
         self.consume(TokenType.DEDENT)
         return MatchStmt(condition, cases, default)

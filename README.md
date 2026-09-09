@@ -8,29 +8,31 @@
 
 **Lumina** é uma linguagem de programação de sistemas de propósito geral, focada em alta performance, ergonomia moderna, concorrência e segurança de memória. Ela combina a sintaxe limpa e expressiva baseada em indentação (estilo Python/Nim) com o poder de baixo nível e otimização industrial do backend **LLVM**.
 
-A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums), Generics com **Monomorphization** (`<T>`), Traits, operadores modernos (`|>`, `defer`, `?.`, `?`), interoperabilidade nativa com C/C++ (FFI), suporte a I/O Assíncrono (`epoll`), um Web Playground, compilação incremental, e é **Cross-Platform** (compila para binários nativos x86_64/ARM, WebAssembly e Bare-Metal).
+A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums), Generics com **Monomorphization** (`<T>`), Traits, operadores modernos (`|>`, `defer`, `?.`, `?`), Match Expressions, interoperabilidade nativa com C/C++ (FFI), suporte a I/O Assíncrono (`epoll`), um REPL interativo, um Web Playground, compilação incremental, e é **Cross-Platform** (compila para binários nativos x86_64/ARM, WebAssembly e Bare-Metal).
 
 ---
 
 ## ✨ Funcionalidades Principais
 
 * **Sintaxe Limpa & Ergonômica:** Escopo definido por indentação significativa. Sem chaves `{}` ou pontos e vírgulas `;`.
-* **Tipagem Estática com Inferência:** O compilador deduz os tipos automaticamente.
+* **Tipagem Estática com Inferência:** O compilador deduz os tipos automaticamente, incluindo retornos de métodos.
 * **Generics com Monomorphization:** Suporte a tipos genéricos `<T>` que geram cópias especializadas em tempo de compilação (`Box<int>` vira `Box_int` no LLVM IR), garantindo zero overhead de runtime.
-* **Traits (Interfaces):** Suporte a polimorfismo estático e VTables para código extensível.
-* **Tipos Algébricos (ADTs) & Pattern Matching:** `enum`s com payloads e extração via `match`.
+* **Traits (Interfaces):** Suporte a polimorfismo estático com verificação em tempo de compilação (`impl Trait for Struct`).
+* **Tipos Algébricos (ADTs) & Pattern Matching:** `enum`s com payloads e extração via `match`. `match` também funciona como expressão que retorna valores.
 * **Ergonomia Moderna:**
   * **F-strings Nativas:** `$"Usuário {id} logou."`.
   * **Operador Pipe (`|>`):** `5 |> dobrar |> imprimir`.
   * **Navegação Segura (`?.`):** Evita Segmentation Faults ao acessar structs nulas: `usuario?.perfil?.nome`.
   * **Propagação de Erros (`?`):** Retorna erros automaticamente sem `try/catch`: `let val = abrir_arquivo()?`.
+  * **Casting Explícito (`as`):** `10 as float`, `ptr as int`.
+  * **Struct Literals:** Inicialização inline: `Point { x: 10, y: 20 }`.
   * **Defer & Assert:** Garantia de limpeza de escopo e testes nativos.
   * **Auto-Formatter:** `lumina fmt` formata o código automaticamente.
 * **Gerenciamento de Memória Avançado:**
   * **Garbage Collector:** Integração nativa com o **Boehm GC** (`libgc`).
   * **Escape Analysis:** Se uma variável alocada não fugir do escopo, o compilador a aloca na Stack (Pilha) automaticamente.
   * **Arena Allocator:** Modo Bare-Metal (`--no-gc`) com alocador determinístico na `std/alloc`.
-* **Otimizações de Compilador:** Tail Call Optimization (TCO), Constant Folding e DWARF Debug Info (depurável no GDB/LLDB).
+* **Otimizações de Compilador:** Tail Call Optimization (TCO), Constant Folding, Comptime Evaluation e DWARF Debug Info (depurável no GDB/LLDB).
 * **Concorrência e Redes:**
   * **Multithreading:** Threads nativas do SO via `pthread_create`.
   * **Green Threads:** Suporte a Corrotinas via troca de contexto de CPU (`ucontext`).
@@ -88,53 +90,41 @@ python3 playground.py
 
 ## 🛠️ Exemplos de Código
 
-### 1. Generics com Monomorphization
+### 1. Traits e Struct Literals
 ```lumina
-struct Box<T>:
-    value: T
+trait Drawable:
+    fn draw()
+    fn get_area() -> int
+
+struct Square:
+    size: int
+
+impl Drawable for Square:
+    fn draw():
+        print("Desenhando Square...")
+    fn get_area() -> int:
+        return 10 * 10
 
 fn main() -> int:
-    mut b1: Box<int>
-    b1.value = 42
-    
-    mut b2: Box<float>
-    b2.value = 3.14
-    
-    print("Box<int>:", b1.value)
-    print("Box<float>:", b2.value)
+    let sq = Square { size: 10 }
+    sq.draw()
+    print("Área:", sq.get_area())
     return 0
 ```
 
-### 2. Tratamento de Erros com `?` (Zero-cost)
+### 2. Match Expressions e Operadores
 ```lumina
-enum Result:
-    Ok(int)
-    Err(int)
-
-fn dividir(a: int, b: int) -> Result:
-    if b == 0: return Err(1)
-    return Ok(a / b)
-
-fn processar() -> Result:
-    let val = dividir(10, 0)? # Se der Err, retorna Err imediatamente
-    return Ok(100)
-```
-
-### 3. Async I/O Web Server (`epoll`)
-```lumina
-import "std/http"
-import "std/epoll"
+fn avaliar(n: int) -> int:
+    return match n {
+        1 => 100,
+        2 => 200,
+        else => 999
+    }
 
 fn main() -> int:
-    let server_fd = iniciar(8080)
-    let epfd = criar()
-    adicionar(epfd, server_fd)
-    
-    while true:
-        let events_ptr = esperar(epfd, 100)
-        if events_ptr != 0:
-            let client_fd = accept(server_fd, ...)
-            # ... processa e responde ...
+    let val = 10
+    let res = avaliar(val) |> (x) -> x + 1
+    print("Resultado:", res)
     return 0
 ```
 

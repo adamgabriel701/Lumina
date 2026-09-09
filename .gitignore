@@ -36,6 +36,19 @@ __pycache__/
 /vector_test
 /bootstrap_lexer
 /bench_test
+/cast_test
+/comptime_test
+/defaults_test
+/destructure_test
+/iterator_test
+/map_test
+/match_expr_test
+/monomorph_test
+/overload_test
+/serve
+/string_methods_test
+/struct_lit_test
+/trait_test
 /MeuBanco
 
 # Outputs de Bancos de Dados e Logs

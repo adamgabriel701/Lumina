@@ -1,0 +1,18 @@
+fn main() -> int:
+    let texto = "Lumina Language"
+    
+    print("Testando Métodos de String...")
+    
+    # Testando .contains()
+    let tem_lumina = texto.contains("Lumina")
+    let tem_rust = texto.contains("Rust")
+    
+    print("Contém 'Lumina'?", tem_lumina)
+    print("Contém 'Rust'?", tem_rust)
+    
+    # Testando .starts_with() em string literal direto!
+    let comeca_com = "Hello World".starts_with("Hello")
+    
+    print("Começa com 'Hello'?", comeca_com)
+    
+    return 0

@@ -34,6 +34,7 @@ class ForStmt:
     start: any
     end: any
     body: List[any]
+    iterable: any = None
 
 @dataclass
 class MatchStmt:
@@ -47,24 +48,19 @@ class StructDecl:
     fields: Dict[str, str]
     type_params: Optional[List[str]] = None
 
-# NOVO NÓ DE TRAIT
-@dataclass
-class TraitDecl:
-    name: str
-    methods: List['Function']
-
 @dataclass
 class Function:
     name: str
     params: List[tuple]
     return_type: str
     body: List[any]
-    type_params: Optional[List[str]] = None # NOVO
+    type_params: Optional[List[str]] = None
 
 @dataclass
 class ImplBlock:
     struct_name: str
     methods: List[Function]
+    trait_name: Optional[str] = None # NOVO
 
 @dataclass
 class ImportStmt:
@@ -79,39 +75,36 @@ class ExternDecl:
 @dataclass
 class EnumDecl:
     name: str
-    variants: List[tuple]
+    variants: List[tuple] 
 
 @dataclass
 class ContinueStmt:
     pass
 
-# NOVO NÓ DE DEFER
 @dataclass
 class DeferStmt:
     body: List[any]
 
 @dataclass
-class Function:
-    name: str
-    params: List[tuple]
-    return_type: str
-    body: List[any]
-
-@dataclass
-class ContinueStmt:
-    pass
-
-@dataclass
 class BreakStmt:
     pass
 
-# NOVO NÓ DE ASSERT
 @dataclass
 class AssertStmt:
     condition: any
 
-# NOVO NÓ DE BENCHMARK
 @dataclass
 class BenchStmt:
     name: str
     body: List[any]
+
+@dataclass
+class TraitDecl:
+    name: str
+    methods: List[Function]
+
+@dataclass
+class DestructureStmt:
+    names: List[str]
+    value: any
+    is_mutable: bool = False

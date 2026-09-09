@@ -1,67 +1,62 @@
-from ..ast import VarDecl, AssignStmt, Function, StructDecl, ImplBlock, ImportStmt, ExternDecl, EnumDecl, BinaryExpr, VariableExpr, DeferStmt, NumberExpr, AssertStmt, BenchStmt
+from ..ast import VarDecl, DeferStmt, AssertStmt, BenchStmt, StructDecl, ImplBlock, EnumDecl, Function, ExternDecl, TraitDecl, DestructureStmt
 from ..lexer import TokenType
 
 class DeclarationsParser:
-    def parse_type_params(self):
-        params = []
+    def parse_type(self):
+        type_name = self.consume(TokenType.IDENT).value
         if self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == '<':
-            self.consume() # '<'
-            while True:
-                params.append(self.consume(TokenType.IDENT).value)
-                if self.current_token().type == TokenType.OP and self.current_token().value == ',':
-                    self.consume()
-                else:
-                    break
-            self.consume(TokenType.OP) # '>'
-        return params if params else None
-    
+            self.consume()
+            args = [self.parse_type()]
+            while self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == ',':
+                self.consume(); args.append(self.parse_type())
+            self.consume(TokenType.OP)
+            type_name = type_name + "<" + ",".join(args) + ">"
+        return type_name
+
     def parse_let(self):
-        token = self.current_token()
-        is_mutable = (token.value == 'mut')
-        self.consume()
+        is_mutable = (self.consume().value == 'mut')
+        if self.current_token().type == TokenType.OP and self.current_token().value == '(':
+            self.consume()
+            names = []
+            while True:
+                names.append(self.consume(TokenType.IDENT).value)
+                if self.current_token().type == TokenType.OP and self.current_token().value == ',': self.consume()
+                else: break
+            self.consume(TokenType.OP); self.consume(TokenType.OP)
+            expr = self.parse_expression(); self.consume(TokenType.NEWLINE)
+            return DestructureStmt(names, expr, is_mutable)
         var_name = self.consume(TokenType.IDENT).value
         var_type = None
         if self.current_token().type == TokenType.OP and self.current_token().value == ':':
-            self.consume()
-            var_type = self.parse_type()
+            self.consume(); var_type = self.parse_type()
         expr = None
         if self.current_token().type == TokenType.OP and self.current_token().value == '=':
-            self.consume()
-            expr = self.parse_expression()
+            self.consume(); expr = self.parse_expression()
         self.consume(TokenType.NEWLINE)
         return VarDecl(var_name, var_type, expr, is_mutable)
 
     def parse_defer(self):
-        self.consume() # 'defer'
+        self.consume()
         if self.current_token().type == TokenType.OP and self.current_token().value == ':':
-            self.consume()
-            self.consume(TokenType.NEWLINE)
-            self.consume(TokenType.INDENT)
+            self.consume(); self.consume(TokenType.NEWLINE); self.consume(TokenType.INDENT)
             body = []
             while self.current_token() and self.current_token().type != TokenType.DEDENT:
                 if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
                 body.append(self.parse_statement())
             self.consume(TokenType.DEDENT)
             return DeferStmt(body)
-        else:
-            expr = self.parse_expression()
-            self.consume(TokenType.NEWLINE)
-            return DeferStmt([expr])
+        expr = self.parse_expression(); self.consume(TokenType.NEWLINE)
+        return DeferStmt([expr])
 
     def parse_assert(self):
-        self.consume() # 'assert'
-        self.consume(TokenType.OP) # '('
-        cond = self.parse_expression()
-        self.consume(TokenType.OP) # ')'
-        self.consume(TokenType.NEWLINE)
+        self.consume(); self.consume(TokenType.OP)
+        cond = self.parse_expression(); self.consume(TokenType.OP); self.consume(TokenType.NEWLINE)
         return AssertStmt(cond)
 
     def parse_test(self):
-        self.consume() # 'test'
+        self.consume()
         test_name = self.consume(TokenType.STRING).value
-        self.consume(TokenType.OP) # ':'
-        self.consume(TokenType.NEWLINE)
-        self.consume(TokenType.INDENT)
+        self.consume(TokenType.OP); self.consume(TokenType.NEWLINE); self.consume(TokenType.INDENT)
         body = []
         while self.current_token() and self.current_token().type != TokenType.DEDENT:
             if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
@@ -69,31 +64,44 @@ class DeclarationsParser:
         self.consume(TokenType.DEDENT)
         return Function(f"test_{test_name.replace(' ', '_')}", [], "int", body)
 
+    def parse_bench(self):
+        self.consume()
+        bench_name = self.consume(TokenType.STRING).value
+        self.consume(TokenType.OP); self.consume(TokenType.NEWLINE); self.consume(TokenType.INDENT)
+        body = []
+        while self.current_token() and self.current_token().type != TokenType.DEDENT:
+            if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
+            body.append(self.parse_statement())
+        self.consume(TokenType.DEDENT)
+        return BenchStmt(bench_name, body)
+
     def parse_struct(self):
-        self.consume() # 'struct'
+        self.consume()
         name = self.consume(TokenType.IDENT).value
-        
-        # NOVO: Lê os parâmetros de tipo (ex: <T>)
-        type_params = self.parse_type_params()
-        
-        self.consume(TokenType.OP) # ':'
-        self.consume(TokenType.NEWLINE)
-        self.consume(TokenType.INDENT)
+        type_params = self.parse_type_params() if self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == '<' else None
+        self.consume(TokenType.OP); self.consume(TokenType.NEWLINE); self.consume(TokenType.INDENT)
         fields = {}
         while self.current_token() and self.current_token().type != TokenType.DEDENT:
             if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
-            field_name = self.consume(TokenType.IDENT).value
-            self.consume(TokenType.OP)
-            field_type = self.consume(TokenType.IDENT).value
-            fields[field_name] = field_type
-            self.consume(TokenType.NEWLINE)
+            fn = self.consume(TokenType.IDENT).value; self.consume(TokenType.OP)
+            ft = self.consume(TokenType.IDENT).value; fields[fn] = ft; self.consume(TokenType.NEWLINE)
         self.consume(TokenType.DEDENT)
         return StructDecl(name, fields, type_params)
 
     def parse_impl(self):
-        self.consume()
-        struct_name = self.consume(TokenType.IDENT).value
-        self.consume(TokenType.OP)
+        self.consume() # 'impl'
+        
+        # NOVO: Lógica para `impl Trait for Struct`
+        first_name = self.consume(TokenType.IDENT).value
+        trait_name = None
+        struct_name = first_name
+        
+        if self.current_token() and self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'for':
+            trait_name = first_name
+            self.consume() # 'for'
+            struct_name = self.consume(TokenType.IDENT).value
+            
+        self.consume(TokenType.OP) # ':'
         self.consume(TokenType.NEWLINE)
         self.consume(TokenType.INDENT)
         methods = []
@@ -104,114 +112,91 @@ class DeclarationsParser:
                 func.name = f"{struct_name}_{func.name}"
                 methods.append(func)
         self.consume(TokenType.DEDENT)
-        return ImplBlock(struct_name, methods)
+        return ImplBlock(struct_name, methods, trait_name)
 
     def parse_enum(self):
         self.consume()
         name = self.consume(TokenType.IDENT).value
-        self.consume(TokenType.OP)
-        self.consume(TokenType.NEWLINE)
-        self.consume(TokenType.INDENT)
-        
+        self.consume(TokenType.OP); self.consume(TokenType.NEWLINE); self.consume(TokenType.INDENT)
         variants = []
         while self.current_token() and self.current_token().type != TokenType.DEDENT:
-            if self.current_token().type == TokenType.NEWLINE: 
-                self.consume()
-                continue
-                
-            var_name = self.consume(TokenType.IDENT).value
-            payload_type = None
+            if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
+            vn = self.consume(TokenType.IDENT).value
+            pt = None
             if self.current_token().type == TokenType.OP and self.current_token().value == '(':
-                self.consume()
-                payload_type = self.consume(TokenType.IDENT).value
-                self.consume(TokenType.OP)
-                
-            variants.append((var_name, payload_type))
-            self.consume(TokenType.NEWLINE)
-            
+                self.consume(); pt = self.consume(TokenType.IDENT).value; self.consume(TokenType.OP)
+            variants.append((vn, pt)); self.consume(TokenType.NEWLINE)
         self.consume(TokenType.DEDENT)
         return EnumDecl(name, variants)
 
     def parse_function(self):
-        self.consume(TokenType.KEYWORD) # 'fn'
+        self.consume(TokenType.KEYWORD)
         name = self.consume(TokenType.IDENT).value
-        
-        # NOVO: Lê os parâmetros de tipo (ex: <T>)
-        type_params = self.parse_type_params()
-        
+        type_params = self.parse_type_params() if self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == '<' else None
         params = []
-        self.consume(TokenType.OP) # '('
+        self.consume(TokenType.OP)
         if self.current_token().type != TokenType.OP or self.current_token().value != ')':
             while True:
-                p_name = self.consume(TokenType.IDENT).value
-                self.consume(TokenType.OP)
+                p_name = self.consume(TokenType.IDENT).value; self.consume(TokenType.OP)
                 p_type = self.parse_type()
-                params.append((p_name, p_type))
+                default_val = None
+                if self.current_token().type == TokenType.OP and self.current_token().value == '=':
+                    self.consume(); default_val = self.parse_expression()
+                params.append((p_name, p_type, default_val))
                 if self.current_token().type == TokenType.OP and self.current_token().value == ',': self.consume()
                 else: break
         self.consume(TokenType.OP)
         return_type = "void"
         if self.current_token().type == TokenType.OP and self.current_token().value == '->':
-            self.consume()
-            return_type = self.parse_type()
+            self.consume(); return_type = self.parse_type()
         self.consume(TokenType.OP); self.consume(TokenType.NEWLINE); self.consume(TokenType.INDENT)
         body = []
         while self.current_token() and self.current_token().type != TokenType.DEDENT:
             if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
             body.append(self.parse_statement())
         self.consume(TokenType.DEDENT)
-        return Function(name, params, return_type, body)
+        return Function(name, params, return_type, body, type_params)
 
     def parse_extern(self):
-        self.consume()
-        self.consume(TokenType.KEYWORD)
+        self.consume(); self.consume(TokenType.KEYWORD)
         name = self.consume(TokenType.IDENT).value
-        
         params = []
         self.consume(TokenType.OP)
         if self.current_token().type != TokenType.OP or self.current_token().value != ')':
             while True:
-                p_name = self.consume(TokenType.IDENT).value
-                self.consume(TokenType.OP)
-                p_type = self.parse_type()
+                p_name = self.consume(TokenType.IDENT).value; self.consume(TokenType.OP)
+                p_type = self.consume(TokenType.IDENT).value
                 params.append((p_name, p_type))
-                if self.current_token().type == TokenType.OP and self.current_token().value == ',':
-                    self.consume()
-                else:
-                    break
+                if self.current_token().type == TokenType.OP and self.current_token().value == ',': self.consume()
+                else: break
         self.consume(TokenType.OP)
-        
         return_type = "void"
         if self.current_token().type == TokenType.OP and self.current_token().value == '->':
-            self.consume()
-            return_type = self.parse_type()
-            
+            self.consume(); return_type = self.consume(TokenType.IDENT).value
         self.consume(TokenType.NEWLINE)
         return ExternDecl(name, params, return_type)
 
-    def parse_bench(self):
-        self.consume() # 'bench'
-        bench_name = self.consume(TokenType.STRING).value
-        self.consume(TokenType.OP) # ':'
-        self.consume(TokenType.NEWLINE)
-        self.consume(TokenType.INDENT)
-        body = []
+    def parse_trait(self):
+        self.consume()
+        name = self.consume(TokenType.IDENT).value
+        self.consume(TokenType.OP); self.consume(TokenType.NEWLINE); self.consume(TokenType.INDENT)
+        methods = []
         while self.current_token() and self.current_token().type != TokenType.DEDENT:
             if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
-            body.append(self.parse_statement())
+            if self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'fn':
+                self.consume(); m_name = self.consume(TokenType.IDENT).value
+                self.consume(TokenType.OP); params = []
+                if self.current_token().type != TokenType.OP or self.current_token().value != ')':
+                    while True:
+                        p_name = self.consume(TokenType.IDENT).value; self.consume(TokenType.OP)
+                        p_type = self.consume(TokenType.IDENT).value; params.append((p_name, p_type))
+                        if self.current_token().type == TokenType.OP and self.current_token().value == ',': self.consume()
+                        else: break
+                self.consume(TokenType.OP)
+                return_type = "void"
+                if self.current_token().type == TokenType.OP and self.current_token().value == '->':
+                    self.consume(); return_type = self.consume(TokenType.IDENT).value
+                self.consume(TokenType.NEWLINE)
+                methods.append(Function(m_name, params, return_type, []))
         self.consume(TokenType.DEDENT)
-        return BenchStmt(bench_name, body)
-
-    # NOVO: Lê um tipo de dado (ex: int, str, ou Box<int>)
-    def parse_type(self):
-        type_name = self.consume(TokenType.IDENT).value
-        # Se tiver '<', é um tipo Genérico (ex: Box<int>)
-        if self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == '<':
-            self.consume() # '<'
-            args = [self.parse_type()]
-            while self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == ',':
-                self.consume()
-                args.append(self.parse_type())
-            self.consume(TokenType.OP) # '>'
-            type_name = type_name + "<" + ",".join(args) + ">"
-        return type_name
+        return TraitDecl(name, methods)

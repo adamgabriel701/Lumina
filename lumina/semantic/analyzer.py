@@ -1,4 +1,4 @@
-from ..ast import NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr, ArrayExpr, IndexExpr, MemberExpr, AddressOfExpr, DerefExpr, UnaryExpr
+from ..ast import NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr, ArrayExpr, IndexExpr, MemberExpr, AddressOfExpr, DerefExpr, UnaryExpr, PropagateExpr
 from ..ast import ReturnStmt, Function, VarDecl, AssignStmt, IfStmt, WhileStmt, ForStmt, MatchStmt, StructDecl, ImplBlock, ExternDecl, EnumDecl, ContinueStmt, DeferStmt, BreakStmt, AssertStmt, BenchStmt
 from ..errors import LuminaError
 
@@ -10,12 +10,10 @@ class SemanticAnalyzer:
         self.struct_defs = {}
         self.filename = filename
         self.source_code = source_code
-        # NOVO: Conjuntos para Escape Analysis
-        self.heap_allocs = set() # Variáveis que usam alloc()
-        self.escapes = set()     # Variáveis que fogem (retornam ou são passadas adiante)
+        self.heap_allocs = set()
+        self.escapes = set()
 
     def analyze(self, declarations):
-        # 1. Registra funções e structs primeiro
         for decl in declarations:
             if isinstance(decl, (Function, ExternDecl)):
                 self.functions.add(decl.name)
@@ -30,17 +28,15 @@ class SemanticAnalyzer:
                 for method in decl.methods:
                     self.functions.add(method.name)
                     
-        # 2. Registra Variáveis Globais no escopo base (scopes[0])
         for decl in declarations:
             if isinstance(decl, VarDecl):
-                if decl.var_type is not None and decl.var_type not in ("int", "float", "bool", "str", "ptr") and decl.var_type not in self.structs:
-                    raise LuminaError(f"Tipo '{decl.var_type}' não declarado.", self.filename, 0, 0, self.source_code)
+                if decl.var_type is not None:
+                    base_type = decl.var_type.split('<')[0]
+                    if base_type not in ("int", "float", "bool", "str", "ptr") and base_type not in self.structs:
+                        raise LuminaError(f"Tipo '{decl.var_type}' não declarado.")
                 if decl.value: self.analyze_expr(decl.value)
                 self.declare_var(decl.name, decl.var_type, decl.is_mutable)
-                
-        # 3. Analisa funções (mantendo as globais no escopo base)
-        for decl in declarations:
-            if isinstance(decl, Function):
+            elif isinstance(decl, Function):
                 self.analyze_function(decl)
 
     def push_scope(self): self.scopes.append({})
@@ -48,14 +44,15 @@ class SemanticAnalyzer:
     def declare_var(self, name, var_type, is_mutable): 
         self.scopes[-1][name] = {'type': var_type, 'mutable': is_mutable}
     def get_var_info(self, name):
-        # Procura de dentro para fora (escopo local -> escopo global)
         for scope in reversed(self.scopes):
             if name in scope: return scope[name]
         return None
 
+    def check_escape(self, node):
+        if isinstance(node, VariableExpr) and node.name in self.heap_allocs:
+            self.escapes.add(node.name)
+
     def analyze_function(self, node: Function):
-        # Reseta os escopos, mas mantém as variáveis globais (que estão no escopo 0 original)
-        # Para isso, copiamos o escopo global atual para o novo escopo base
         global_scope = self.scopes[0] if self.scopes else {}
         self.scopes = [global_scope.copy()]
         
@@ -64,17 +61,13 @@ class SemanticAnalyzer:
         for stmt in node.body:
             self.analyze_stmt(stmt)
 
-    # Adicione este método auxiliar para checar fugas
-    def check_escape(self, node):
-        if isinstance(node, VariableExpr) and node.name in self.heap_allocs:
-            self.escapes.add(node.name)
-
     def analyze_stmt(self, node):
         if isinstance(node, VarDecl):
-            if node.var_type is not None and node.var_type not in ("int", "float", "bool", "str", "ptr") and node.var_type not in self.structs:
-                raise LuminaError(f"Tipo '{node.var_type}' não declarado.", self.filename, 0, 0, self.source_code)
-            
-            # NOVO: Se for um alloc(), marca como heap_alloc
+            if node.var_type is not None:
+                base_type = node.var_type.split('<')[0]
+                if base_type not in ("int", "float", "bool", "str", "ptr") and base_type not in self.structs:
+                    raise LuminaError(f"Tipo '{node.var_type}' não declarado.")
+                    
             if isinstance(node.value, CallExpr) and node.value.name == "alloc":
                 self.heap_allocs.add(node.name)
                 
@@ -84,12 +77,23 @@ class SemanticAnalyzer:
         elif isinstance(node, AssignStmt):
             if isinstance(node.target, MemberExpr):
                 self.check_escape(node.target.obj)
+                info = self.get_var_info(node.target.obj.name)
+                if not info: raise LuminaError(f"Variável '{node.target.obj.name}' não declarada.")
+                if not info['mutable']: raise LuminaError(f"Não pode modificar variável imutável '{node.target.obj.name}'.")
+                base_type = info['type'].split('<')[0] if info['type'] else "Unknown"
+                if base_type not in self.struct_defs: raise LuminaError(f"Variável '{node.target.obj.name}' não é uma Struct.")
+                struct_def = self.struct_defs[base_type]
+                if node.target.member not in struct_def.fields:
+                    raise LuminaError(f"Campo '{node.target.member}' não existe na Struct '{info['type']}'.")
+            elif isinstance(node.target, DerefExpr):
+                pass 
             elif isinstance(node.target, IndexExpr):
                 self.check_escape(node.target.array)
             else:
+                self.check_escape(node.value)
                 info = self.get_var_info(node.target.name)
-                if not info: raise LuminaError(f"Variável '{node.target.name}' não declarada.", self.filename, 0, 0, self.source_code)
-                if not info['mutable']: raise LuminaError(f"Não pode reatribuir à variável imutável '{node.target.name}'.", self.filename, 0, 0, self.source_code)
+                if not info: raise LuminaError(f"Variável '{node.target.name}' não declarada.")
+                if not info['mutable']: raise LuminaError(f"Não pode reatribuir à variável imutável '{node.target.name}'.")
             self.check_escape(node.value)
             self.analyze_expr(node.value)
             
@@ -97,6 +101,7 @@ class SemanticAnalyzer:
             for val in node.values:
                 self.check_escape(val)
                 self.analyze_expr(val)
+                
         elif isinstance(node, IfStmt):
             self.analyze_expr(node.condition)
             self.push_scope()
@@ -106,11 +111,13 @@ class SemanticAnalyzer:
                 self.push_scope()
                 for stmt in node.else_body: self.analyze_stmt(stmt)
                 self.pop_scope()
+                
         elif isinstance(node, WhileStmt):
             self.analyze_expr(node.condition)
             self.push_scope()
             for stmt in node.body: self.analyze_stmt(stmt)
             self.pop_scope()
+            
         elif isinstance(node, ForStmt):
             self.analyze_expr(node.start)
             self.analyze_expr(node.end)
@@ -118,6 +125,7 @@ class SemanticAnalyzer:
             self.declare_var(node.var_name, "int", False)
             for stmt in node.body: self.analyze_stmt(stmt)
             self.pop_scope()
+            
         elif isinstance(node, MatchStmt):
             self.analyze_expr(node.condition)
             for variant_name, var_name, body in node.cases:
@@ -130,24 +138,15 @@ class SemanticAnalyzer:
                 self.push_scope()
                 for stmt in node.default: self.analyze_stmt(stmt)
                 self.pop_scope()
-        elif isinstance(node, ContinueStmt):
-            pass
-            
-        # NOVO: Break
-        elif isinstance(node, BreakStmt):
-            pass
-            
-        # NOVO: Assert
+                
+        elif isinstance(node, ContinueStmt): pass
+        elif isinstance(node, BreakStmt): pass
+        elif isinstance(node, DeferStmt):
+            for stmt in node.body: self.analyze_stmt(stmt)
         elif isinstance(node, AssertStmt):
             self.analyze_expr(node.condition)
-            
-        # NOVO: Bench
         elif isinstance(node, BenchStmt):
-            for stmt in node.body:
-                self.analyze_stmt(stmt)
-        elif isinstance(node, DeferStmt):
-            for stmt in node.body:
-                self.analyze_stmt(stmt)
+            for stmt in node.body: self.analyze_stmt(stmt)
         else:
             self.analyze_expr(node)
 
@@ -155,7 +154,7 @@ class SemanticAnalyzer:
         if isinstance(node, (NumberExpr, BoolExpr, StringExpr)): return
         elif isinstance(node, VariableExpr):
             if not self.get_var_info(node.name):
-                raise LuminaError(f"Variável '{node.name}' não declarada.", self.filename, node.line, node.col, self.source_code)
+                raise LuminaError(f"Variável '{node.name}' não declarada.")
         elif isinstance(node, BinaryExpr):
             self.analyze_expr(node.left)
             self.analyze_expr(node.right)
@@ -164,37 +163,38 @@ class SemanticAnalyzer:
                 obj_node = node.args[0]
                 if isinstance(obj_node, VariableExpr):
                     info = self.get_var_info(obj_node.name)
-                    if not info: raise LuminaError(f"Variável '{obj_node.name}' não declarada.", self.filename, obj_node.line, obj_node.col, self.source_code)
-                    struct_name = info['type']
+                    if not info: raise LuminaError(f"Variável '{obj_node.name}' não declarada.")
+                    struct_name = info['type'].split('<')[0] if info['type'] else "Unknown"
                     real_method_name = f"{struct_name}_{node.name}"
                     if real_method_name not in self.functions:
-                        raise LuminaError(f"Método '{node.name}' não declarado na struct '{struct_name}'.", self.filename, 0, 0, self.source_code)
+                        raise LuminaError(f"Método '{node.name}' não declarado na struct '{struct_name}'.")
             elif node.name not in ("print", "input", "atoi", "len", "alloc", "alloc_bytes", "free", "read_file", "write_file", "int", "float", "str", "argv", "chr") and node.name not in self.functions:
-                raise LuminaError(f"Função '{node.name}' não declarada.", self.filename, 0, 0, self.source_code)
+                raise LuminaError(f"Função '{node.name}' não declarada.")
             for arg in node.args: self.analyze_expr(arg)
         elif isinstance(node, ArrayExpr):
             for el in node.elements: self.analyze_expr(el)
         elif isinstance(node, IndexExpr):
             if isinstance(node.array, VariableExpr):
                 info = self.get_var_info(node.array.name)
-                if not info: raise LuminaError(f"Variável '{node.array.name}' não declarada.", self.filename, node.array.line, node.array.col, self.source_code)
+                if not info: raise LuminaError(f"Variável '{node.array.name}' não declarada.")
             else:
                 self.analyze_expr(node.array)
             self.analyze_expr(node.index)
         elif isinstance(node, MemberExpr):
             if isinstance(node.obj, VariableExpr):
                 info = self.get_var_info(node.obj.name)
-                if not info: raise LuminaError(f"Variável '{node.obj.name}' não declarada.", self.filename, node.obj.line, node.obj.col, self.source_code)
+                if not info: raise LuminaError(f"Variável '{node.obj.name}' não declarada.")
                 current_type = info['type']
             else:
                 current_type = self.analyze_expr(node.obj)
                 
-            if current_type not in self.struct_defs: 
-                raise LuminaError(f"Tipo '{current_type}' não é uma Struct.", self.filename, 0, 0, self.source_code)
+            base_type = current_type.split('<')[0] if current_type else "Unknown"
+            if base_type not in self.struct_defs: 
+                raise LuminaError(f"Tipo '{current_type}' não é uma Struct.")
                 
-            struct_def = self.struct_defs[current_type]
+            struct_def = self.struct_defs[base_type]
             if node.member not in struct_def.fields:
-                raise LuminaError(f"Campo '{node.member}' não existe na Struct '{current_type}'.", self.filename, 0, 0, self.source_code)
+                raise LuminaError(f"Campo '{node.member}' não existe na Struct '{current_type}'.")
                 
             return struct_def.fields[node.member]
             
@@ -205,4 +205,6 @@ class SemanticAnalyzer:
         elif isinstance(node, DerefExpr):
             self.analyze_expr(node.val)
         elif isinstance(node, UnaryExpr):
+            self.analyze_expr(node.val)
+        elif isinstance(node, PropagateExpr):
             self.analyze_expr(node.val)

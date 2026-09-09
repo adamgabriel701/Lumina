@@ -23,7 +23,7 @@ class DeclarationsParser:
         var_type = None
         if self.current_token().type == TokenType.OP and self.current_token().value == ':':
             self.consume()
-            var_type = self.consume(TokenType.IDENT).value
+            var_type = self.parse_type()
         expr = None
         if self.current_token().type == TokenType.OP and self.current_token().value == '=':
             self.consume()
@@ -145,7 +145,7 @@ class DeclarationsParser:
             while True:
                 p_name = self.consume(TokenType.IDENT).value
                 self.consume(TokenType.OP)
-                p_type = self.consume(TokenType.IDENT).value
+                p_type = self.parse_type()
                 params.append((p_name, p_type))
                 if self.current_token().type == TokenType.OP and self.current_token().value == ',': self.consume()
                 else: break
@@ -153,7 +153,7 @@ class DeclarationsParser:
         return_type = "void"
         if self.current_token().type == TokenType.OP and self.current_token().value == '->':
             self.consume()
-            return_type = self.consume(TokenType.IDENT).value
+            return_type = self.parse_type()
         self.consume(TokenType.OP); self.consume(TokenType.NEWLINE); self.consume(TokenType.INDENT)
         body = []
         while self.current_token() and self.current_token().type != TokenType.DEDENT:
@@ -173,7 +173,7 @@ class DeclarationsParser:
             while True:
                 p_name = self.consume(TokenType.IDENT).value
                 self.consume(TokenType.OP)
-                p_type = self.consume(TokenType.IDENT).value
+                p_type = self.parse_type()
                 params.append((p_name, p_type))
                 if self.current_token().type == TokenType.OP and self.current_token().value == ',':
                     self.consume()
@@ -184,7 +184,7 @@ class DeclarationsParser:
         return_type = "void"
         if self.current_token().type == TokenType.OP and self.current_token().value == '->':
             self.consume()
-            return_type = self.consume(TokenType.IDENT).value
+            return_type = self.parse_type()
             
         self.consume(TokenType.NEWLINE)
         return ExternDecl(name, params, return_type)
@@ -201,3 +201,17 @@ class DeclarationsParser:
             body.append(self.parse_statement())
         self.consume(TokenType.DEDENT)
         return BenchStmt(bench_name, body)
+
+    # NOVO: Lê um tipo de dado (ex: int, str, ou Box<int>)
+    def parse_type(self):
+        type_name = self.consume(TokenType.IDENT).value
+        # Se tiver '<', é um tipo Genérico (ex: Box<int>)
+        if self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == '<':
+            self.consume() # '<'
+            args = [self.parse_type()]
+            while self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == ',':
+                self.consume()
+                args.append(self.parse_type())
+            self.consume(TokenType.OP) # '>'
+            type_name = type_name + "<" + ",".join(args) + ">"
+        return type_name

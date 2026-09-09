@@ -74,10 +74,50 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen):
         elif type_name == "float": return self.f64_ty
         elif type_name == "str": return self.voidptr_ty 
         elif type_name == "ptr": return self.i64_ty.as_pointer()
-        # NOVO: Suporte a void e Genéricos (Type Erasure)
+        elif type_name == "bool": return ir.IntType(1)
         elif type_name == "void": return ir.VoidType()
         elif type_name in self.struct_types: return self.struct_types[type_name]
-        return self.voidptr_ty # Default para Genéricos (T)
+        # NOVO: Monomorphization!
+        elif "<" in type_name:
+            return self.get_or_create_monomorphized_struct(type_name)
+        return self.i64_ty
+
+    # NOVO: Gera structs especializadas (Box<int> -> Box_int)
+    def get_or_create_monomorphized_struct(self, type_name):
+        # Se já foi gerada, retorna do cache
+        if type_name in self.struct_types:
+            return self.struct_types[type_name]
+            
+        # Separa "Box<int>" em "Box" e ["int"]
+        base_name, _, args_str = type_name.partition('<')
+        args_str = args_str.rstrip('>')
+        type_args = [a.strip() for a in args_str.split(',')]
+        
+        # Procura a declaração original da Struct base
+        if base_name not in self.struct_defs:
+            raise Exception(f"Struct base '{base_name}' não encontrada para Monomorphization.")
+            
+        base_decl = self.struct_defs[base_name]
+        if not base_decl.type_params:
+            raise Exception(f"Struct '{base_name}' não é Genérica.")
+            
+        # Mapeia T -> int (por exemplo)
+        type_map = dict(zip(base_decl.type_params, type_args))
+        
+        # Cria o novo tipo na memória do LLVM (ex: "Box_int")
+        new_ty = self.module.context.get_identified_type(type_name.replace('<', '_').replace('>', '_').replace(',', '_'))
+        self.struct_types[type_name] = new_ty # Salva no cache antes de set_body para evitar recursão infinita
+        
+        # Substitui os campos T pelos tipos reais
+        field_tys = []
+        for field_name, field_type in base_decl.fields.items():
+            actual_type = type_map.get(field_type, field_type)
+            field_tys.append(self.get_llvm_type(actual_type))
+            
+        new_ty.set_body(*field_tys)
+        self.struct_fields[type_name] = {name: i for i, name in enumerate(base_decl.fields.keys())}
+        
+        return new_ty
 
     def get_llvm_param_type(self, type_name):
         if type_name in self.struct_types: 
@@ -91,6 +131,9 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen):
         return self.get_llvm_type(type_name)
 
     def generate_module(self, declarations):
+        # NOVO: Salva as declarações originais para a Monomorphization usar depois
+        self.struct_defs = {d.name: d for d in declarations if isinstance(d, StructDecl)}
+        
         for decl in declarations:
             if isinstance(decl, StructDecl): self.create_struct(decl)
             elif isinstance(decl, EnumDecl): self.create_enum(decl)

@@ -106,12 +106,12 @@ class ExpressionCodegen:
                 if node.op == '==': return is_eq
                 elif node.op == '!=': return self.builder.xor(is_eq, ir.Constant(ir.IntType(1), 1), name="is_neq")
 
-            # NOVO: Comparação de Ponteiros com 0 (Null Check)
-            if node.op in ('==', '!=') and isinstance(left.type, ir.PointerType) and right.type == self.i64_ty:
-                # Converte o ponteiro para i64 para poder comparar com 0
-                left_int = self.builder.ptrtoint(left, self.i64_ty, name="ptr_to_int_cmp")
-                if node.op == '==': return self.builder.icmp_signed("==", left_int, right, name="null_eq_tmp")
-                elif node.op == '!=': return self.builder.icmp_signed("!=", left_int, right, name="null_neq_tmp")
+            # NOVO: Comparação de Ponteiros (com 0 ou entre si)
+            if node.op in ('==', '!=') and isinstance(left.type, ir.PointerType):
+                if right.type == self.i64_ty:
+                    right = self.builder.inttoptr(right, left.type, name="int_to_ptr_cmp")
+                if node.op == '==': return self.builder.icmp_signed("==", left, right, name="ptr_eq_tmp")
+                elif node.op == '!=': return self.builder.icmp_signed("!=", left, right, name="ptr_neq_tmp")
 
             if isinstance(left.type, ir.PointerType) and right.type == self.i64_ty:
                 if node.op == '+':

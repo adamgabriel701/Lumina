@@ -5,11 +5,19 @@ from .control_flow import ControlFlowCodegen
 class StatementCodegen(ControlFlowCodegen):
     def codegen_stmt(self, node):
         if isinstance(node, VarDecl):
-            if node.var_type in self.struct_types:
-                struct_ty = self.struct_types[node.var_type]
-                ptr = self.builder.alloca(struct_ty, name=node.name)
+            # NOVO: Resolve o tipo real da variável (suporta Monomorphization Box<int>)
+            var_ty = self.get_llvm_type(node.var_type) if node.var_type else None
+            
+            # Se for uma Struct (normal ou monomorfizada)
+            if var_ty and isinstance(var_ty, ir.IdentifiedStructType):
+                ptr = self.builder.alloca(var_ty, name=node.name)
                 self.symbol_table[node.name] = ptr
-                self.var_types[node.name] = struct_ty
+                self.var_types[node.name] = var_ty
+                if node.value:
+                    val = self.codegen_expr(node.value)
+                    self.builder.store(val, ptr)
+                    
+            # Se for um Array estático [1, 2, 3]
             elif isinstance(node.value, ArrayExpr):
                 num_elements = len(node.value.elements)
                 arr_ty = ir.ArrayType(self.i64_ty, num_elements)
@@ -22,28 +30,38 @@ class StatementCodegen(ControlFlowCodegen):
                     if el_val.type != self.i64_ty: el_val = self.builder.fptosi(el_val, self.i64_ty, name="to_int")
                     elem_ptr = self.builder.gep(ptr, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, i)])
                     self.builder.store(el_val, elem_ptr)
+                    
+            # Tipos primitivos e Ponteiros
             else:
                 val = self.codegen_expr(node.value) if node.value else ir.Constant(self.i64_ty, 0)
-                var_ty = val.type
-                if node.var_type == "float":
-                    var_ty = self.f64_ty
+                actual_ty = val.type
+                
+                # Se o tipo foi explicitado (ex: mut curr: ptr), usa o tipo declarado
+                if node.var_type is not None:
+                    actual_ty = self.get_llvm_type(node.var_type)
+                    
+                # Conversões de tipo (Casting)
+                if val.type == self.i64_ty and isinstance(actual_ty, ir.PointerType):
+                    val = self.builder.inttoptr(val, actual_ty, name="int_to_ptr")
+                elif val.type == self.f64_ty and actual_ty == self.i64_ty:
+                    val = self.builder.fptosi(val, self.i64_ty, name="float_to_int")
+                elif val.type == self.i64_ty and actual_ty == self.f64_ty:
                     val = self.to_float_if_needed(val)
-                ptr = self.builder.alloca(var_ty, name=node.name)
+                    
+                ptr = self.builder.alloca(actual_ty, name=node.name)
                 self.builder.store(val, ptr)
                 self.symbol_table[node.name] = ptr
-                self.var_types[node.name] = var_ty
-                # NOVO: Lógica de Escape Analysis!
+                self.var_types[node.name] = actual_ty
+                
+                # Escape Analysis e Auto-Free
                 if isinstance(node.value, CallExpr) and node.value.name == "alloc":
                     if node.name not in self.escapes:
-                        # NÃO FOGE! Aloca na Stack (Pilha) -> Zero GC Overhead!
                         size_val = self.codegen_expr(node.value.args[0])
-                        ptr = self.builder.alloca(self.i64_ty, size=size_val, name=node.name + "_stack")
-                        self.symbol_table[node.name] = ptr
+                        stack_ptr = self.builder.alloca(self.i64_ty, size=size_val, name=node.name + "_stack")
+                        self.symbol_table[node.name] = stack_ptr
                         self.var_types[node.name] = self.i64_ty.as_pointer()
-                        self.heap_int_arrays.add(node.name) # Ainda precisamos saber que é i64* para o GEP
-                        return # Não cai no alloca padrão abaixo
+                        self.heap_int_arrays.add(node.name)
                     else:
-                        # FOGE! Aloca no Heap (GC)
                         self.cleanup_vars[-1].add(node.name)
                         self.heap_int_arrays.add(node.name)
 
@@ -69,6 +87,9 @@ class StatementCodegen(ControlFlowCodegen):
                     val = self.codegen_expr(node.value)
                     if isinstance(ptr.type, ir.PointerType) and ptr.type.pointee == self.i64_ty:
                         elem_ptr = self.builder.gep(ptr, [idx_val], name="heap_assign_ptr")
+                        # NOVO: Se estiver salvando um ponteiro num array de inteiros, converte para int
+                        if isinstance(val.type, ir.PointerType):
+                            val = self.builder.ptrtoint(val, self.i64_ty, name="ptr_to_int")
                         self.builder.store(val, elem_ptr)
                     elif ptr.type == self.voidptr_ty:
                         if val.type == self.i64_ty:
@@ -89,7 +110,16 @@ class StatementCodegen(ControlFlowCodegen):
                 if not ptr: raise Exception(f"Variável '{node.target.name}' não declarada.")
                 val = self.codegen_expr(node.value)
                 var_ty = self.var_types[node.target.name]
-                if var_ty == self.f64_ty and val.type == self.i64_ty: val = self.to_float_if_needed(val)
+                
+                # NOVO: Conversões de tipo (Casting) na reatribuição
+                if val.type == self.i64_ty and isinstance(var_ty, ir.PointerType):
+                    # Se leu um i64 do array, mas a variável é um ptr, converte int -> ptr
+                    val = self.builder.inttoptr(val, var_ty, name="assign_int_to_ptr")
+                elif val.type == self.f64_ty and var_ty == self.i64_ty:
+                    val = self.builder.fptosi(val, self.i64_ty, name="assign_float_to_int")
+                elif val.type == self.i64_ty and var_ty == self.f64_ty:
+                    val = self.to_float_if_needed(val)
+                    
                 self.builder.store(val, ptr)
                 if isinstance(node.value, CallExpr) and node.value.name == "alloc":
                     self.heap_int_arrays.add(node.target.name)

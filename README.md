@@ -8,7 +8,7 @@
 
 **Lumina** é uma linguagem de programação de sistemas de propósito geral, focada em alta performance, ergonomia moderna, concorrência e segurança de memória. Ela combina a sintaxe limpa e expressiva baseada em indentação (estilo Python/Nim) com o poder de baixo nível e otimização industrial do backend **LLVM**.
 
-A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums), operadores modernos (`|>`, `defer`, `?.`, `?`), Generics (`<T>`), interoperabilidade nativa com C/C++ (FFI), suporte a Green Threads e I/O Assíncrono (`epoll`), um REPL interativo, um Web Playground, compilação incremental, e é **Cross-Platform** (compila para binários nativos x86_64/ARM, WebAssembly e Bare-Metal).
+A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums), Generics com **Monomorphization** (`<T>`), operadores modernos (`|>`, `defer`, `?.`, `?`), interoperabilidade nativa com C/C++ (FFI), suporte a Green Threads e I/O Assíncrono (`epoll`), um REPL interativo, um Web Playground, compilação incremental, e é **Cross-Platform** (compila para binários nativos x86_64/ARM, WebAssembly e Bare-Metal).
 
 ---
 
@@ -16,8 +16,8 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
 
 * **Sintaxe Limpa & Ergonômica:** Escopo definido por indentação significativa. Sem chaves `{}` ou pontos e vírgulas `;`.
 * **Tipagem Estática com Inferência:** O compilador deduz os tipos automaticamente.
-* **Tipos Algébricos (ADTs) & Pattern Matching:** `enum`s com payloads (ex: `Some(int)`, `None`) e extração via `match`.
-* **Generics (Polimorfismo):** Suporte a tipos genéricos `<T>` em Structs e Funções.
+* **Generics com Monomorphization:** Suporte a tipos genéricos `<T>` que geram cópias especializadas em tempo de compilação (`Box<int>` vira `Box_int` no LLVM IR), garantindo zero overhead de runtime.
+* **Tipos Algébricos (ADTs) & Pattern Matching:** `enum`s com payloads e extração via `match`.
 * **Ergonomia Moderna:**
   * **F-strings Nativas:** `print("Usuário {id} logou.")`.
   * **Operador Pipe (`|>`):** `5 |> dobrar |> imprimir`.
@@ -25,8 +25,10 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
   * **Propagação de Erros (`?`):** Retorna erros automaticamente sem `try/catch`: `let val = abrir_arquivo()?`.
   * **Defer & Assert:** Garantia de limpeza de escopo e testes nativos.
   * **Auto-Formatter:** `lumina fmt` formata o código automaticamente.
-* **Gerenciamento de Memória Automático:** Integração nativa com o **Boehm GC** (`libgc`).
-* **Otimizações de Compilador:** Escape Analysis (aloca na Stack em vez do Heap se a variável não fugir), Tail Call Optimization (TCO) e DWARF Debug Info (depurável no GDB/LLDB).
+* **Gerenciamento de Memória Avançado:**
+  * **Garbage Collector:** Integração nativa com o **Boehm GC** (`libgc`).
+  * **Escape Analysis:** Se uma variável alocada não fugir do escopo, o compilador a aloca na Stack (Pilha) automaticamente, zerando a pressão sobre o GC.
+* **Otimizações de Compilador:** Tail Call Optimization (TCO) para recursão profunda, Constant Folding e DWARF Debug Info (depurável no GDB/LLDB).
 * **Concorrência e Redes:**
   * **Multithreading:** Threads nativas do SO via `pthread_create`.
   * **Green Threads:** Suporte a Corrotinas via troca de contexto de CPU (`ucontext`).
@@ -88,23 +90,20 @@ python3 playground.py
 
 ## 🛠️ Exemplos de Código
 
-### 1. Ergonomia Moderna (Pipe, F-strings, Defer, Safe Nav)
+### 1. Generics com Monomorphization
 ```lumina
-fn dobrar(x: int) -> int:
-    return x * 2
-
-fn processar_dados(id: int):
-    defer print("Liberando recursos do ID:", id)
-    print("Processando dados para o usuario {id}...")
+struct Box<T>:
+    value: T
 
 fn main() -> int:
-    processar_dados(1)
+    mut b1: Box<int>
+    b1.value = 42
     
-    mut u: Usuario
-    let safe_id = u?.id  # Navegação segura (não crasha se 'u' for nulo)
+    mut b2: Box<float>
+    b2.value = 3.14
     
-    let resultado = 5 |> dobrar |> dobrar
-    print("Resultado do Pipe: {resultado}")
+    print("Box<int>:", b1.value)
+    print("Box<float>:", b2.value)
     return 0
 ```
 
@@ -119,9 +118,7 @@ fn dividir(a: int, b: int) -> Result:
     return Ok(a / b)
 
 fn processar() -> Result:
-    # Se dividir retornar Err, a função 'processar' para e retorna o Err imediatamente
-    let val = dividir(10, 0)?
-    print("Deu certo! Valor:", val)
+    let val = dividir(10, 0)? # Se der Err, retorna Err imediatamente
     return Ok(100)
 ```
 
@@ -171,6 +168,7 @@ A Lumina conta com uma biblioteca padrão modularizada escrita na própria lingu
 * `std/async`: Green Threads e troca de contexto (ucontext).
 * `std/epoll`: Event Loop Assíncrono (I/O não-bloqueante).
 * `std/vector`: Array Dinâmico que cresce automaticamente na memória (Heap).
+* `std/map`: Hash Map (Dicionário) com tratamento de colisões via Linked List.
 * `std/sqlite`: Bindings para banco de dados SQLite.
 * `std/raylib`: Bindings para engine gráfica Raylib.
 

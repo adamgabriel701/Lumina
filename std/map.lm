@@ -1,0 +1,43 @@
+## Módulo de Hash Map (std/map)
+## Dicionário Chave-Valor com tratamento de colisões via Linked List.
+
+let BUCKET_SIZE = 16
+
+mut buckets = alloc(BUCKET_SIZE)
+
+fn hash(key: int) -> int:
+    return key % BUCKET_SIZE
+
+fn set(key: int, val: int):
+    let h = hash(key)
+    let head = buckets[h]
+    
+    mut curr: ptr = head
+    while curr != 0:
+        if curr[0] == key:
+            curr[1] = val
+            return
+        curr = curr[2]
+            
+    let new_node = alloc(3)
+    new_node[0] = key
+    new_node[1] = val
+    new_node[2] = head
+    buckets[h] = new_node
+
+fn get(key: int) -> int:
+    let h = hash(key)
+    mut curr: ptr = buckets[h]
+    
+    while curr != 0:
+        if curr[0] == key:
+            return curr[1]
+        curr = curr[2]
+        
+    return -1
+
+fn init():
+    mut i = 0
+    while i < BUCKET_SIZE:
+        buckets[i] = 0
+        i += 1

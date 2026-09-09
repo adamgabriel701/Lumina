@@ -1,0 +1,22 @@
+import "std/map"
+
+fn main() -> int:
+    print("🚀 Testando Hash Map com Linked List...")
+    
+    init()
+    
+    set(10, 100)
+    set(26, 200) # Colisão proposital com 10
+    set(42, 999)
+    
+    let v1 = get(10)
+    let v2 = get(26)
+    let v3 = get(42)
+    let v4 = get(99)
+    
+    print("Valor 10:", v1)
+    print("Valor 26 (colidiu):", v2)
+    print("Valor 42:", v3)
+    print("Valor 99:", v4)
+    
+    return 0

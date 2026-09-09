@@ -8,7 +8,7 @@
 
 **Lumina** é uma linguagem de programação de sistemas de propósito geral, focada em alta performance, ergonomia moderna, concorrência e segurança de memória. Ela combina a sintaxe limpa e expressiva baseada em indentação (estilo Python/Nim) com o poder de baixo nível e otimização industrial do backend **LLVM**.
 
-A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums), operadores modernos (`|>`, `defer`, f-strings, `?.`), interoperabilidade nativa com C/C++ (FFI), suporte a Green Threads (Corrotinas), um REPL interativo, compilação incremental, e é **Cross-Platform** (compila para binários nativos x86_64/ARM e para WebAssembly).
+A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums), operadores modernos (`|>`, `defer`, f-strings, `?.`), Generics (`<T>`), interoperabilidade nativa com C/C++ (FFI), suporte a Green Threads (Corrotinas), um REPL interativo, um Web Playground nativo via JIT, compilação incremental, e é **Cross-Platform** (compila para binários nativos x86_64/ARM e para WebAssembly).
 
 ---
 
@@ -17,19 +17,21 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
 * **Sintaxe Limpa & Ergonômica:** Escopo definido por indentação significativa. Sem chaves `{}` ou pontos e vírgulas `;`.
 * **Tipagem Estática com Inferência:** O compilador deduz os tipos automaticamente.
 * **Tipos Algébricos (ADTs) & Pattern Matching:** `enum`s com payloads (ex: `Some(int)`, `None`) e extração via `match`.
+* **Generics (Polimorfismo):** Suporte a tipos genéricos `<T>` em Structs e Funções.
 * **Ergonomia Moderna:**
   * **F-strings Nativas:** `print("Usuário {id} logou.")`.
   * **Operador Pipe (`|>`):** `5 |> dobrar |> imprimir`.
-  * **Navegação Segura (`?.`):** Evita Segmentation Faults ao acessar membros de structs nulas: `usuario?.perfil?.nome`.
+  * **Navegação Segura (`?.`):** Evita Segmentation Faults ao acessar structs nulas: `usuario?.perfil?.nome`.
   * **Defer & Assert:** Garantia de limpeza de escopo e testes nativos.
   * **Auto-Formatter:** `lumina fmt` formata o código automaticamente.
 * **Gerenciamento de Memória Automático:** Integração nativa com o **Boehm GC** (`libgc`).
+* **Otimizações de Compilador:** Tail Call Optimization (TCO) para recursão profunda sem Stack Overflow, e Constant Folding.
 * **Concorrência e Redes:**
   * **Multithreading:** Threads nativas do SO via `pthread_create`.
   * **Green Threads:** Suporte a Corrotinas via troca de contexto de CPU (`ucontext`).
   * **Web Framework & Proxy:** Servidores TCP/HTTP e Proxy Reverso de baixa latência.
 * **Pipeline LLVM Avançado & Cache:** Otimizações `clang -O3 -march=native` e hashing MD5 para compilação instantânea.
-* **Ecossistema Integrado:** CLI, REPL, Gerenciador de Pacotes Git, Auto-documentador HTML, Auto-Gerador de Bindings C e Extensão VS Code com **LSP (Autocomplete e Diagnóstico)**.
+* **Ecossistema Integrado:** CLI, REPL, Web Playground (JIT), Gerenciador de Pacotes Git, Auto-documentador HTML, Auto-Gerador de Bindings C, Native Benchmarking (`bench`) e Extensão VS Code com **LSP (Autocomplete)**.
 * **Cross-Platform (Wasm):** Compila para `.wasm`, rodando em navegadores e Node.js.
 
 ---
@@ -64,10 +66,18 @@ lumina install              # Baixa dependências do GitHub
 lumina bind header.h nome   # Gera bindings FFI a partir de um arquivo C
 lumina fmt arquivo.lm       # Formata o código automaticamente
 lumina repl                 # Inicia o console interativo (REPL JIT)
+lumina bench arquivo.lm     # Mede a performance de blocos de código nativamente
 lumina jit                  # Executa instantaneamente na memória RAM
 lumina build                # Compila para binário nativo otimizado (-O3)
 lumina build app.lm --wasm  # Compila para WebAssembly (.wasm)
 lumina doc                  # Gera portal de documentação HTML
+```
+
+### 🌐 Web Playground (JIT)
+Inicie um servidor web local que compila e executa código Lumina instantaneamente na memória RAM via motor MCJIT, capturando o `printf` nativo e exibindo no navegador:
+```bash
+python3 playground.py
+# Acesse http://localhost:8080 no navegador
 ```
 
 ---
@@ -94,7 +104,27 @@ fn main() -> int:
     return 0
 ```
 
-### 2. WebAssembly (Node.js)
+### 2. Generics e Native Benchmarking
+```lumina
+struct Box<T>:
+    data: T
+
+fn somar(n: int) -> int:
+    mut total = 0
+    mut i = 0
+    while i < n:
+        total += i
+        i += 1
+    return total
+
+fn main() -> int:
+    bench "somar 1 milhao":
+        let res = somar(1000000)
+        print("Resultado:", res)
+    return 0
+```
+
+### 3. WebAssembly (Node.js)
 Compile com `--wasm` e carregue no Node.js:
 ```javascript
 const fs = require('fs');
@@ -130,10 +160,11 @@ A Lumina conta com uma biblioteca padrão modularizada escrita na própria lingu
 Lumina/
 ├── lumina_cli.py            # CLI, Build System, REPL, Cache e Package Manager
 ├── lumina_lsp.py            # Language Server Protocol (Autocomplete e Diagnóstico)
+├── playground.py            # Web Playground (JIT HTTP Server)
 ├── lumina/                  # Núcleo do Compilador (Lexer, Parser, Semantic, Codegen)
 ├── std/                     # Standard Library (.lm)
 ├── benchmarks/              # Suíte de benchmarks (Lumina vs C, Rust, Go)
-├── examples/                # Exemplos de código (Proxy, SQL, Wasm, etc)
+├── examples/                # Exemplos de código (Proxy, JSON Parser, Wasm, etc)
 ├── tests/                   # Suíte de testes funcionais
 ├── scripts/                 # Scripts de automação
 └── lumina-vscode/           # Extensão VS Code (Syntax + LSP Client)

@@ -70,6 +70,7 @@ class Lexer:
                                 raw_str += '\\'
                                 j += 2
                                 continue
+                            # NOVO: Suporte a aspas duplas escapadas \"
                             elif next_char == '"':
                                 raw_str += '"'
                                 j += 2
@@ -100,7 +101,7 @@ class Lexer:
                     j = i
                     while j < len(stripped) and (stripped[j].isalnum() or stripped[j] == '_'): j += 1
                     word = stripped[i:j]
-                    if word in ('fn', 'let', 'mut', 'if', 'elif', 'else', 'while', 'for', 'in', 'struct', 'impl', 'import', 'extern', 'enum', 'return', 'print', 'true', 'false', 'match', 'case', 'default', 'and', 'or', 'not', 'continue', 'defer', 'test', 'break', 'assert', 'bench'):
+                    if word in ('fn', 'let', 'mut', 'if', 'elif', 'else', 'while', 'for', 'in', 'struct', 'impl', 'import', 'extern', 'enum', 'return', 'print', 'true', 'false', 'match', 'case', 'default', 'and', 'or', 'not', 'continue', 'defer', 'test', 'break', 'assert', 'bench', 'trait'):
                         self.tokens.append(Token(TokenType.KEYWORD, word, line_num, col))
                     else:
                         self.tokens.append(Token(TokenType.IDENT, word, line_num, col))

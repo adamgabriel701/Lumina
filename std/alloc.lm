@@ -1,0 +1,41 @@
+## Módulo de Alocação de Memória (std/alloc)
+## Arena Allocator para sistemas Bare-Metal e alta performance (--no-gc).
+
+extern fn malloc(size: int) -> ptr
+extern fn free(ptr: ptr)
+
+# Estrutura da Arena
+struct Arena:
+    buffer: ptr
+    offset: int
+    capacity: int
+
+## Cria uma nova Arena com a capacidade especificada (em bytes)
+fn init(cap: int) -> Arena:
+    mut a: Arena
+    a.buffer = malloc(cap)
+    a.offset = 0
+    a.capacity = cap
+    return a
+
+## Aloca memória na Arena. Tempo O(1)!
+fn alloc(a: Arena, size: int) -> ptr:
+    # Verifica se há espaço
+    if a.offset + size > a.capacity:
+        return 0 # Out of Memory
+    
+    # Calcula o ponteiro atual
+    let ptr = a.buffer + a.offset
+    
+    # Incrementa o offset (Bump!)
+    a.offset += size
+    
+    return ptr
+
+## Reseta a Arena (zera o offset, mas não libera a memória do SO)
+fn reset(a: Arena):
+    a.offset = 0
+
+## Destrói a Arena e libera a memória de volta para o SO
+fn destroy(a: Arena):
+    free(a.buffer)

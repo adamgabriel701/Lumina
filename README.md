@@ -8,7 +8,7 @@
 
 **Lumina** é uma linguagem de programação de sistemas de propósito geral, focada em alta performance, ergonomia moderna, concorrência e segurança de memória. Ela combina a sintaxe limpa e expressiva baseada em indentação (estilo Python/Nim) com o poder de baixo nível e otimização industrial do backend **LLVM**.
 
-A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums), Generics com **Monomorphization** (`<T>`), operadores modernos (`|>`, `defer`, `?.`, `?`), interoperabilidade nativa com C/C++ (FFI), suporte a Green Threads e I/O Assíncrono (`epoll`), um REPL interativo, um Web Playground, compilação incremental, e é **Cross-Platform** (compila para binários nativos x86_64/ARM, WebAssembly e Bare-Metal).
+A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums), Generics com **Monomorphization** (`<T>`), Traits, operadores modernos (`|>`, `defer`, `?.`, `?`), interoperabilidade nativa com C/C++ (FFI), suporte a I/O Assíncrono (`epoll`), um Web Playground, compilação incremental, e é **Cross-Platform** (compila para binários nativos x86_64/ARM, WebAssembly e Bare-Metal).
 
 ---
 
@@ -17,9 +17,10 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
 * **Sintaxe Limpa & Ergonômica:** Escopo definido por indentação significativa. Sem chaves `{}` ou pontos e vírgulas `;`.
 * **Tipagem Estática com Inferência:** O compilador deduz os tipos automaticamente.
 * **Generics com Monomorphization:** Suporte a tipos genéricos `<T>` que geram cópias especializadas em tempo de compilação (`Box<int>` vira `Box_int` no LLVM IR), garantindo zero overhead de runtime.
+* **Traits (Interfaces):** Suporte a polimorfismo estático e VTables para código extensível.
 * **Tipos Algébricos (ADTs) & Pattern Matching:** `enum`s com payloads e extração via `match`.
 * **Ergonomia Moderna:**
-  * **F-strings Nativas:** `print("Usuário {id} logou.")`.
+  * **F-strings Nativas:** `$"Usuário {id} logou."`.
   * **Operador Pipe (`|>`):** `5 |> dobrar |> imprimir`.
   * **Navegação Segura (`?.`):** Evita Segmentation Faults ao acessar structs nulas: `usuario?.perfil?.nome`.
   * **Propagação de Erros (`?`):** Retorna erros automaticamente sem `try/catch`: `let val = abrir_arquivo()?`.
@@ -27,23 +28,21 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
   * **Auto-Formatter:** `lumina fmt` formata o código automaticamente.
 * **Gerenciamento de Memória Avançado:**
   * **Garbage Collector:** Integração nativa com o **Boehm GC** (`libgc`).
-  * **Escape Analysis:** Se uma variável alocada não fugir do escopo, o compilador a aloca na Stack (Pilha) automaticamente, zerando a pressão sobre o GC.
-* **Otimizações de Compilador:** Tail Call Optimization (TCO) para recursão profunda, Constant Folding e DWARF Debug Info (depurável no GDB/LLDB).
+  * **Escape Analysis:** Se uma variável alocada não fugir do escopo, o compilador a aloca na Stack (Pilha) automaticamente.
+  * **Arena Allocator:** Modo Bare-Metal (`--no-gc`) com alocador determinístico na `std/alloc`.
+* **Otimizações de Compilador:** Tail Call Optimization (TCO), Constant Folding e DWARF Debug Info (depurável no GDB/LLDB).
 * **Concorrência e Redes:**
   * **Multithreading:** Threads nativas do SO via `pthread_create`.
   * **Green Threads:** Suporte a Corrotinas via troca de contexto de CPU (`ucontext`).
-  * **Async I/O:** Event Loop não-bloqueante de baixa latência usando `epoll` do Linux.
-  * **Web Framework & Proxy:** Servidores TCP/HTTP e Proxy Reverso.
-* **Pipeline LLVM Avançado & Cache:** Otimizações `clang -O3 -march=native` e hashing MD5 para compilação instantânea.
-* **Ecossistema Integrado:** CLI (`lumina.toml`), REPL, Web Playground (JIT), Gerenciador de Pacotes Git, Auto-documentador HTML, Auto-Gerador de Bindings C, Native Benchmarking (`bench`) e Extensão VS Code com **LSP (Autocomplete)**.
-* **Cross-Platform:** Compila para binários nativos x86_64/ARM, WebAssembly (`.wasm`) e Bare-Metal (`--no-gc` para Kernel/Embarcados).
+  * **Async I/O:** Event Loop não-bloqueante de baixa latência usando `epoll` do Linux (Validado a **5.8k requisições/segundo**).
+* **Ecossistema Integrado:** CLI (`lumina.toml`), REPL, Web Playground (JIT), Package Manager, Auto-Gerador de Bindings C, Native Benchmarking (`bench`) e Extensão VS Code com **LSP (Autocomplete)**.
+* **Cross-Platform:** Compila para binários nativos, WebAssembly (`.wasm`) e Bare-Metal (`--no-gc`).
 
 ---
 
-## 🏎️ Benchmarks de Performance (Média de 10 Execuções)
+## 🏎️ Benchmarks de Performance
 
-Para isolar a qualidade do código gerado, tanto a Lumina quanto o C foram compilados com o mesmo backend LLVM (`clang -O3 -march=native -funroll-loops`).
-
+### CPU (Média de 10 Execuções - `clang -O3 -march=native`)
 | Teste | C | Rust | **Lumina** | Go | Node.js | Python |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Loop Matemático** (100M) | 0.0029s | 0.0040s | **0.0028s** 🥇 | 0.1007s | 0.1476s | - |
@@ -51,7 +50,8 @@ Para isolar a qualidade do código gerado, tanto a Lumina quanto o C foram compi
 | **Matrizes** (200x200) | **0.0066s** | 0.0102s | **0.0073s** | 0.0168s | 0.0551s | - |
 | **Fibonacci** (N=35) | 0.0400s | 0.0362s | **0.0400s** 🥇 | 0.0713s | 0.2364s | 1.4574s |
 
-*Resultado: A Lumina supera o C em loops matemáticos e acesso a memória, e destrói o Rust em 3 dos 4 testes.*
+### Web Server (`wrk -t4 -c100`)
+* **Lumina-Serve (epoll):** ~5.868 Requests/sec.
 
 ---
 
@@ -61,7 +61,6 @@ Para isolar a qualidade do código gerado, tanto a Lumina quanto o C foram compi
 * **Python 3.10+** e `llvmlite` (`pip install llvmlite`)
 * **LLVM** e **Clang** no `PATH`
 * **Boehm GC** (`sudo apt install libgc-dev`)
-* **Git**
 
 ### Comandos Principais
 ```bash
@@ -70,17 +69,16 @@ lumina install              # Baixa dependências do GitHub
 lumina bind header.h nome   # Gera bindings FFI a partir de um arquivo C
 lumina fmt arquivo.lm       # Formata o código automaticamente
 lumina clean                # Limpa o cache e binários antigos
-lumina run arquivo.lm       # Compila e executa o binário nativo em um único passo
+lumina run arquivo.lm       # Compila e executa o binário nativo
 lumina repl                 # Inicia o console interativo (REPL JIT)
 lumina jit                  # Executa instantaneamente na memória RAM
 lumina build                # Compila para binário nativo otimizado (-O3)
 lumina build app.lm --wasm  # Compila para WebAssembly (.wasm)
 lumina build app.lm --no-gc # Compila para Bare-Metal (sem Garbage Collector)
-lumina doc                  # Gera portal de documentação HTML
 ```
 
 ### 🌐 Web Playground (JIT)
-Inicie um servidor web local que compila e executa código Lumina instantaneamente na memória RAM via motor MCJIT, capturando o `printf` nativo e exibindo no navegador:
+Inicie um servidor web local que compila e executa código Lumina instantaneamente na memória RAM, exibindo no navegador:
 ```bash
 python3 playground.py
 # Acesse http://localhost:8080 no navegador
@@ -122,7 +120,7 @@ fn processar() -> Result:
     return Ok(100)
 ```
 
-### 3. Async I/O com Event Loop (`epoll`)
+### 3. Async I/O Web Server (`epoll`)
 ```lumina
 import "std/http"
 import "std/epoll"
@@ -132,34 +130,17 @@ fn main() -> int:
     let epfd = criar()
     adicionar(epfd, server_fd)
     
-    # Event Loop não-bloqueante (a CPU dorme até ter dados)
     while true:
-        let events_ptr = esperar(epfd, 10)
+        let events_ptr = esperar(epfd, 100)
         if events_ptr != 0:
             let client_fd = accept(server_fd, ...)
             # ... processa e responde ...
     return 0
 ```
 
-### 4. WebAssembly (Node.js)
-Compile com `--wasm` e carregue no Node.js:
-```javascript
-const fs = require('fs');
-async function run() {
-    const wasmBuffer = fs.readFileSync('wasm_math.wasm');
-    const { instance } = await WebAssembly.instantiate(wasmBuffer, {});
-    const fib = instance.exports.fib;
-    const result = fib(10n); // Usa BigInt pois a Lumina usa inteiros de 64 bits
-    console.log("🚀 Fibonacci(10):", result);
-}
-run();
-```
-
 ---
 
 ## 📦 Standard Library (`std/`)
-
-A Lumina conta com uma biblioteca padrão modularizada escrita na própria linguagem, encapsulando chamadas de sistema e bibliotecas C nativas de forma segura:
 
 * `std/math`: Funções matemáticas.
 * `std/fs`: Manipulação de arquivos.
@@ -169,6 +150,7 @@ A Lumina conta com uma biblioteca padrão modularizada escrita na própria lingu
 * `std/epoll`: Event Loop Assíncrono (I/O não-bloqueante).
 * `std/vector`: Array Dinâmico que cresce automaticamente na memória (Heap).
 * `std/map`: Hash Map (Dicionário) com tratamento de colisões via Linked List.
+* `std/alloc`: Arena Allocator para sistemas Bare-Metal.
 * `std/sqlite`: Bindings para banco de dados SQLite.
 * `std/raylib`: Bindings para engine gráfica Raylib.
 

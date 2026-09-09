@@ -109,38 +109,46 @@ class ExpressionParser:
             is_float = '.' in token.value
             return NumberExpr(token.value, is_float)
             
+        # NOVO: F-string com prefixo $ ($"texto {var}")
+        elif token.type == TokenType.OP and token.value == '$' and self.peek() and self.peek().type == TokenType.STRING:
+            self.consume() # Consome o '$'
+            str_token = self.consume(TokenType.STRING)
+            s = str_token.value
+            
+            from ..lexer import Lexer
+            from .parser import Parser
+            
+            parts = []
+            current = ""
+            i = 0
+            while i < len(s):
+                if s[i] == '{':
+                    if current: parts.append(StringExpr(current))
+                    current = ""
+                    j = i + 1
+                    while j < len(s) and s[j] != '}':
+                        current += s[j]
+                        j += 1
+                        
+                    mini_lexer = Lexer(current)
+                    mini_parser = Parser(mini_lexer.tokenize(), self.filename, self.source_code)
+                    parts.append(mini_parser.parse_expression())
+                    current = ""
+                    i = j + 1
+                else:
+                    current += s[i]
+                    i += 1
+            if current: parts.append(StringExpr(current))
+            
+            # Se só tiver uma parte e for string, retorna como StringExpr normal
+            if len(parts) == 1 and isinstance(parts[0], StringExpr):
+                return parts[0]
+            return ArrayExpr(parts)
+            
         elif token.type == TokenType.STRING:
             self.consume()
-            # Lógica de F-string
-            s = token.value
-            if '{' in s and '}' in s:
-                from ..lexer import Lexer
-                from .parser import Parser
-                
-                parts = []
-                current = ""
-                i = 0
-                while i < len(s):
-                    if s[i] == '{':
-                        if current: parts.append(StringExpr(current))
-                        current = ""
-                        j = i + 1
-                        while j < len(s) and s[j] != '}':
-                            current += s[j]
-                            j += 1
-                            
-                        mini_lexer = Lexer(current)
-                        mini_parser = Parser(mini_lexer.tokenize(), self.filename, self.source_code)
-                        parts.append(mini_parser.parse_expression())
-                        current = ""
-                        i = j + 1
-                    else:
-                        current += s[i]
-                        i += 1
-                if current: parts.append(StringExpr(current))
-                return ArrayExpr(parts)
-                
-            return StringExpr(s)
+            # NOVO: Strings normais não são mais quebradas em Arrays por causa de {}
+            return StringExpr(token.value)
             
         elif token.type == TokenType.IDENT or (token.type == TokenType.KEYWORD and token.value == 'print'):
             name = self.consume().value

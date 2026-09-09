@@ -1,2 +1,2 @@
 from .expressions import NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr, ArrayExpr, IndexExpr, MemberExpr, AddressOfExpr, DerefExpr, TupleExpr, UnaryExpr, PropagateExpr
-from .statements import VarDecl, AssignStmt, ReturnStmt, IfStmt, WhileStmt, ForStmt, MatchStmt, Function, StructDecl, ImplBlock, ImportStmt, ExternDecl, EnumDecl, ContinueStmt, DeferStmt, BreakStmt, AssertStmt, BenchStmt
+from .statements import VarDecl, AssignStmt, ReturnStmt, IfStmt, WhileStmt, ForStmt, MatchStmt, Function, StructDecl, ImplBlock, ImportStmt, ExternDecl, EnumDecl, ContinueStmt, DeferStmt, BreakStmt, AssertStmt, BenchStmt, TraitDecl

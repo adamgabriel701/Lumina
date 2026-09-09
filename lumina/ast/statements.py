@@ -45,7 +45,13 @@ class MatchStmt:
 class StructDecl:
     name: str
     fields: Dict[str, str]
-    type_params: Optional[List[str]] = None # NOVO
+    type_params: Optional[List[str]] = None
+
+# NOVO NÓ DE TRAIT
+@dataclass
+class TraitDecl:
+    name: str
+    methods: List['Function']
 
 @dataclass
 class Function:

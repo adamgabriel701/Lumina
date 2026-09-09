@@ -171,13 +171,21 @@ class ExpressionCodegen:
                 if node.array.name in self.array_sizes:
                     arr_ptr = self.symbol_table.get(node.array.name)
                     idx_val = self.codegen_expr(node.index)
-                    if idx_val.type != self.i64_ty: idx_val = self.builder.fptosi(idx_val, self.i64_ty, name="idx_int")
+                    # NOVO: Lida com Floats e Ponteiros ao ler índices
+                    if idx_val.type == self.f64_ty:
+                        idx_val = self.builder.fptosi(idx_val, self.i64_ty, name="idx_int")
+                    elif isinstance(idx_val.type, ir.PointerType):
+                        idx_val = self.builder.ptrtoint(idx_val, self.i64_ty, name="ptr_to_int")
                     elem_ptr = self.builder.gep(arr_ptr, [ir.Constant(self.i32_ty, 0), idx_val], name="elem_ptr")
                     return self.builder.load(elem_ptr, name="arr_elem_val")
                 else:
                     ptr = self.codegen_expr(node.array)
                     idx_val = self.codegen_expr(node.index)
-                    if idx_val.type != self.i64_ty: idx_val = self.builder.fptosi(idx_val, self.i64_ty, name="idx_int")
+                    # NOVO: Lida com Floats e Ponteiros ao ler índices
+                    if idx_val.type == self.f64_ty:
+                        idx_val = self.builder.fptosi(idx_val, self.i64_ty, name="idx_int")
+                    elif isinstance(idx_val.type, ir.PointerType):
+                        idx_val = self.builder.ptrtoint(idx_val, self.i64_ty, name="ptr_to_int")
                     
                     if isinstance(ptr.type, ir.PointerType) and ptr.type.pointee == self.i64_ty:
                         elem_ptr = self.builder.gep(ptr, [idx_val], name="heap_elem_ptr")
@@ -435,6 +443,13 @@ class ExpressionCodegen:
                 args = []
                 for i, arg_node in enumerate(node.args):
                     arg_val = self.codegen_expr(arg_node)
+                    
+                    # NOVO: Array to Pointer Decay (ex: passar [N x i8] onde i8* é esperado)
+                    if isinstance(arg_val.type, ir.ArrayType):
+                        # Converte o array [N x T] para um ponteiro T*
+                        ptr_ty = arg_val.type.element.as_pointer()
+                        arg_val = self.builder.bitcast(arg_val, ptr_ty, name="array_decay")
+                        
                     if func_type.args[i] == self.f64_ty and arg_val.type == self.i64_ty: 
                         arg_val = self.to_float_if_needed(arg_val)
                     elif func_type.args[i] == self.i64_ty.as_pointer() and arg_val.type == self.voidptr_ty:

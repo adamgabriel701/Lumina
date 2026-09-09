@@ -27,7 +27,11 @@ class StatementCodegen(ControlFlowCodegen):
                 self.array_sizes[node.name] = num_elements
                 for i, el in enumerate(node.value.elements):
                     el_val = self.codegen_expr(el)
-                    if el_val.type != self.i64_ty: el_val = self.builder.fptosi(el_val, self.i64_ty, name="to_int")
+                    # NOVO: Lida com Floats e Ponteiros ao inicializar arrays
+                    if el_val.type == self.f64_ty:
+                        el_val = self.builder.fptosi(el_val, self.i64_ty, name="to_int")
+                    elif isinstance(el_val.type, ir.PointerType):
+                        el_val = self.builder.ptrtoint(el_val, self.i64_ty, name="ptr_to_int")
                     elem_ptr = self.builder.gep(ptr, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, i)])
                     self.builder.store(el_val, elem_ptr)
                     

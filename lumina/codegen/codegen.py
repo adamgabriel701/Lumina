@@ -35,6 +35,8 @@ class LLVMCodegen(HelpersCodegen, TypesCodegen, AccessCodegen, ExpressionCodegen
         self.deferred_stmts = []
         self.is_tail_return = False
         self.escapes = set()
+        self.global_symbols = {} # NOVO: Dicionário para variáveis globais
+        self.global_types = {}   # NOVO: Dicionário para tipos globais
 
     def generate_module(self, declarations):
         self.struct_defs = {d.name: d for d in declarations if isinstance(d, StructDecl)}
@@ -77,7 +79,9 @@ class LLVMCodegen(HelpersCodegen, TypesCodegen, AccessCodegen, ExpressionCodegen
         self.functions_table[node.name] = (func, func_type)
 
     def create_global_var(self, node):
-        if not hasattr(self, 'global_symbols'): self.global_symbols = {}
+        if not hasattr(self, 'global_symbols'): 
+            self.global_symbols = {}
+            self.global_types = {}
         if isinstance(node.value, CallExpr) and node.value.name in ("alloc", "alloc_bytes"):
             ptr = ir.GlobalVariable(self.module, self.voidptr_ty, name=node.name)
             ptr.global_constant = False; ptr.initializer = ir.Constant(self.voidptr_ty, None)

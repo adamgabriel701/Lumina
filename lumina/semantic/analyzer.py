@@ -1,4 +1,4 @@
-from ..ast import Function, ExternDecl, StructDecl, EnumDecl, ImplBlock, VarDecl, VariableExpr, TraitDecl
+from ..ast import Function, ExternDecl, StructDecl, EnumDecl, ImplBlock, VarDecl, VariableExpr, TraitDecl, MatchStmt
 from ..errors import LuminaError
 from .expressions import ExpressionAnalyzer
 from .statements import StatementAnalyzer
@@ -30,24 +30,22 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
                     self.functions.add(method.name)
                     self.function_defs[method.name] = method
                     
-                # NOVO: Verificação de Traits
+                # NOVO: Verificação de Regras em Traits (Assinaturas)
                 if decl.trait_name:
-                    # Encontra a definição do Trait
-                    trait_def = None
-                    for d in declarations:
-                        if isinstance(d, TraitDecl) and d.name == decl.trait_name:
-                            trait_def = d
-                            break
-                            
+                    trait_def = next((d for d in declarations if isinstance(d, TraitDecl) and d.name == decl.trait_name), None)
                     if not trait_def:
                         raise LuminaError(f"Trait '{decl.trait_name}' não declarado.", self.filename, 0, 0, self.source_code)
                         
-                    # Verifica se todos os métodos do Trait foram implementados
-                    impl_method_names = {m.name.split('_')[1] for m in decl.methods}
                     for trait_method in trait_def.methods:
                         expected_name = f"{decl.struct_name}_{trait_method.name}"
                         if expected_name not in self.functions:
                             raise LuminaError(f"Struct '{decl.struct_name}' não implementa o método '{trait_method.name}' exigido pelo Trait '{decl.trait_name}'.", self.filename, 0, 0, self.source_code)
+                        
+                        # NOVO: Verifica se o tipo de retorno do método implementado bate com o do Trait
+                        impl_method = self.function_defs.get(expected_name)
+                        if impl_method and impl_method.return_type != trait_method.return_type:
+                            raise LuminaError(f"Assinatura incorreta para '{trait_method.name}'. Esperado retorno '{trait_method.return_type}', mas obteve '{impl_method.return_type}'.", self.filename, 0, 0, self.source_code)
+                            
         for decl in declarations:
             if isinstance(decl, VarDecl):
                 if decl.var_type is not None:
@@ -74,3 +72,20 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
         self.scopes = [global_scope.copy()]
         for p_name, p_type, _ in node.params: self.declare_var(p_name, p_type, True)
         for stmt in node.body: self.analyze_stmt(stmt)
+
+    # NOVO: Override para checar exaustividade do Pattern Matching antes de delegar ao StatementAnalyzer
+    def analyze_stmt(self, node):
+        if isinstance(node, MatchStmt):
+            cond_type = self.analyze_expr(node.condition)
+            # Se a condição for um Enum, checa se todos os casos foram cobertos
+            if cond_type in self.struct_defs:
+                struct_def = self.struct_defs[cond_type]
+                if hasattr(struct_def, 'variants'):
+                    if not node.default:
+                        covered_variants = [c[0] for c in node.cases]
+                        all_variants = [v[0] for v in struct_def.variants]
+                        if not set(all_variants).issubset(set(covered_variants)):
+                            raise LuminaError("Match não exaustivo. Faltam variantes ou um ramo 'default'.", self.filename, 0, 0, self.source_code)
+                            
+        # Delega o resto da análise (escopos, etc) para a classe pai
+        super().analyze_stmt(node)

@@ -1,4 +1,4 @@
-from ..ast import IfStmt, WhileStmt, ForStmt, MatchStmt
+from ..ast import IfStmt, WhileStmt, ForStmt, MatchStmt, ArrayExpr, VariableExpr, BinaryExpr
 from ..lexer import TokenType
 
 class ControlFlowParser:
@@ -40,27 +40,28 @@ class ControlFlowParser:
         return WhileStmt(condition, body)
 
     def parse_for(self):
-        self.consume()
+        self.consume() # 'for'
         var_name = self.consume(TokenType.IDENT).value
-        self.consume(TokenType.KEYWORD)
+        self.consume(TokenType.KEYWORD) # 'in'
+        
+        # Lê a expressão completa (pode ser um range `0..10` ou um array `arr`)
         expr = self.parse_expression()
-        if self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == '..':
-            self.consume()
-            end = self.parse_expression()
-            self.consume(TokenType.OP); self.consume(TokenType.NEWLINE); self.consume(TokenType.INDENT)
-            body = []
-            while self.current_token() and self.current_token().type != TokenType.DEDENT:
-                if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
-                body.append(self.parse_statement())
-            self.consume(TokenType.DEDENT)
-            return ForStmt(var_name, expr, end, body)
+        
+        self.consume(TokenType.OP) # ':'
+        self.consume(TokenType.NEWLINE)
+        self.consume(TokenType.INDENT)
+        body = []
+        while self.current_token() and self.current_token().type != TokenType.DEDENT:
+            if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
+            body.append(self.parse_statement())
+        self.consume(TokenType.DEDENT)
+        
+        # NOVO: Se for um range (BinaryExpr com op '..')
+        if isinstance(expr, BinaryExpr) and expr.op == '..':
+            return ForStmt(var_name, expr.left, expr.right, body)
+            
+        # Se não, é um iterador (array ou string)
         else:
-            self.consume(TokenType.OP); self.consume(TokenType.NEWLINE); self.consume(TokenType.INDENT)
-            body = []
-            while self.current_token() and self.current_token().type != TokenType.DEDENT:
-                if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
-                body.append(self.parse_statement())
-            self.consume(TokenType.DEDENT)
             return ForStmt(var_name, None, None, body, iterable=expr)
 
     def parse_match(self):

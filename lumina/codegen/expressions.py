@@ -32,44 +32,101 @@ class ExpressionCodegen:
                 self.builder.store(val, elem_ptr)
                 
             return ptr
-        # NOVO: Geração de código para Match Expression
+        # NOVO: Match Expression (retorna valor)
         elif isinstance(node, MatchExpr):
             cond_val = self.codegen_expr(node.condition)
-            default_bb = self.builder.append_basic_block(name="match_expr.default")
-            end_bb = self.builder.append_basic_block(name="match_expr.end")
-            sw = self.builder.switch(cond_val, default_bb)
             
-            incoming = [] # Lista de (valor, bloco) para o phi node
-            
-            for val_node, res_node in node.cases:
-                case_bb = self.builder.append_basic_block(name="match_expr.case")
-                val = self.codegen_expr(val_node)
-                sw.add_case(val, case_bb)
+            # 1. Lowering de Match para Strings (if/else chain com strcmp)
+            if cond_val.type == self.voidptr_ty:
+                strcmp_fn = next((f for f in self.module.functions if f.name == "strcmp"), None)
+                if not strcmp_fn:
+                    strcmp_ty = ir.FunctionType(ir.IntType(32), [self.voidptr_ty, self.voidptr_ty])
+                    strcmp_fn = ir.Function(self.module, strcmp_ty, name="strcmp")
                 
-                self.builder.position_at_end(case_bb)
-                res_val = self.codegen_expr(res_node)
-                if not self.builder.block.is_terminated:
-                    self.builder.branch(end_bb)
-                    incoming.append((res_val, self.builder.block))
+                end_bb = self.builder.append_basic_block(name="match_str.end")
+                incoming = []
+                phi_ty = None # NOVO: Inferir o tipo do phi node
                 
-            self.builder.position_at_end(default_bb)
-            if node.default:
-                default_val = self.codegen_expr(node.default)
-                if not self.builder.block.is_terminated:
-                    self.builder.branch(end_bb)
-                    incoming.append((default_val, self.builder.block))
+                for val_node, res_node in node.cases:
+                    val_str = self.codegen_expr(val_node)
+                    cmp_res = self.builder.call(strcmp_fn, [cond_val, val_str], name="strcmp_call")
+                    is_eq = self.builder.icmp_signed("==", cmp_res, ir.Constant(ir.IntType(32), 0), name="str_eq")
+                    
+                    then_bb = self.builder.append_basic_block(name="match_str.case")
+                    next_bb = self.builder.append_basic_block(name="match_str.next")
+                    self.builder.cbranch(is_eq, then_bb, next_bb)
+                    
+                    self.builder.position_at_end(then_bb)
+                    res_val = self.codegen_expr(res_node)
+                    if phi_ty is None: phi_ty = res_val.type # Pega o tipo do primeiro caso
+                    if not self.builder.block.is_terminated:
+                        self.builder.branch(end_bb)
+                        incoming.append((res_val, self.builder.block))
+                        
+                    self.builder.position_at_end(next_bb)
+                
+                # Default
+                if node.default:
+                    default_val = self.codegen_expr(node.default)
+                    if phi_ty is None: phi_ty = default_val.type
+                    if not self.builder.block.is_terminated:
+                        self.builder.branch(end_bb)
+                        incoming.append((default_val, self.builder.block))
+                else:
+                    if not self.builder.block.is_terminated:
+                        self.builder.branch(end_bb)
+                        # Se não houver default, usa null ou 0 dependendo do tipo
+                        if phi_ty and isinstance(phi_ty, ir.PointerType):
+                            incoming.append((ir.Constant(phi_ty, None), self.builder.block))
+                        else:
+                            incoming.append((ir.Constant(self.i64_ty, 0), self.builder.block))
+                        
+                self.builder.position_at_end(end_bb)
+                if phi_ty is None: phi_ty = self.i64_ty
+                phi = self.builder.phi(phi_ty, name="match_str_res")
+                for val, blk in incoming: phi.add_incoming(val, blk)
+                return phi
+                
+            # 2. Lowering de Match para Inteiros (switch nativo)
             else:
-                # Se não houver default, retorna 0
-                if not self.builder.block.is_terminated:
-                    self.builder.branch(end_bb)
-                    incoming.append((ir.Constant(self.i64_ty, 0), self.builder.block))
+                default_bb = self.builder.append_basic_block(name="match_expr.default")
+                end_bb = self.builder.append_basic_block(name="match_expr.end")
+                sw = self.builder.switch(cond_val, default_bb)
+                incoming = []
+                phi_ty = None # NOVO: Inferir o tipo do phi node
                 
-            self.builder.position_at_end(end_bb)
-            phi = self.builder.phi(self.i64_ty, name="match_expr_res")
-            for val, blk in incoming:
-                phi.add_incoming(val, blk)
-            return phi
-
+                for val_node, res_node in node.cases:
+                    case_bb = self.builder.append_basic_block(name="match_expr.case")
+                    val = self.codegen_expr(val_node)
+                    sw.add_case(val, case_bb)
+                    self.builder.position_at_end(case_bb)
+                    res_val = self.codegen_expr(res_node)
+                    if phi_ty is None: phi_ty = res_val.type # Pega o tipo do primeiro caso
+                    if not self.builder.block.is_terminated:
+                        self.builder.branch(end_bb)
+                        incoming.append((res_val, self.builder.block))
+                
+                self.builder.position_at_end(default_bb)
+                if node.default:
+                    default_val = self.codegen_expr(node.default)
+                    if phi_ty is None: phi_ty = default_val.type
+                    if not self.builder.block.is_terminated:
+                        self.builder.branch(end_bb)
+                        incoming.append((default_val, self.builder.block))
+                else:
+                    if not self.builder.block.is_terminated:
+                        self.builder.branch(end_bb)
+                        if phi_ty and isinstance(phi_ty, ir.PointerType):
+                            incoming.append((ir.Constant(phi_ty, None), self.builder.block))
+                        else:
+                            incoming.append((ir.Constant(self.i64_ty, 0), self.builder.block))
+                    
+                self.builder.position_at_end(end_bb)
+                if phi_ty is None: phi_ty = self.i64_ty
+                phi = self.builder.phi(phi_ty, name="match_expr_res")
+                for val, blk in incoming: phi.add_incoming(val, blk)
+                return phi
+            
         # NOVO: Geração de código para CastExpr
         elif isinstance(node, CastExpr):
             val = self.codegen_expr(node.expr)

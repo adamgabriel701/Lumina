@@ -10,6 +10,9 @@ class SemanticAnalyzer:
         self.struct_defs = {}
         self.filename = filename
         self.source_code = source_code
+        # NOVO: Conjuntos para Escape Analysis
+        self.heap_allocs = set() # Variáveis que usam alloc()
+        self.escapes = set()     # Variáveis que fogem (retornam ou são passadas adiante)
 
     def analyze(self, declarations):
         # 1. Registra funções e structs primeiro
@@ -61,32 +64,39 @@ class SemanticAnalyzer:
         for stmt in node.body:
             self.analyze_stmt(stmt)
 
+    # Adicione este método auxiliar para checar fugas
+    def check_escape(self, node):
+        if isinstance(node, VariableExpr) and node.name in self.heap_allocs:
+            self.escapes.add(node.name)
+
     def analyze_stmt(self, node):
         if isinstance(node, VarDecl):
             if node.var_type is not None and node.var_type not in ("int", "float", "bool", "str", "ptr") and node.var_type not in self.structs:
                 raise LuminaError(f"Tipo '{node.var_type}' não declarado.", self.filename, 0, 0, self.source_code)
+            
+            # NOVO: Se for um alloc(), marca como heap_alloc
+            if isinstance(node.value, CallExpr) and node.value.name == "alloc":
+                self.heap_allocs.add(node.name)
+                
             if node.value: self.analyze_expr(node.value)
             self.declare_var(node.name, node.var_type, node.is_mutable)
+            
         elif isinstance(node, AssignStmt):
             if isinstance(node.target, MemberExpr):
-                info = self.get_var_info(node.target.obj.name)
-                if not info: raise LuminaError(f"Variável '{node.target.obj.name}' não declarada.", self.filename, 0, 0, self.source_code)
-                if not info['mutable']: raise LuminaError(f"Não pode modificar variável imutável '{node.target.obj.name}'.", self.filename, 0, 0, self.source_code)
-                if info['type'] not in self.struct_defs: raise LuminaError(f"Variável '{node.target.obj.name}' não é uma Struct.", self.filename, 0, 0, self.source_code)
-                struct_def = self.struct_defs[info['type']]
-                if node.target.member not in struct_def.fields:
-                    raise LuminaError(f"Campo '{node.target.member}' não existe na Struct '{info['type']}'.", self.filename, 0, 0, self.source_code)
-            elif isinstance(node.target, DerefExpr):
-                pass 
+                self.check_escape(node.target.obj)
             elif isinstance(node.target, IndexExpr):
-                self.analyze_expr(node.target)
+                self.check_escape(node.target.array)
             else:
                 info = self.get_var_info(node.target.name)
                 if not info: raise LuminaError(f"Variável '{node.target.name}' não declarada.", self.filename, 0, 0, self.source_code)
                 if not info['mutable']: raise LuminaError(f"Não pode reatribuir à variável imutável '{node.target.name}'.", self.filename, 0, 0, self.source_code)
+            self.check_escape(node.value)
             self.analyze_expr(node.value)
+            
         elif isinstance(node, ReturnStmt):
-            for val in node.values: self.analyze_expr(val)
+            for val in node.values:
+                self.check_escape(val)
+                self.analyze_expr(val)
         elif isinstance(node, IfStmt):
             self.analyze_expr(node.condition)
             self.push_scope()

@@ -1,4 +1,4 @@
-from ..ast import NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr, ArrayExpr, IndexExpr, MemberExpr, AddressOfExpr, DerefExpr, TupleExpr, UnaryExpr
+from ..ast import NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr, ArrayExpr, IndexExpr, MemberExpr, AddressOfExpr, DerefExpr, TupleExpr, UnaryExpr, PropagateExpr
 from ..errors import LuminaError
 from ..lexer import TokenType
 
@@ -109,11 +109,10 @@ class ExpressionParser:
             is_float = '.' in token.value
             return NumberExpr(token.value, is_float)
             
-        # NOVO: Interpolação de Strings Nativa ("Texto {var}")
         elif token.type == TokenType.STRING:
             self.consume()
+            # Lógica de F-string
             s = token.value
-            
             if '{' in s and '}' in s:
                 from ..lexer import Lexer
                 from .parser import Parser
@@ -139,8 +138,6 @@ class ExpressionParser:
                         current += s[i]
                         i += 1
                 if current: parts.append(StringExpr(current))
-                
-                # Embrulhamos em um ArrayExpr para o Codegen saber que é uma interpolação
                 return ArrayExpr(parts)
                 
             return StringExpr(s)
@@ -148,6 +145,7 @@ class ExpressionParser:
         elif token.type == TokenType.IDENT or (token.type == TokenType.KEYWORD and token.value == 'print'):
             name = self.consume().value
             
+            # NOVO: Atribui a 'node' em vez de retornar imediatamente
             if self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == '(':
                 self.consume()
                 args = []
@@ -159,17 +157,17 @@ class ExpressionParser:
                         else:
                             break
                 self.consume(TokenType.OP)
-                return CallExpr(name, args)
-                
-            node = VariableExpr(name, token.line, token.col)
+                node = CallExpr(name, args)
+            else:
+                node = VariableExpr(name, token.line, token.col)
             
+            # Loop de Acesso (. e [])
             while True:
                 if self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == '[':
                     self.consume()
                     index = self.parse_expression()
                     self.consume(TokenType.OP)
                     node = IndexExpr(node, index)
-                # NOVO: Aceita '.' (normal) e '?.' (safe navigation)
                 elif self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value in ('.', '?.'):
                     op = self.consume().value
                     member_name = self.consume(TokenType.IDENT).value
@@ -191,6 +189,11 @@ class ExpressionParser:
                         node = MemberExpr(node, member_name, is_safe=is_safe)
                 else:
                     break
+            
+            # NOVO: Operador de Propagação de Erros (?)
+            if self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == '?':
+                self.consume()
+                node = PropagateExpr(node)
                 
             return node
             

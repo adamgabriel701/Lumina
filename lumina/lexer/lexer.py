@@ -106,11 +106,17 @@ class Lexer:
                         self.tokens.append(Token(TokenType.IDENT, word, line_num, col))
                     i = j
                     continue
+                # NOVO: Adicione o '?' na lista de operadores de 1 caractere
                 elif i + 1 < len(stripped) and stripped[i:i+2] in ('==', '!=', '<=', '>=', '->', '..', '+=', '-=', '*=', '/=', '|>', '<<', '>>', '?.'):
                     self.tokens.append(Token(TokenType.OP, stripped[i:i+2], line_num, col))
                     i += 2
                     continue
                 else:
+                    # NOVO: Se for '?', emite como OP
+                    if c == '?':
+                        self.tokens.append(Token(TokenType.OP, '?', line_num, col))
+                        i += 1
+                        continue
                     self.tokens.append(Token(TokenType.OP, c, line_num, col))
                     i += 1
             

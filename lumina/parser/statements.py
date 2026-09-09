@@ -51,10 +51,14 @@ class StatementParser(DeclarationsParser, ControlFlowParser):
             return AssignStmt(VariableExpr(name), expr)
         elif token.type == TokenType.IDENT and self.peek() and self.peek().type == TokenType.OP and self.peek().value in ('[', '.'):
             node = self.parse_expression()
-            if self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == '=':
-                self.consume()
+            # NOVO: Aceita atribuição composta (+=, -=, etc.) em membros e índices!
+            if self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value in ('=', '+=', '-=', '*=', '/='):
+                op = self.consume().value
                 expr = self.parse_expression()
                 self.consume(TokenType.NEWLINE)
+                if op != '=':
+                    # Embrulha em um BinaryExpr para o Codegen entender a operação
+                    expr = BinaryExpr(op, node, expr)
                 return AssignStmt(node, expr)
             self.consume(TokenType.NEWLINE)
             return node

@@ -8,7 +8,7 @@
 
 **Lumina** é uma linguagem de programação de sistemas de propósito geral, focada em alta performance, ergonomia moderna, concorrência e segurança de memória. Ela combina a sintaxe limpa e expressiva baseada em indentação (estilo Python/Nim) com o poder de baixo nível e otimização industrial do backend **LLVM**.
 
-A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums), operadores modernos (`|>`, `defer`, f-strings, `?.`), Generics (`<T>`), interoperabilidade nativa com C/C++ (FFI), suporte a Green Threads (Corrotinas), um REPL interativo, um Web Playground nativo via JIT, compilação incremental, e é **Cross-Platform** (compila para binários nativos x86_64/ARM e para WebAssembly).
+A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums), operadores modernos (`|>`, `defer`, `?.`, `?`), Generics (`<T>`), interoperabilidade nativa com C/C++ (FFI), suporte a Green Threads e I/O Assíncrono (`epoll`), um REPL interativo, um Web Playground, compilação incremental, e é **Cross-Platform** (compila para binários nativos x86_64/ARM e para WebAssembly).
 
 ---
 
@@ -22,14 +22,16 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
   * **F-strings Nativas:** `print("Usuário {id} logou.")`.
   * **Operador Pipe (`|>`):** `5 |> dobrar |> imprimir`.
   * **Navegação Segura (`?.`):** Evita Segmentation Faults ao acessar structs nulas: `usuario?.perfil?.nome`.
+  * **Propagação de Erros (`?`):** Retorna erros automaticamente sem `try/catch`: `let val = abrir_arquivo()?`.
   * **Defer & Assert:** Garantia de limpeza de escopo e testes nativos.
   * **Auto-Formatter:** `lumina fmt` formata o código automaticamente.
 * **Gerenciamento de Memória Automático:** Integração nativa com o **Boehm GC** (`libgc`).
-* **Otimizações de Compilador:** Tail Call Optimization (TCO) para recursão profunda sem Stack Overflow, e Constant Folding.
+* **Otimizações de Compilador:** Escape Analysis (aloca na Stack em vez do Heap se a variável não fugir), Tail Call Optimization (TCO) e DWARF Debug Info (depurável no GDB/LLDB).
 * **Concorrência e Redes:**
   * **Multithreading:** Threads nativas do SO via `pthread_create`.
   * **Green Threads:** Suporte a Corrotinas via troca de contexto de CPU (`ucontext`).
-  * **Web Framework & Proxy:** Servidores TCP/HTTP e Proxy Reverso de baixa latência.
+  * **Async I/O:** Event Loop não-bloqueante de baixa latência usando `epoll` do Linux.
+  * **Web Framework & Proxy:** Servidores TCP/HTTP e Proxy Reverso.
 * **Pipeline LLVM Avançado & Cache:** Otimizações `clang -O3 -march=native` e hashing MD5 para compilação instantânea.
 * **Ecossistema Integrado:** CLI, REPL, Web Playground (JIT), Gerenciador de Pacotes Git, Auto-documentador HTML, Auto-Gerador de Bindings C, Native Benchmarking (`bench`) e Extensão VS Code com **LSP (Autocomplete)**.
 * **Cross-Platform (Wasm):** Compila para `.wasm`, rodando em navegadores e Node.js.
@@ -65,8 +67,9 @@ lumina new meu_projeto      # Cria a estrutura inicial
 lumina install              # Baixa dependências do GitHub
 lumina bind header.h nome   # Gera bindings FFI a partir de um arquivo C
 lumina fmt arquivo.lm       # Formata o código automaticamente
+lumina clean                # Limpa o cache e binários antigos
+lumina run arquivo.lm       # Compila e executa o binário nativo em um único passo
 lumina repl                 # Inicia o console interativo (REPL JIT)
-lumina bench arquivo.lm     # Mede a performance de blocos de código nativamente
 lumina jit                  # Executa instantaneamente na memória RAM
 lumina build                # Compila para binário nativo otimizado (-O3)
 lumina build app.lm --wasm  # Compila para WebAssembly (.wasm)
@@ -104,7 +107,24 @@ fn main() -> int:
     return 0
 ```
 
-### 2. Generics e Native Benchmarking
+### 2. Tratamento de Erros com `?` (Zero-cost)
+```lumina
+enum Result:
+    Ok(int)
+    Err(int)
+
+fn dividir(a: int, b: int) -> Result:
+    if b == 0: return Err(1)
+    return Ok(a / b)
+
+fn processar() -> Result:
+    # Se dividir retornar Err, a função 'processar' para e retorna o Err imediatamente
+    let val = dividir(10, 0)?
+    print("Deu certo! Valor:", val)
+    return Ok(100)
+```
+
+### 3. Generics e Native Benchmarking
 ```lumina
 struct Box<T>:
     data: T
@@ -124,7 +144,7 @@ fn main() -> int:
     return 0
 ```
 
-### 3. WebAssembly (Node.js)
+### 4. WebAssembly (Node.js)
 Compile com `--wasm` e carregue no Node.js:
 ```javascript
 const fs = require('fs');
@@ -149,6 +169,8 @@ A Lumina conta com uma biblioteca padrão modularizada escrita na própria lingu
 * `std/http`: Web Framework HTTP nativo.
 * `std/net`: Sockets TCP e Proxy Reverso.
 * `std/async`: Green Threads e troca de contexto (ucontext).
+* `std/epoll`: Event Loop Assíncrono (I/O não-bloqueante).
+* `std/vector`: Array Dinâmico que cresce automaticamente na memória (Heap).
 * `std/sqlite`: Bindings para banco de dados SQLite.
 * `std/raylib`: Bindings para engine gráfica Raylib.
 

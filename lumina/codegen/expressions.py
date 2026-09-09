@@ -1,5 +1,5 @@
 from llvmlite import ir
-from ..ast import NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr, ArrayExpr, IndexExpr, MemberExpr, AddressOfExpr, DerefExpr, TupleExpr, UnaryExpr
+from ..ast import NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr, ArrayExpr, IndexExpr, MemberExpr, AddressOfExpr, DerefExpr, TupleExpr, UnaryExpr, PropagateExpr
 
 class ExpressionCodegen:
     def resolve_member_ptr(self, node: MemberExpr):
@@ -106,8 +106,16 @@ class ExpressionCodegen:
                 if node.op == '==': return is_eq
                 elif node.op == '!=': return self.builder.xor(is_eq, ir.Constant(ir.IntType(1), 1), name="is_neq")
 
+            # NOVO: Comparação de Ponteiros com 0 (Null Check)
+            if node.op in ('==', '!=') and isinstance(left.type, ir.PointerType) and right.type == self.i64_ty:
+                # Converte o ponteiro para i64 para poder comparar com 0
+                left_int = self.builder.ptrtoint(left, self.i64_ty, name="ptr_to_int_cmp")
+                if node.op == '==': return self.builder.icmp_signed("==", left_int, right, name="null_eq_tmp")
+                elif node.op == '!=': return self.builder.icmp_signed("!=", left_int, right, name="null_neq_tmp")
+
             if isinstance(left.type, ir.PointerType) and right.type == self.i64_ty:
-                if node.op == '+': return self.builder.gep(left, [right], name="ptr_add_tmp")
+                if node.op == '+':
+                    return self.builder.gep(left, [right], name="ptr_add_tmp")
                 elif node.op == '-':
                     neg_right = self.builder.neg(right, name="neg_idx")
                     return self.builder.gep(left, [neg_right], name="ptr_sub_tmp")
@@ -442,5 +450,38 @@ class ExpressionCodegen:
                 # Como logo abaixo virá o ret, isso é seguro.
                 call_instr = self.builder.call(func, args, name=node.name + "_call", tail=tail_flag)
                 return call_instr
+
+        elif isinstance(node, PropagateExpr):
+            # 1. Avalia a expressão (que retorna uma Enum por valor)
+            enum_val = self.codegen_expr(node.val)
+            
+            # NOVO: Se for um valor de Struct (retornado por função), aloca na Stack para usar GEP
+            if isinstance(enum_val.type, ir.IdentifiedStructType):
+                enum_ptr = self.builder.alloca(enum_val.type, name="prop_tmp")
+                self.builder.store(enum_val, enum_ptr)
+            else:
+                enum_ptr = enum_val # Já é um ponteiro
                 
+            # 2. Carrega a tag (índice da variante)
+            tag_ptr = self.builder.gep(enum_ptr, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 0)])
+            tag_val = self.builder.load(tag_ptr, name="prop_tag")
+            
+            # 3. Compara se é erro (assumimos que índice >= 1 é erro)
+            is_err = self.builder.icmp_signed("!=", tag_val, ir.Constant(self.i32_ty, 0), name="is_err")
+            
+            # 4. Cria blocos de controle
+            then_bb = self.builder.append_basic_block(name="prop.ok")
+            else_bb = self.builder.append_basic_block(name="prop.err")
+            
+            self.builder.cbranch(is_err, else_bb, then_bb)
+            
+            # 5. Se for ERRO: Retorna a Enum imediatamente da função atual!
+            self.builder.position_at_end(else_bb)
+            self.builder.ret(enum_val)
+            
+            # 6. Se for OK: Extrai o payload (valor útil) e continua
+            self.builder.position_at_end(then_bb)
+            payload_ptr = self.builder.gep(enum_ptr, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 1)])
+            return self.builder.load(payload_ptr, name="prop_val")
+
         raise Exception(f"Nó não suportado no Codegen: {type(node)}")

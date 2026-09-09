@@ -1,0 +1,40 @@
+## Módulo de Array Dinâmico (std/vector)
+## Um array que cresce automaticamente na memória Heap.
+
+# NOVO: Usamos GC_realloc do Boehm GC, pois o alloc nativo usa GC_malloc.
+# Tentar usar o realloc padrão do C em um ponteiro do GC causa "Invalid Pointer".
+extern fn GC_realloc(ptr: ptr, size: int) -> ptr
+
+# Estrutura do Vector
+struct Vector:
+    data: ptr
+    len: int
+    capacity: int
+
+## Cria um novo Vector vazio com capacidade inicial 4
+fn new() -> Vector:
+    mut v: Vector
+    v.data = alloc(4) # alloc nativo usa GC_malloc internamente
+    v.len = 0
+    v.capacity = 4
+    return v
+
+## Adiciona um elemento ao final do Vector. Realoca se necessário.
+fn push(v: Vector, val: int):
+    # Se o array estiver cheio, dobra a capacidade
+    if v.len == v.capacity:
+        v.capacity = v.capacity * 2
+        # Usa GC_realloc para crescer na memória com segurança
+        v.data = GC_realloc(v.data, v.capacity * 8)
+        
+    # Insere o valor na posição atual e incrementa o tamanho
+    v.data[v.len] = val
+    v.len += 1
+
+## Retorna o elemento no índice especificado
+fn get(v: Vector, index: int) -> int:
+    return v.data[index]
+
+## Retorna o tamanho atual do Vector
+fn len(v: Vector) -> int:
+    return v.len

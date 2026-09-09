@@ -7,6 +7,10 @@ import ctypes
 import ctypes.util
 import re
 import hashlib
+try:
+    import tomllib # Python 3.11+
+except ImportError:
+    tomllib = None
 from llvmlite import binding as llvm
 from lumina.ast import Function, VarDecl, AssignStmt, ReturnStmt, IfStmt, WhileStmt, ForStmt, NumberExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr, MemberExpr, IndexExpr
 from lumina.lexer import Lexer
@@ -134,7 +138,13 @@ def compile_lumina(filename, output_file="output.ll", use_cache=True):
         print(e); return None
     
     print("\n--- 3. Geração de Código LLVM IR ---")
+    # 1. Cria a instância do Codegen
     codegen = LLVMCodegen()
+    
+    # 2. Passa a informação de quem foge (escapes) do Semantic para o Codegen
+    codegen.escapes = analyzer.escapes
+    
+    # 3. Gera o módulo LLVM IR
     llvm_ir = codegen.generate_module(ast)
     
     with open(output_file, "w") as f: f.write(llvm_ir)
@@ -179,14 +189,16 @@ def run_jit(llvm_ir, cli_args):
 def cmd_new(project_name):
     os.makedirs(project_name, exist_ok=True)
     
-    config = {
-        "name": project_name,
-        "entry": "main.lm",
-        "libs": [],
-        "dependencies": {}
-    }
-    with open(os.path.join(project_name, "lumina.json"), "w") as f:
-        json.dump(config, f, indent=2)
+    # NOVO: Gera lumina.toml em vez de lumina.json
+    config = f"""[package]
+name = "{project_name}"
+version = "0.1.0"
+entry = "main.lm"
+
+[dependencies]
+"""
+    with open(os.path.join(project_name, "lumina.toml"), "w") as f:
+        f.write(config)
         
     main_code = """fn main() -> int:
     print("Hello from """ + project_name + """!")
@@ -195,7 +207,7 @@ def cmd_new(project_name):
     with open(os.path.join(project_name, "main.lm"), "w") as f:
         f.write(main_code)
         
-    print(f"✅ Projeto '{project_name}' criado com sucesso!")
+    print(f"✅ Projeto '{project_name}' criado com sucesso (lumina.toml)!")
 
 def cmd_install():
     if not os.path.exists("lumina.json"):
@@ -310,81 +322,99 @@ def cmd_build(entry_file=None, extra_flags=[]):
         project_name = entry_file.replace('.lm', '')
         libs = []
     else:
-        if not os.path.exists("lumina.json"):
-            print("❌ Erro: Nenhum arquivo 'lumina.json' encontrado no diretório atual.")
+        # NOVO: Procura lumina.toml em vez de lumina.json
+        if not os.path.exists("lumina.toml"):
+            print("❌ Erro: Nenhum arquivo 'lumina.toml' encontrado no diretório atual.")
             return None
             
-        with open("lumina.json", "r") as f:
-            config = json.load(f)
+        with open("lumina.toml", "rb") as f:
+            config = tomllib.load(f)
             
-        entry = config.get("entry", "main.lm")
-        project_name = config.get("name", "programa_final")
-        libs = config.get("libs", [])
+        entry = config.get("package", {}).get("entry", "main.lm")
+        project_name = config.get("package", {}).get("name", "programa_final")
+        libs = config.get("dependencies", {}).keys()
         
     print(f"🛠️  Compilando projeto: {project_name}")
     llvm_ir = compile_lumina(entry)
     if not llvm_ir: return None
     
-    # NOVO: Inclui libs do lumina.json e flags extras da CLI (ex: -L. -lcpptest)
     link_flags = " ".join([f"-l{lib}" for lib in libs] + extra_flags)
     ir_file = f"{project_name}.ll"
     with open(ir_file, "w") as f: f.write(llvm_ir)
     
-    # NOVO: Suporte a WebAssembly
-    is_wasm = "--wasm" in extra_flags
+    # NOVO: Verifica a flag --no-gc para compilação Bare-Metal
+    is_no_gc = "--no-gc" in extra_flags
+    gc_flag = "" if is_no_gc else "-lgc"
     
-    if is_wasm:
-        # Compila para WebAssembly (wasm32). 
-        # -nostdlib: Sem biblioteca padrão do C (sem printf/alloc).
-        # -Wl,--export-all: Exporta todas as funções para o ambiente JS.
-        # NOVO: Adicionado -Wl,--no-entry para suprimir o erro do _start
-        cmd = f"clang --target=wasm32 -O3 -nostdlib -Wl,--no-entry -Wl,--export-all {ir_file} -o {project_name}.wasm"
-        print("\n--- 4. Linkagem WebAssembly ---")
+    if is_no_gc:
+        print("⚠️ Modo Bare-Metal (--no-gc): Garbage Collector desativado.")
+        cmd = f"clang -O3 -march=native -funroll-loops {ir_file} -o {project_name} {link_flags} -lc -lpthread"
     else:
-        cmd = f"clang -O3 -march=native -funroll-loops {ir_file} -o {project_name} {link_flags} -lc -lpthread -lgc"
-        print("\n--- 4. Linkagem Nativa ---")
+        cmd = f"clang -O3 -march=native -funroll-loops {ir_file} -o {project_name} {link_flags} -lc -lpthread {gc_flag}"
         
+    print("\n--- 4. Linkagem Nativa ---")
     print(f"Executando: {cmd}")
     try:
         subprocess.run(cmd, shell=True, check=True)
-        if is_wasm:
-            print(f"✅ Build Wasm concluído: ./{project_name}.wasm")
-        else:
-            print(f"✅ Build concluído: ./{project_name}")
+        print(f"✅ Build concluído: ./{project_name}")
         return project_name
     except subprocess.CalledProcessError:
         print("❌ Erro durante a linkagem com o clang.")
         return None
 
-def cmd_run(args, use_jit=False, extra_flags=[]):
-    entry = "program.lm"
+def cmd_clean():
+    """Limpa o cache de compilação e os binários gerados."""
+    print("🧹 Limpando cache e binários...")
     
-    if args and not args[0].startswith('-'):
-        entry = args[0]
-        args = [a for a in args if a.startswith('--')]
-    elif os.path.exists("lumina.json"):
-        with open("lumina.json", "r") as f:
-            config = json.load(f)
-            entry = config.get("entry", "main.lm")
-    elif os.path.exists("main.lm"):
-        entry = "main.lm"
+    # Remove a pasta de cache
+    if os.path.exists(".lumina_cache"):
+        subprocess.run(["rm", "-rf", ".lumina_cache"])
+        print("✅ Cache (.lumina_cache) removido.")
         
-    if not os.path.exists(entry):
-        print(f"❌ Erro: Arquivo de entrada '{entry}' não encontrado.")
+    # Remove arquivos LLVM IR (.ll) soltos na raiz
+    for f in glob.glob("*.ll"):
+        os.remove(f)
+        print(f"✅ Removido: {f}")
+        
+    # Remove binários sem extensão (gerados pelo build)
+    for f in os.listdir("."):
+        if os.path.isfile(f) and "." not in f:
+            # Evita deletar arquivos de sistema ocultos ou scripts
+            if not f.startswith("."):
+                os.remove(f)
+                print(f"✅ Removido binário: {f}")
+                
+    print("Limpeza concluída!")
+
+def cmd_run(entry_file=None, use_jit=False):
+    """Compila (usando cache se possível) e executa o programa."""
+    if not entry_file:
+        if os.path.exists("lumina.json"):
+            with open("lumina.json", "r") as f:
+                config = json.load(f)
+                entry_file = config.get("entry", "main.lm")
+        elif os.path.exists("main.lm"):
+            entry_file = "main.lm"
+        else:
+            print("❌ Erro: Nenhum arquivo de entrada especificado.")
+            return
+
+    if not os.path.exists(entry_file):
+        print(f"❌ Erro: Arquivo '{entry_file}' não encontrado.")
+        return
+
+    print(f"🚀 Iniciando processo para: {entry_file}")
+    
+    # Compila o código (usando o cache incremental se não houver mudanças)
+    binary_name = cmd_build(entry_file)
+    
+    if not binary_name:
+        print("❌ Falha na compilação.")
         return
         
-    print(f"🚀 Executando via JIT: {entry}")
-    llvm_ir = compile_lumina(entry)
-    
-    # NOVO: Carrega bibliotecas dinâmicas para o JIT
-    for flag in extra_flags:
-        if flag.startswith("-l"):
-            lib_name = flag[2:]
-            lib_path = ctypes.util.find_library(lib_name)
-            if lib_path:
-                llvm.load_library_permanently(lib_path)
-                
-    if llvm_ir: run_jit(llvm_ir, args)
+    print("\n--- Executando Binário Nativo ---")
+    # Executa o binário gerado
+    subprocess.run([f"./{binary_name}"])
 
 def cmd_bind(header_file, output_name):
     if not os.path.exists(header_file):
@@ -665,10 +695,14 @@ def main():
             extra_flags = [arg for arg in args if arg.startswith('-')]
         cmd_build(entry_file, extra_flags)
         
+    # NOVO COMANDO: CLEAN
+    elif command == "clean":
+        cmd_clean()
+        
+    # NOVO COMANDO: RUN (Compila e já roda o binário nativo)
     elif command == "run":
-        entry = args[0] if args and not args[0].startswith('-') else None
-        extra_flags = [arg for arg in args if arg.startswith('-') and arg != '--run']
-        cmd_run(args, use_jit=False, extra_flags=extra_flags)
+        entry_file = args[0] if args and not args[0].startswith('-') else None
+        cmd_run(entry_file, use_jit=False)
         
     elif command == "jit":
         entry = args[0] if args and not args[0].startswith('-') else None

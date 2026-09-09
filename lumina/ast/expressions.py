@@ -54,6 +54,11 @@ class AddressOfExpr:
 class DerefExpr:
     val: any
 
+# NOVO NÓ PARA O OPERADOR ?
+@dataclass
+class PropagateExpr:
+    val: any
+
 @dataclass
 class TupleExpr:
     elements: List[any]

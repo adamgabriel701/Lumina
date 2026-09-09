@@ -32,6 +32,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen):
         self.break_block = None
         self.deferred_stmts = []
         self.is_tail_return = False # NOVO: Flag para TCO
+        self.escapes = set() # NOVO: Recebe do SemanticAnalyzer
 
     # MÉTODO PARA CRIAR ENUMS ATUALIZADO
     def create_enum(self, node: EnumDecl):
@@ -151,8 +152,12 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen):
             self.global_symbols[node.name] = ptr
             self.global_types[node.name] = var_ty
 
-    # NOVO MÉTODO PARA FUNÇÕES EXTERNAS
     def create_extern(self, node: ExternDecl):
+        # NOVO: Verifica se a função já foi declarada no módulo LLVM (ex: printf, malloc, free)
+        for func in self.module.functions:
+            if func.name == node.name:
+                return # Já existe, não declara de novo!
+                
         ret_ty = self.get_llvm_type(node.return_type)
         param_types = [self.get_llvm_param_type(p_type) for _, p_type in node.params]
         func_type = ir.FunctionType(ret_ty, param_types)
@@ -170,6 +175,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen):
     def create_function(self, func_node: Function):
         if func_node.name == "main":
             ret_ty = self.i64_ty
+            self.current_ret_ty = ret_ty # NOVO
             param_types = [self.i32_ty, self.i8_ty.as_pointer().as_pointer()]
             func_type = ir.FunctionType(ret_ty, param_types)
             func = ir.Function(self.module, func_type, name="main")
@@ -211,6 +217,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen):
                         self.builder.store(val, global_ptr)
         else:
             ret_ty = self.get_llvm_type(func_node.return_type)
+            self.current_ret_ty = ret_ty # NOVO
             param_types = [self.get_llvm_param_type(p_type) for _, p_type in func_node.params]
             func_type = ir.FunctionType(ret_ty, param_types)
             func = ir.Function(self.module, func_type, name=func_node.name)

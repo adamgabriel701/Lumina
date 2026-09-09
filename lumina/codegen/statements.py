@@ -1,5 +1,5 @@
 from llvmlite import ir
-from ..ast import VarDecl, AssignStmt, ReturnStmt, IfStmt, WhileStmt, ForStmt, MemberExpr, ArrayExpr, MatchStmt, DerefExpr, IndexExpr, VariableExpr, CallExpr, ContinueStmt, DeferStmt, BreakStmt, AssertStmt, BenchStmt
+from ..ast import VarDecl, AssignStmt, ReturnStmt, IfStmt, WhileStmt, ForStmt, MemberExpr, ArrayExpr, MatchStmt, DerefExpr, IndexExpr, VariableExpr, CallExpr, ContinueStmt, DeferStmt, BreakStmt, AssertStmt, BenchStmt, NumberExpr, BinaryExpr
 from .control_flow import ControlFlowCodegen
 
 class StatementCodegen(ControlFlowCodegen):
@@ -32,9 +32,20 @@ class StatementCodegen(ControlFlowCodegen):
                 self.builder.store(val, ptr)
                 self.symbol_table[node.name] = ptr
                 self.var_types[node.name] = var_ty
+                # NOVO: Lógica de Escape Analysis!
                 if isinstance(node.value, CallExpr) and node.value.name == "alloc":
-                    self.cleanup_vars[-1].add(node.name)
-                    self.heap_int_arrays.add(node.name)
+                    if node.name not in self.escapes:
+                        # NÃO FOGE! Aloca na Stack (Pilha) -> Zero GC Overhead!
+                        size_val = self.codegen_expr(node.value.args[0])
+                        ptr = self.builder.alloca(self.i64_ty, size=size_val, name=node.name + "_stack")
+                        self.symbol_table[node.name] = ptr
+                        self.var_types[node.name] = self.i64_ty.as_pointer()
+                        self.heap_int_arrays.add(node.name) # Ainda precisamos saber que é i64* para o GEP
+                        return # Não cai no alloca padrão abaixo
+                    else:
+                        # FOGE! Aloca no Heap (GC)
+                        self.cleanup_vars[-1].add(node.name)
+                        self.heap_int_arrays.add(node.name)
 
         elif isinstance(node, AssignStmt):
             if isinstance(node.target, DerefExpr):
@@ -88,11 +99,22 @@ class StatementCodegen(ControlFlowCodegen):
                 for stmt in body: self.codegen_stmt(stmt)
             self.deferred_stmts.clear()
             
-            # NOVO: Liga a flag de TCO antes de avaliar o retorno
+            # NOVO: Se a função for void e for um 'return' vazio, usa ret_void()!
+            if hasattr(self, 'current_ret_ty') and self.current_ret_ty == ir.VoidType():
+                # Verifica se é o NumberExpr("0") que o Parser cria para returns vazios
+                if len(node.values) == 1 and isinstance(node.values[0], NumberExpr) and node.values[0].value == "0":
+                    for scope in self.cleanup_vars:
+                        self.cleanup_block(scope)
+                    self.builder.ret_void()
+                    return
+                    
             self.is_tail_return = True
             val = self.codegen_expr(node.values[0])
             self.is_tail_return = False
             
+            if hasattr(self, 'current_ret_ty') and isinstance(self.current_ret_ty, ir.PointerType) and val.type == self.i64_ty:
+                val = ir.Constant(self.current_ret_ty, None)
+                
             if isinstance(val.type, ir.PointerType) and isinstance(val.type.pointee, ir.IdentifiedStructType):
                 val = self.builder.load(val, name="ret_val")
             for scope in self.cleanup_vars:

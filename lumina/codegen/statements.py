@@ -4,6 +4,15 @@ from .control_flow import ControlFlowCodegen
 
 class StatementCodegen(ControlFlowCodegen):
     def codegen_stmt(self, node):
+        # NOVO: Atualiza a linha de debug para o nó atual
+        if hasattr(self, 'is_debug') and self.is_debug and hasattr(self, 'current_line'):
+            loc = self.module.add_debug_info("DILocation", {
+                "line": getattr(node, 'line', 0),
+                "column": getattr(node, 'col', 1),
+                "scope": self.builder.debug_metadata
+            })
+            self.builder.debug_loc = loc
+
         if isinstance(node, VarDecl): self.codegen_var_decl(node)
         elif isinstance(node, DestructureStmt): self.codegen_destructure(node)
         elif isinstance(node, AssignStmt): self.codegen_assign(node)
@@ -61,6 +70,14 @@ class StatementCodegen(ControlFlowCodegen):
         # 3. Tipos primitivos e Ponteiros
         val = self.codegen_expr(node.value) if node.value else ir.Constant(self.i64_ty, 0)
         
+        # NOVO: Se a função retornar void, não tenta alocar, retorna 0
+        if val is None or isinstance(val.type, ir.VoidType):
+            ptr = self.builder.alloca(self.i64_ty, name=node.name)
+            self.builder.store(ir.Constant(self.i64_ty, 0), ptr)
+            self.symbol_table[node.name] = ptr
+            self.var_types[node.name] = self.i64_ty
+            return
+            
         # Se o valor já for um ponteiro para Struct (ex: retorno de função), usa o ponteiro direto
         if isinstance(val.type, ir.PointerType) and isinstance(val.type.pointee, ir.IdentifiedStructType):
             self.symbol_table[node.name] = val
@@ -116,16 +133,26 @@ class StatementCodegen(ControlFlowCodegen):
                 elem_ptr = self.builder.gep(arr_ptr, [ir.Constant(self.i32_ty, 0), idx_val], name="assign_elem_ptr")
                 val = self.codegen_expr(node.value)
                 if val.type == self.f64_ty: val = self.builder.fptosi(val, self.i64_ty, name="to_int")
+                # NOVO: Se for um ponteiro sendo armazenado em um array de inteiros (i64)
+                elif isinstance(val.type, ir.PointerType) and arr_ptr.type.pointee == self.i64_ty: 
+                    val = self.builder.ptrtoint(val, self.i64_ty, name="ptr_to_int_arr")
                 self.builder.store(val, elem_ptr)
             else:
                 ptr = self.codegen_expr(node.target.array); idx_val = self.codegen_expr(node.target.index)
                 if idx_val.type == self.f64_ty: idx_val = self.builder.fptosi(idx_val, self.i64_ty, name="idx_int")
+                elif isinstance(idx_val.type, ir.PointerType): idx_val = self.builder.ptrtoint(idx_val, self.i64_ty, name="ptr_to_int")
                 val = self.codegen_expr(node.value)
-                if isinstance(ptr.type, ir.PointerType) and ptr.type.pointee == self.i64_ty: elem_ptr = self.builder.gep(ptr, [idx_val], name="heap_assign_ptr")
+                
+                if isinstance(ptr.type, ir.PointerType) and ptr.type.pointee == self.i64_ty: 
+                    elem_ptr = self.builder.gep(ptr, [idx_val], name="heap_assign_ptr")
+                    # NOVO: Se for um ponteiro sendo armazenado em um array de inteiros (i64)
+                    if isinstance(val.type, ir.PointerType):
+                        val = self.builder.ptrtoint(val, self.i64_ty, name="ptr_to_int_heap")
                 elif ptr.type == self.voidptr_ty:
                     if val.type == self.i64_ty: val = self.builder.trunc(val, self.i8_ty, name="byte_trunc")
                     elem_ptr = self.builder.gep(ptr, [idx_val], name="heap_assign_ptr")
-                else: elem_ptr = self.builder.gep(ptr, [idx_val], name="heap_assign_ptr")
+                else: 
+                    elem_ptr = self.builder.gep(ptr, [idx_val], name="heap_assign_ptr")
                 self.builder.store(val, elem_ptr)
         elif isinstance(node.target, MemberExpr):
             obj_ptr = self.resolve_member_ptr(node.target); val = self.codegen_expr(node.value)

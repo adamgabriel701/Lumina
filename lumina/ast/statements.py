@@ -76,6 +76,7 @@ class ExternDecl:
     name: str
     params: List[tuple]
     return_type: str
+    is_wasm: bool = False # NOVO
 
 @dataclass
 class EnumDecl:

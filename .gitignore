@@ -17,11 +17,22 @@ output.ll
 /examples/meu_projeto
 /examples/tco_test
 /examples/wasm_math
+/examples/wasm_js_interop
+/examples/wasm_memory
+/examples/teste_features
+/examples/string_methods_test
+/benchmarks/bench_runtime
 /benchmarks/fib
-/lumina_test_bin
+/benchmarks/loop
+/benchmarks/matrix
+/benchmarks/primes
+/tests_lumina
 
 # Dependências baixadas
 lumina_modules/
+
+# Extensão VS Code
+lumina-vscode/node_modules/
 
 # Configurações locais
 .vscode/

@@ -31,7 +31,7 @@ class Parser(ExpressionParser, StatementParser):
     def parse(self):
         declarations = []
         while self.current_token() and self.current_token().type != TokenType.EOF:
-            if self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'fn':
+            if self.current_token().type == TokenType.KEYWORD and self.current_token().value in ('fn', 'export'):
                 declarations.append(self.parse_function())
             elif self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'struct':
                 declarations.append(self.parse_struct())

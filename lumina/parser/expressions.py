@@ -20,8 +20,17 @@ class ExpressionParser:
         return node
 
     def parse_comparison(self):
-        node = self.parse_additive()
+        node = self.parse_range() # Alterado de parse_additive para parse_range
         while self.current_token() and ((self.current_token().type == TokenType.OP and self.current_token().value in ('==', '!=', '<', '>', '<=', '>=')) or (self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'in')):
+            op = self.consume().value
+            right = self.parse_range() # Alterado para parse_range
+            node = BinaryExpr(op, node, right)
+        return node
+
+    # NOVO: Nível intermediário para o operador .. (Range)
+    def parse_range(self):
+        node = self.parse_additive()
+        while self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == '..':
             op = self.consume().value
             right = self.parse_additive()
             node = BinaryExpr(op, node, right)
@@ -29,7 +38,8 @@ class ExpressionParser:
 
     def parse_additive(self):
         node = self.parse_term()
-        while self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value in ('+', '-', '..'):
+        # Removido o '..' daqui, pois ele agora tem sua própria precedência no parse_range
+        while self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value in ('+', '-'):
             op = self.consume().value
             right = self.parse_term()
             node = BinaryExpr(op, node, right)

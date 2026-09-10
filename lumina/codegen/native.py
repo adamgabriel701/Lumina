@@ -110,15 +110,21 @@ class NativeCallCodegen:
         return ptr
 
     def codegen_enum_ctor(self, node):
-        enum_name, index, _ = self.variant_defs[node.name]
+        enum_name, index, payload_type = self.variant_defs[node.name]
         ptr = self.builder.alloca(self.struct_types[enum_name], name="enum_tmp")
         self.builder.store(ir.Constant(self.i32_ty, index), self.builder.gep(ptr, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 0)]))
         payload_ptr = self.builder.gep(ptr, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 1)])
+        
         if node.args:
             val = self.codegen_expr(node.args[0])
-            if val.type != self.i64_ty: val = self.builder.zext(val, self.i64_ty, name="payload_cast")
+            # NOVO: Se o payload for str (i8*), converte para i64
+            if val.type == self.voidptr_ty:
+                val = self.builder.ptrtoint(val, self.i64_ty, name="str_ptr_to_int")
+            elif val.type != self.i64_ty: 
+                val = self.builder.zext(val, self.i64_ty, name="payload_cast")
             self.builder.store(val, payload_ptr)
-        else: self.builder.store(ir.Constant(self.i64_ty, 0), payload_ptr)
+        else: 
+            self.builder.store(ir.Constant(self.i64_ty, 0), payload_ptr)
         return ptr
 
     def codegen_str_cast(self, node):

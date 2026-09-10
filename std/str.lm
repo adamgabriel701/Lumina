@@ -1,41 +1,61 @@
-## Módulo de Strings (std/str)
-## Funções utilitárias para manipulação de texto.
+# std/str.lm - Funções de string escritas na própria Lumina!
 
-## Procura uma substring dentro de uma string. Retorna o índice ou -1 se não encontrar.
-fn find(text: str, search: str) -> int:
-    let text_len = len(text)
-    let search_len = len(search)
-    if search_len == 0:
-        return 0
-    if text_len < search_len:
-        return -1
+# Converte uma string para maiúsculas
+fn to_upper(s: str) -> str:
+    let length = len(s)
+    mut res = ""
+    for i in 0..length:
+        let c = s[i]
+        # Se for letra minúscula (ASCII 97 a 122), subtrai 32 para virar maiúscula
+        if c >= 97 and c <= 122:
+            res = res + chr(c - 32)
+        else:
+            res = res + chr(c)
+    return res
+
+# Converte uma string para minúsculas
+fn to_lower(s: str) -> str:
+    let length = len(s)
+    mut res = ""
+    for i in 0..length:
+        let c = s[i]
+        # Se for maiúscula (ASCII 65 a 90), soma 32
+        if c >= 65 and c <= 90:
+            res = res + chr(c + 32)
+        else:
+            res = res + chr(c)
+    return res
+
+# Remove espaços do início e do fim
+fn trim(s: str) -> str:
+    let length = len(s)
+    mut start = 0
+    mut end = length - 1
     
-    mut i = 0
-    while i <= text_len - search_len:
-        mut found = 1
-        mut j = 0
-        while j < search_len:
-            if text[i + j] != search[j]:
-                found = 0
-                break
-            j += 1
+    # Encontra o primeiro caractere não-espaço
+    while start < length and s[start] == 32:
+        start += 1
         
-        if found == 1:
-            return i
-        i += 1
-    return -1
-
-## Extrai uma substring a partir de um índice inicial com um tamanho especificado.
-fn substr(text: str, start: int, length: int) -> str:
-    let text_len = len(text)
-    if start >= text_len:
+    # Encontra o último caractere não-espaço
+    while end >= 0 and s[end] == 32:
+        end -= 1
+        
+    if start > end:
         return ""
-    if start + length > text_len:
-        length = text_len - start
+    
+    # Slice da string (usando nosso novo recurso de slicing!)
+    return s[start..end + 1]
+
+# Verifica se termina com um sufixo
+fn ends_with(s: str, suffix: str) -> int:
+    let s_len = len(s)
+    let suf_len = len(suffix)
+    
+    if suf_len > s_len:
+        return 0
         
-    mut result = ""
-    mut i = 0
-    while i < length:
-        result = result + chr(text[start + i])
-        i += 1
-    return result
+    # Slice o final da string e compara
+    let s_end = s[s_len - suf_len..s_len]
+    if s_end == suffix:
+        return 1
+    return 0

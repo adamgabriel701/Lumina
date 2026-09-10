@@ -1,5 +1,5 @@
 from llvmlite import ir
-from ..ast import VariableExpr, IndexExpr, MemberExpr, DerefExpr, AddressOfExpr
+from ..ast import VariableExpr, IndexExpr, MemberExpr, DerefExpr, AddressOfExpr, BinaryExpr, CallExpr, NumberExpr, StringExpr, BoolExpr
 
 class AccessCodegen:
     def resolve_member_ptr(self, node):
@@ -22,10 +22,20 @@ class AccessCodegen:
             self.builder.store(ir.Constant(self.i32_ty, index), self.builder.gep(ptr, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 0)]))
             self.builder.store(ir.Constant(self.i64_ty, 0), self.builder.gep(ptr, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 1)]))
             return ptr
+            
         ptr = self.symbol_table.get(node.name)
         if not ptr: raise Exception(f"Variável '{node.name}' não declarada.")
-        if isinstance(ptr, ir.GlobalVariable): return self.builder.load(ptr, name=node.name + "_gval")
-        if isinstance(ptr.type.pointee, ir.IdentifiedStructType): return ptr
+        
+        if isinstance(ptr, ir.GlobalVariable): 
+            return self.builder.load(ptr, name=node.name + "_gval")
+            
+        if isinstance(ptr.type.pointee, ir.IdentifiedStructType): 
+            return ptr
+            
+        # NOVO: Se for um array dinâmico alocado (i64*), retorna o ponteiro direto para permitir indexação t1[0]
+        if node.name in self.heap_int_arrays:
+            return ptr
+            
         return self.builder.load(ptr, name=node.name + "_val")
 
     def codegen_member(self, node):
@@ -42,11 +52,46 @@ class AccessCodegen:
         return self.builder.load(obj_ptr, name="member_val")
 
     def codegen_index(self, node):
+        # NOVO: Suporte a Slicing de Strings (ex: text[1..5])
+        if isinstance(node.index, BinaryExpr) and node.index.op == '..':
+            ptr = self.codegen_expr(node.array)
+            # Só faz sentido para strings (voidptr)
+            if ptr.type == self.voidptr_ty:
+                start_val = self.codegen_expr(node.index.left)
+                end_val = self.codegen_expr(node.index.right)
+                
+                # Calcula o tamanho da fatia (end - start)
+                slice_len = self.builder.sub(end_val, start_val, name="slice_len")
+                # Adiciona 1 byte para o null terminator \0
+                alloc_size = self.builder.add(slice_len, ir.Constant(self.i64_ty, 1), name="slice_alloc_size")
+                
+                # Aloca memória para a nova string
+                buf = self.builder.call(self.malloc, [alloc_size], name="slice_buf")
+                
+                # Calcula o ponteiro de origem (ptr + start)
+                src_ptr = self.builder.gep(ptr, [start_val], name="slice_src")
+                
+                # Usa strncpy para copiar exatamente o tamanho da fatia
+                strncpy_fn = next((f for f in self.module.functions if f.name == "strncpy"), None)
+                if not strncpy_fn:
+                    strncpy_ty = ir.FunctionType(self.voidptr_ty, [self.voidptr_ty, self.voidptr_ty, self.i64_ty])
+                    strncpy_fn = ir.Function(self.module, strncpy_ty, name="strncpy")
+                
+                self.builder.call(strncpy_fn, [buf, src_ptr, slice_len], name="strncpy_call")
+                
+                # Adiciona o null terminator no final da nova string
+                null_ptr = self.builder.gep(buf, [slice_len], name="slice_null_ptr")
+                self.builder.store(ir.Constant(self.i8_ty, 0), null_ptr)
+                
+                return buf
+
+        # Fallback para o comportamento original de indexação
         if isinstance(node.array, VariableExpr) and node.array.name in self.array_sizes:
             arr_ptr = self.symbol_table.get(node.array.name); idx_val = self.codegen_expr(node.index)
             if idx_val.type == self.f64_ty: idx_val = self.builder.fptosi(idx_val, self.i64_ty, name="idx_int")
             elif isinstance(idx_val.type, ir.PointerType): idx_val = self.builder.ptrtoint(idx_val, self.i64_ty, name="ptr_to_int")
             return self.builder.load(self.builder.gep(arr_ptr, [ir.Constant(self.i32_ty, 0), idx_val], name="elem_ptr"), name="arr_elem_val")
+            
         ptr = self.codegen_expr(node.array); idx_val = self.codegen_expr(node.index)
         if idx_val.type == self.f64_ty: idx_val = self.builder.fptosi(idx_val, self.i64_ty, name="idx_int")
         elif isinstance(idx_val.type, ir.PointerType): idx_val = self.builder.ptrtoint(idx_val, self.i64_ty, name="ptr_to_int")

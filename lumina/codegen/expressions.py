@@ -3,7 +3,12 @@ from ..ast import NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, Ca
 
 class ExpressionCodegen:
     def codegen_expr(self, node):
-        if isinstance(node, NumberExpr): return ir.Constant(self.f64_ty, float(node.value)) if node.is_float else ir.Constant(self.i64_ty, int(node.value))
+        if isinstance(node, NumberExpr):
+            # NOVO: Suporta hexadecimais (0x...) e decimais normais
+            if node.value.startswith('0x') or node.value.startswith('0X'):
+                return ir.Constant(self.f64_ty, float(int(node.value, 16))) if node.is_float else ir.Constant(self.i64_ty, int(node.value, 16))
+            return ir.Constant(self.f64_ty, float(node.value)) if node.is_float else ir.Constant(self.i64_ty, int(node.value))
+            
         elif isinstance(node, BoolExpr): return ir.Constant(ir.IntType(1), 1 if node.value else 0)
         elif isinstance(node, StringExpr): return self.create_global_string(node.value)
         elif isinstance(node, UnaryExpr): return self.codegen_unary(node)
@@ -224,8 +229,16 @@ class ExpressionCodegen:
             ge = self.builder.icmp_signed(">=", val, start, name="in_ge"); lt = self.builder.icmp_signed("<", val, end, name="in_lt")
             return self.builder.zext(self.builder.and_(ge, lt, name="in_res"), self.i64_ty, name="in_int")
             
+        # NOVO: O operador .. não retorna um valor numérico, é tratado estruturalmente em slices e loops
+        if node.op == '..':
+            raise Exception("Operador '..' (Range) só pode ser usado em loops 'for' ou slices de array 'arr[1..5]'.")
+            
         left = self.codegen_expr(node.left); right = self.codegen_expr(node.right)
         
+        # NOVO: Proteção contra retornos None (ajuda a debugar)
+        if left is None or right is None:
+            raise Exception(f"Erro no Codegen: Operando None em '{node.op}'. Left Node: {type(node.left)}, Right Node: {type(node.right)}")
+            
         # Operadores Sobrecarregados
         if isinstance(left.type, ir.PointerType) and isinstance(left.type.pointee, ir.IdentifiedStructType) and left.type == right.type:
             struct_name = left.type.pointee.name
@@ -320,12 +333,28 @@ class ExpressionCodegen:
             func, func_type = self.functions_table[node.name]
             args = []
             for i, arg_node in enumerate(node.args):
+                # NOVO: Se a função espera um ponteiro e o argumento é uma variável que é um array, passa o ponteiro do array (decay)
+                if isinstance(arg_node, VariableExpr) and isinstance(func_type.args[i], ir.PointerType):
+                    var_ptr = self.symbol_table.get(arg_node.name)
+                    if var_ptr and isinstance(var_ptr.type.pointee, ir.ArrayType):
+                        arg_val = self.builder.bitcast(var_ptr, func_type.args[i], name="array_arg_decay")
+                        args.append(arg_val)
+                        continue
+                    # Se for um array alocado dinamicamente (i64*)
+                    if var_ptr and var_ptr.type.pointee == self.i64_ty and arg_node.name in self.heap_int_arrays:
+                        arg_val = self.builder.bitcast(var_ptr, func_type.args[i], name="heap_array_arg_decay")
+                        args.append(arg_val)
+                        continue
+
                 arg_val = self.codegen_expr(arg_node)
                 if isinstance(arg_val.type, ir.ArrayType):
                     ptr_ty = arg_val.type.element.as_pointer(); arg_val = self.builder.bitcast(arg_val, ptr_ty, name="array_decay")
                 if func_type.args[i] == self.f64_ty and arg_val.type == self.i64_ty: arg_val = self.to_float_if_needed(arg_val)
                 elif func_type.args[i] == self.i64_ty.as_pointer() and arg_val.type == self.voidptr_ty: arg_val = self.builder.bitcast(arg_val, self.i64_ty.as_pointer(), name="arg_ptr_cast")
                 elif func_type.args[i] == self.voidptr_ty and isinstance(arg_val.type, ir.PointerType) and arg_val.type != self.voidptr_ty: arg_val = self.builder.bitcast(arg_val, self.voidptr_ty, name="arg_void_cast")
+                # NOVO: Se a função espera i64 (ex: tipo Genérico T) mas recebeu um ponteiro
+                elif func_type.args[i] == self.i64_ty and isinstance(arg_val.type, ir.PointerType):
+                    arg_val = self.builder.ptrtoint(arg_val, self.i64_ty, name="arg_ptr_to_int")
                 args.append(arg_val)
             if hasattr(self, 'function_defs') and node.name in self.function_defs:
                 func_ast = self.function_defs[node.name]

@@ -6,6 +6,9 @@ import glob
 import subprocess
 import ctypes
 import ctypes.util
+import hashlib
+
+from lumina.ast.statements import ImportStmt
 
 try:
     import tomllib  # Python 3.11+
@@ -210,7 +213,7 @@ def cmd_build(entry_file=None, extra_flags=[]):
     step(f"🛠️  Compilando projeto: {paint(project_name, Color.BOLD + Color.BRIGHT_CYAN)}")
     
     # Compila o código. Ignora o cache se for WASM ou Debug, pois o binário final muda
-    llvm_ir = compile_lumina(entry, use_cache=not (is_wasm or is_debug), is_wasm=is_wasm)
+    llvm_ir = compile_lumina(entry, use_cache=not (is_wasm or is_debug), is_wasm=is_wasm, is_debug=is_debug)
     if not llvm_ir:
         return None
 
@@ -264,11 +267,10 @@ def cmd_build(entry_file=None, extra_flags=[]):
             # Como não usamos o main do WASI, não precisamos do crt1 que o procura
             # Removemos o start file para evitar o erro undefined_weak:main
             cmd = (f"{clang_bin} -O3 -nostartfiles {debug_flag} {target_flag} {sysroot_flag} {ir_file} "
-                   f"-o {project_name}.{output_ext} {' '.join(export_flags)} -lc")
+                   f"-o {project_name}.{output_ext} {' '.join(export_flags)} -lc -Wl,--allow-undefined")
         else:
-            # Se não houver exports, compila como um módulo WASI normal (procura o main)
             cmd = (f"{clang_bin} -O3 {debug_flag} {target_flag} {sysroot_flag} {ir_file} "
-                   f"-o {project_name}.{output_ext} -lc -Wl,--export=main")
+                   f"-o {project_name}.{output_ext} -lc -Wl,--export=main -Wl,--allow-undefined")
     else:
         # Lida com GC em compilação nativa
         gc_flag = "" if is_no_gc else "-lgc"
@@ -278,8 +280,23 @@ def cmd_build(entry_file=None, extra_flags=[]):
         target_flag = "-march=native -funroll-loops"
         output_ext = "" # Binário nativo sem extensão
         
+        # NOVO: Adicionado -lm para linkar a biblioteca matemática do C (libm)
         cmd = (f"clang -O3 {target_flag} {debug_flag} {ir_file} "
-               f"-o {project_name} {link_flags} -lc -lpthread {gc_flag}")
+               f"-o {project_name} {link_flags} -lc -lm -lpthread {gc_flag}")
+
+    hash_obj_file = f".lumina_cache/{project_name}.bin_hash"
+    
+    # Verifica se o IR mudou desde a última build
+    ir_changed = True
+    if os.path.exists(hash_obj_file):
+        with open(hash_obj_file, "r") as f:
+            old_hash = f.read()
+        # Compara o hash do IR atual com o salvo
+        import hashlib
+        new_hash = hashlib.md5(llvm_ir.encode()).hexdigest()
+        if old_hash == new_hash and not is_wasm and not is_debug:
+            success(f"✅ Build incremental: Nenhum código mudou. Pulando linkagem.")
+            return project_name
 
     header("4. Linkagem Nativa")
     info(f"Executando: {paint(cmd, Color.MUTED)}")
@@ -287,6 +304,12 @@ def cmd_build(entry_file=None, extra_flags=[]):
         subprocess.run(cmd, shell=True, check=True)
         output_path = f"{project_name}.{output_ext}" if is_wasm else project_name
         success(f"✅ Build concluído: {paint('./' + output_path, Color.BOLD + Color.SUCCESS)}")
+        
+        # Salva o hash do IR para a próxima vez
+        os.makedirs(".lumina_cache", exist_ok=True)
+        with open(hash_obj_file, "w") as f:
+            f.write(hashlib.md5(llvm_ir.encode()).hexdigest())
+            
         return output_path
     except subprocess.CalledProcessError:
         error("❌ Erro durante a linkagem com o clang.")
@@ -297,7 +320,7 @@ def cmd_build(entry_file=None, extra_flags=[]):
 #  test
 # ============================================================
 def cmd_test(entry_file=None):
-    """Compila o projeto executando automaticamente todas as funções de teste."""
+    """Compila o projeto executando automaticamente todas as funções de teste, com cobertura."""
     if not entry_file:
         if os.path.exists("lumina.toml") and tomllib:
             with open("lumina.toml", "rb") as f:
@@ -315,11 +338,8 @@ def cmd_test(entry_file=None):
 
     step(f"🧪 Iniciando suíte de testes para: {paint(entry_file, Color.BOLD + Color.BRIGHT_CYAN)}")
     
-    # 1. Faz o parse do código para pegarmos a AST
     from .compiler import parse_module
     from lumina.ast import Function, CallExpr, NumberExpr, ReturnStmt
-    from lumina.lexer import Lexer
-    from lumina.parser import Parser
     from lumina.semantic import SemanticAnalyzer
     from lumina.codegen import LLVMCodegen
     from lumina.errors import LuminaError
@@ -329,25 +349,22 @@ def cmd_test(entry_file=None):
     except LuminaError as e:
         error(e); return None
 
-    # 2. Encontra as funções de teste na AST (sem Regex, direto na árvore!)
     test_funcs = [decl for decl in ast if isinstance(decl, Function) and decl.name.startswith("test_")]
     
     if not test_funcs:
         warn("⚠️ Nenhuma função de teste (ex: `test \"nome\":`) encontrada no código.")
         return
 
-    # 3. Substitui o main original por um main que chama todos os testes
     new_ast = [decl for decl in ast if not (isinstance(decl, Function) and decl.name == "main")]
     
+    # NOVO: Chama os testes sequencialmente no main injetado
     test_calls = []
     for func in test_funcs:
         test_calls.append(CallExpr(func.name, []))
         
-    # Cria um novo main: fn main() -> int: chama_teste1() ... return 0
     new_main = Function("main", [], "int", test_calls + [ReturnStmt([NumberExpr("0")])])
     new_ast.append(new_main)
 
-    # 4. Análise Semântica e Geração de Código (sem usar cache)
     try:
         with open(entry_file, "r") as f: source_code = f.read()
         analyzer = SemanticAnalyzer(entry_file, source_code)
@@ -359,25 +376,33 @@ def cmd_test(entry_file=None):
     codegen.escapes = analyzer.escapes
     llvm_ir = codegen.generate_module(new_ast)
 
-    # 5. Compila e executa o binário de teste
     ir_file = "lumina_test_runner.ll"
     binary_name = "lumina_test_bin"
     
     with open(ir_file, "w") as f:
         f.write(llvm_ir)
         
-    gc_flag = "-lgc"
-    cmd = f"clang -O0 {ir_file} -o {binary_name} -lc -lpthread {gc_flag}"
+    # NOVO: Adiciona -fprofile-instr-generate para mapear cobertura de código
+    cmd = f"clang -O0 -fprofile-instr-generate -fcoverage-mapping {ir_file} -o {binary_name} -lc -lpthread -lgc"
     
     try:
         subprocess.run(cmd, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
         header("Executando Testes")
-        result = subprocess.run([f"./{binary_name}"], capture_output=True, text=True)
+        result = subprocess.run([f"./{binary_name}"], capture_output=True, text=True, env={**os.environ, "LLVM_PROFILE_FILE": "lumina_test.profraw"})
         print(result.stdout)
         
         if result.returncode == 0:
             success(f"✅ Todos os {len(test_funcs)} testes passaram!")
+            
+            # Gera o relatório de cobertura no terminal
+            try:
+                subprocess.run(["llvm-profdata", "merge", "-sparse", "lumina_test.profraw", "-o", "lumina_test.profdata"], check=True, capture_output=True)
+                header("📊 Relatório de Cobertura de Código")
+                subprocess.run(["llvm-cov", "show", binary_name, "-instr-profile=lumina_test.profdata"], check=True)
+                subprocess.run(["llvm-cov", "report", binary_name, "-instr-profile=lumina_test.profdata"], check=True)
+            except Exception:
+                warn("⚠️ Ferramentas de cobertura (llvm-cov) não encontradas. Relatório ignorado.")
         else:
             error("❌ Um ou mais testes falharam (Assertion Failed).")
             
@@ -387,6 +412,8 @@ def cmd_test(entry_file=None):
         # Limpa os arquivos temporários
         if os.path.exists(ir_file): os.remove(ir_file)
         if os.path.exists(binary_name): os.remove(binary_name)
+        if os.path.exists("lumina_test.profraw"): os.remove("lumina_test.profraw")
+        if os.path.exists("lumina_test.profdata"): os.remove("lumina_test.profdata")
 
 
 # ============================================================

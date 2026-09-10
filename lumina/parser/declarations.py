@@ -2,6 +2,18 @@ from ..ast import VarDecl, DeferStmt, AssertStmt, BenchStmt, StructDecl, ImplBlo
 from ..lexer import TokenType
 
 class DeclarationsParser:
+    def parse_type_params(self):
+        self.consume() # '<'
+        params = []
+        while True:
+            params.append(self.consume(TokenType.IDENT).value)
+            if self.current_token().type == TokenType.OP and self.current_token().value == ',':
+                self.consume()
+            else:
+                break
+        self.consume(TokenType.OP) # '>'
+        return params
+
     def parse_type(self):
         type_name = self.consume(TokenType.IDENT).value
         if self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == '<':
@@ -32,7 +44,6 @@ class DeclarationsParser:
         # Declaração normal: let x = expr
         var_token = self.consume(TokenType.IDENT)
         var_name = var_token.value
-        # NOVO: Guarda linha e coluna do nome da variável
         var_line, var_col = var_token.line, var_token.col
         var_type = None
         if self.current_token().type == TokenType.OP and self.current_token().value == ':':
@@ -43,7 +54,6 @@ class DeclarationsParser:
             self.consume()
             expr = self.parse_expression()
             
-        # NOVO: Consome o NEWLINE apenas se ele existir (necessário para Lambdas embutidas)
         if self.current_token() and self.current_token().type == TokenType.NEWLINE:
             self.consume(TokenType.NEWLINE)
             
@@ -105,7 +115,6 @@ class DeclarationsParser:
     def parse_impl(self):
         self.consume() # 'impl'
         
-        # NOVO: Lógica para `impl Trait for Struct`
         first_name = self.consume(TokenType.IDENT).value
         trait_name = None
         struct_name = first_name
@@ -144,7 +153,6 @@ class DeclarationsParser:
         return EnumDecl(name, variants)
 
     def parse_function(self):
-        # NOVO: Verifica se tem 'export' antes do 'fn'
         is_exported = False
         if self.current_token() and self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'export':
             self.consume()
@@ -180,7 +188,14 @@ class DeclarationsParser:
         return Function(name, params, return_type, body, type_params, line, col, is_exported)
 
     def parse_extern(self):
-        self.consume(); self.consume(TokenType.KEYWORD)
+        self.consume() # 'extern'
+        
+        is_wasm = False
+        if self.current_token() and self.current_token().type == TokenType.STRING:
+            if self.consume().value == "wasm":
+                is_wasm = True
+                
+        self.consume(TokenType.KEYWORD) # 'fn'
         name = self.consume(TokenType.IDENT).value
         params = []
         self.consume(TokenType.OP)
@@ -196,7 +211,7 @@ class DeclarationsParser:
         if self.current_token().type == TokenType.OP and self.current_token().value == '->':
             self.consume(); return_type = self.consume(TokenType.IDENT).value
         self.consume(TokenType.NEWLINE)
-        return ExternDecl(name, params, return_type)
+        return ExternDecl(name, params, return_type, is_wasm)
 
     def parse_trait(self):
         self.consume()

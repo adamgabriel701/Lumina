@@ -93,3 +93,43 @@ class ControlFlowParser:
                 self.consume(TokenType.DEDENT)
         self.consume(TokenType.DEDENT)
         return MatchStmt(condition, cases, default)
+
+    def parse_switch(self):
+        self.consume() # 'switch'
+        condition = self.parse_expression()
+        self.consume(TokenType.OP) # ':'
+        self.consume(TokenType.NEWLINE)
+        self.consume(TokenType.INDENT)
+        cases, default = [], None
+        
+        while self.current_token() and self.current_token().type != TokenType.DEDENT:
+            if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
+            
+            if self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'case':
+                self.consume()
+                # NOVO: Lê apenas o nome do identificador (ex: Texto, Erro) em vez de uma expressão completa
+                variant_name = self.consume(TokenType.IDENT).value
+                self.consume(TokenType.OP) # ':'
+                self.consume(TokenType.NEWLINE)
+                self.consume(TokenType.INDENT)
+                body = []
+                while self.current_token() and self.current_token().type != TokenType.DEDENT:
+                    if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
+                    body.append(self.parse_statement())
+                self.consume(TokenType.DEDENT)
+                # Reaproveita a struct do MatchStmt, mas com var_name = None
+                cases.append((variant_name, None, body))
+                
+            elif self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'default':
+                self.consume()
+                self.consume(TokenType.OP) # ':'
+                self.consume(TokenType.NEWLINE)
+                self.consume(TokenType.INDENT)
+                default = []
+                while self.current_token() and self.current_token().type != TokenType.DEDENT:
+                    if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
+                    default.append(self.parse_statement())
+                self.consume(TokenType.DEDENT)
+                
+        self.consume(TokenType.DEDENT)
+        return MatchStmt(condition, cases, default)

@@ -35,9 +35,31 @@ class LLVMCodegen(HelpersCodegen, TypesCodegen, AccessCodegen, ExpressionCodegen
         self.deferred_stmts = []
         self.is_tail_return = False
         self.escapes = set()
-        self.global_symbols = {} # NOVO: Dicionário para variáveis globais
-        self.global_types = {}   # NOVO: Dicionário para tipos globais
+        self.global_symbols = {}
+        self.global_types = {}
         self.lambda_counter = 0
+        
+        # NOVO: Estado do Debug Info (DWARF)
+        # Precisa ser definido antes do bloco 'if' abaixo
+        self.is_debug = getattr(self, 'is_debug', False)
+        self.di_cu = None
+        self.di_file = None
+        
+        if self.is_debug:
+            self.module.add_debug_info("Dwarf Version", "4")
+            self.module.add_debug_info("Debug Info Version", "3")
+            self.di_file = self.module.add_debug_info("DIFile", {
+                "filename": "lumina_module.lm",
+                "directory": "/"
+            })
+            self.di_cu = self.module.add_debug_info("DICompileUnit", {
+                "language": ir.DIToken("DW_LANG_C99"),
+                "file": self.di_file,
+                "producer": "Lumina Compiler",
+                "runtimeVersion": 0,
+                "isOptimized": True,
+                "emissionKind": ir.DIToken("FullDebug"),
+            })
 
     def generate_module(self, declarations):
         self.struct_defs = {d.name: d for d in declarations if isinstance(d, StructDecl)}
@@ -57,6 +79,8 @@ class LLVMCodegen(HelpersCodegen, TypesCodegen, AccessCodegen, ExpressionCodegen
     def cleanup_block(self, vars_set): vars_set.clear()
 
     def create_struct(self, node):
+        if node.name in self.struct_types: return  # NOVO: Evita redefinir a mesma struct
+        
         struct_ty = self.module.context.get_identified_type(node.name)
         self.struct_types[node.name] = struct_ty
         field_tys = [self.get_llvm_field_type(t) for t in node.fields.values()]
@@ -64,54 +88,78 @@ class LLVMCodegen(HelpersCodegen, TypesCodegen, AccessCodegen, ExpressionCodegen
         self.struct_fields[node.name] = {name: i for i, name in enumerate(node.fields.keys())}
 
     def create_enum(self, node):
+        if node.name in self.struct_types: return
         enum_ty = self.module.context.get_identified_type(node.name)
-        enum_ty.set_body(self.i32_ty, self.i64_ty)
+        enum_ty.set_body(self.i32_ty, self.i64_ty) # Tag e Payload (sempre i64, cabem int e ptr)
         self.struct_types[node.name] = enum_ty
         for i, (var_name, payload_type) in enumerate(node.variants):
             self.variant_defs[var_name] = (node.name, i, payload_type)
 
     def create_extern(self, node):
+        # Se a função já foi declarada, não duplica
         for func in self.module.functions:
             if func.name == node.name: return
+            
         ret_ty = self.get_llvm_type(node.return_type)
         param_types = [self.get_llvm_param_type(p_type) for _, p_type in node.params]
         func_type = ir.FunctionType(ret_ty, param_types)
         func = ir.Function(self.module, func_type, name=node.name)
+        
+        # NOVO: Se for um import do WASM, adiciona o atributo de import
+        if getattr(node, 'is_wasm', False):
+            # wasm-ld procura por funções externas não definidas no módulo
+            pass # O linker resolve isso automaticamente se passarmos --allow-undefined
+            
         self.functions_table[node.name] = (func, func_type)
 
     def create_global_var(self, node):
         if not hasattr(self, 'global_symbols'): 
             self.global_symbols = {}
             self.global_types = {}
+            
         if isinstance(node.value, CallExpr) and node.value.name in ("alloc", "alloc_bytes"):
-            ptr = ir.GlobalVariable(self.module, self.voidptr_ty, name=node.name)
-            ptr.global_constant = False; ptr.initializer = ir.Constant(self.voidptr_ty, None)
-            self.global_symbols[node.name] = ptr; self.global_types[node.name] = self.voidptr_ty
+            # NOVO: Se for alloc, é um ponteiro de int (i64*). Se for alloc_bytes, é void* (i8*)
+            is_alloc = node.value.name == "alloc"
+            ptr_ty = self.i64_ty.as_pointer() if is_alloc else self.voidptr_ty
+            
+            ptr = ir.GlobalVariable(self.module, ptr_ty, name=node.name)
+            ptr.global_constant = False
+            ptr.initializer = ir.Constant(ptr_ty, None)
+            self.global_symbols[node.name] = ptr
+            self.global_types[node.name] = ptr_ty
+            
             if not hasattr(self, 'global_allocs'): self.global_allocs = []
             self.global_allocs.append(node)
+            
         elif isinstance(node.value, StringExpr):
             ptr = ir.GlobalVariable(self.module, self.voidptr_ty, name=node.name)
-            ptr.global_constant = False; ptr.initializer = ir.Constant(self.voidptr_ty, None)
-            self.global_symbols[node.name] = ptr; self.global_types[node.name] = self.voidptr_ty
+            ptr.global_constant = False
+            ptr.initializer = ir.Constant(self.voidptr_ty, None)
+            self.global_symbols[node.name] = ptr
+            self.global_types[node.name] = self.voidptr_ty
+            
             if not hasattr(self, 'global_allocs'): self.global_allocs = []
             self.global_allocs.append(node)
         else:
             val = self.codegen_expr(node.value) if node.value else ir.Constant(self.i64_ty, 0)
             var_ty = val.type
-            if node.var_type == "float": var_ty = self.f64_ty; val = self.to_float_if_needed(val)
+            if node.var_type == "float": 
+                var_ty = self.f64_ty
+                val = self.to_float_if_needed(val)
             ptr = ir.GlobalVariable(self.module, var_ty, name=node.name)
-            ptr.global_constant = False; ptr.initializer = val
-            self.global_symbols[node.name] = ptr; self.global_types[node.name] = var_ty
+            ptr.global_constant = False
+            ptr.initializer = val
+            self.global_symbols[node.name] = ptr
+            self.global_types[node.name] = var_ty
 
     def create_function(self, func_node: Function):
         if func_node.name == "main":
-            # NOVO: WASI (WebAssembly) exige que main retorne i32 e não receba argumentos
             is_wasm = getattr(self, 'is_wasm', False)
             ret_ty = self.i32_ty if is_wasm else self.i64_ty
             self.current_ret_ty = ret_ty
             
             if is_wasm:
-                param_types = [] # WASM main não tem parâmetros
+                param_types = []
             else:
                 param_types = [self.i32_ty, self.i8_ty.as_pointer().as_pointer()]
                 
@@ -121,17 +169,41 @@ class LLVMCodegen(HelpersCodegen, TypesCodegen, AccessCodegen, ExpressionCodegen
             self.symbol_table = {}; self.var_types = {}
             self.cleanup_vars = [set()]; self.freed_vars = set(); self.deferred_stmts = []
             
+            # NOVO: Debug Info para o main
+            if self.is_debug and self.di_cu:
+                di_sp = self.module.add_debug_info("DISubprogram", {
+                    "name": "main", "linkageName": "main",
+                    "scope": self.di_cu, "file": self.di_file,
+                    "line": func_node.line, "type": None,
+                    "isLocal": False, "isDefinition": True, "scopeLine": func_node.line,
+                    "isOptimized": True, "unit": self.di_cu,
+                })
+                func.set_metadata("dbg", di_sp)
+                self.builder.debug_metadata = di_sp
+
             if hasattr(self, 'global_symbols'):
                 self.symbol_table.update(self.global_symbols); self.var_types.update(self.global_types)
                 
             if not is_wasm:
+                ptr_argc = self.builder.alloca(self.i32_ty, name="argc_ptr")
+                self.builder.store(func.args[0], ptr_argc)
+                self.symbol_table['argc'] = ptr_argc
+                self.var_types['argc'] = self.i32_ty
+                
+                ptr_argv = self.builder.alloca(self.i8_ty.as_pointer().as_pointer(), name="argv_ptr")
+                self.builder.store(func.args[1], ptr_argv)
+                self.symbol_table['argv'] = ptr_argv
+                self.var_types['argv'] = self.i8_ty.as_pointer().as_pointer()
+                
                 if len(func_node.params) >= 1:
-                    p_name = func_node.params[0][0]; ptr = self.builder.alloca(self.i32_ty, name=p_name)
-                    self.builder.store(func.args[0], ptr); self.symbol_table[p_name] = ptr; self.var_types[p_name] = self.i32_ty
+                    p_name = func_node.params[0][0]
+                    self.symbol_table[p_name] = ptr_argc
+                    self.var_types[p_name] = self.i32_ty
                 if len(func_node.params) >= 2:
-                    p_name = func_node.params[1][0]; ptr = self.builder.alloca(self.i8_ty.as_pointer().as_pointer(), name=p_name)
-                    self.builder.store(func.args[1], ptr); self.symbol_table[p_name] = ptr; self.var_types[p_name] = self.i8_ty.as_pointer().as_pointer()
-                    
+                    p_name = func_node.params[1][0]
+                    self.symbol_table[p_name] = ptr_argv
+                    self.var_types[p_name] = self.i8_ty.as_pointer().as_pointer()
+
             if hasattr(self, 'global_allocs'):
                 for node in self.global_allocs:
                     val = self.codegen_expr(node.value); global_ptr = self.symbol_table.get(node.name)
@@ -144,6 +216,19 @@ class LLVMCodegen(HelpersCodegen, TypesCodegen, AccessCodegen, ExpressionCodegen
             block = func.append_basic_block(name="entry"); self.builder = ir.IRBuilder(block)
             self.symbol_table = {}; self.var_types = {}
             self.cleanup_vars = [set()]; self.freed_vars = set(); self.deferred_stmts = []
+            
+            # NOVO: Debug Info para funções normais
+            if self.is_debug and self.di_cu:
+                di_sp = self.module.add_debug_info("DISubprogram", {
+                    "name": func_node.name, "linkageName": func_node.name,
+                    "scope": self.di_cu, "file": self.di_file,
+                    "line": func_node.line, "type": None,
+                    "isLocal": False, "isDefinition": True, "scopeLine": func_node.line,
+                    "isOptimized": True, "unit": self.di_cu,
+                })
+                func.set_metadata("dbg", di_sp)
+                self.builder.debug_metadata = di_sp
+
             if hasattr(self, 'global_symbols'):
                 self.symbol_table.update(self.global_symbols); self.var_types.update(self.global_types)
             for i, param in enumerate(func_node.params):
@@ -153,10 +238,12 @@ class LLVMCodegen(HelpersCodegen, TypesCodegen, AccessCodegen, ExpressionCodegen
                 else:
                     ptr = self.builder.alloca(p_ty, name=p_name); self.builder.store(func.args[i], ptr)
                     self.symbol_table[p_name] = ptr; self.var_types[p_name] = p_ty
+                    
         if func_node.name != "main": func.attributes.add('alwaysinline'); func.attributes.add('nounwind')
         else: func.attributes.add('nounwind')
         self.functions_table[func_node.name] = (func, func_type)
         for stmt in func_node.body: self.codegen_stmt(stmt)
+        
         if not self.builder.block.is_terminated:
             for scope in self.cleanup_vars: self.cleanup_block(scope)
             if ret_ty == ir.VoidType(): self.builder.ret_void()

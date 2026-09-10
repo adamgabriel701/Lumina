@@ -47,5 +47,6 @@ class StatementParser(DeclarationsParser, ControlFlowParser):
         elif token.type == TokenType.KEYWORD and token.value == 'test': return self.parse_test()
         elif token.type == TokenType.KEYWORD and token.value == 'bench': return self.parse_bench()
         elif token.type == TokenType.KEYWORD and token.value == 'trait': return self.parse_trait()
+        elif token.type == TokenType.KEYWORD and token.value == 'switch': return self.parse_switch()
         else:
             expr = self.parse_expression(); self.consume(TokenType.NEWLINE); return expr

@@ -3,6 +3,7 @@ import subprocess
 import sys
 import os
 import shutil
+import glob
 
 def run_cli(*args, cwd=None):
     """Executa o comando `lumina` e retorna o resultado."""
@@ -58,3 +59,13 @@ def test_unknown_command():
     result = run_cli("comando_inexistente")
     assert result.returncode == 0 # Retorna 0 mas imprime a ajuda
     assert "Comando desconhecido" in result.stdout
+
+def test_smoke_tests_examples():
+    """Compila todos os arquivos da pasta examples/ para garantir que nenhum commit quebre o codegen."""
+    examples = glob.glob("examples/*.lm")
+    assert len(examples) > 0, "Nenhum exemplo encontrado"
+    
+    for file in examples:
+        # Usamos cwd="." pois o pyproject.toml roda a partir da raiz
+        result = run_cli("build", file, cwd=".")
+        assert result.returncode == 0, f"Erro ao compilar {file}:\n{result.stderr}"

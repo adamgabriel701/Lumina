@@ -59,3 +59,54 @@ fn ends_with(s: str, suffix: str) -> int:
     if s_end == suffix:
         return 1
     return 0
+
+# Divide uma string por um delimitador e retorna um array de strings (como ptr)
+fn split(s: str, delimiter: str) -> ptr:
+    let length = len(s)
+    let d_len = len(delimiter)
+    mut result = alloc(100)
+    mut res_idx = 0
+    mut i = 0
+    mut current_word = ""
+    
+    while i < length:
+        let c = s[i]
+        
+        # Verifica se o caractere atual é o início do delimitador
+        if c == delimiter[0] and i + d_len <= length:
+            mut is_match = 1
+            mut j = 1
+            while j < d_len:
+                if s[i+j] != delimiter[j]:
+                    is_match = 0
+                    break
+                j += 1
+                
+            if is_match == 1:
+                result[res_idx] = current_word as int
+                res_idx += 1
+                current_word = ""
+                i += d_len
+                continue
+                
+        current_word = current_word + chr(c)
+        i += 1
+        
+    if len(current_word) > 0:
+        result[res_idx] = current_word as int
+        res_idx += 1
+        
+    # Marca o fim do array com 0 (null)
+    result[res_idx] = 0
+    return result
+
+# Junta um array de strings (ponteiros como int) usando um separador
+fn join(arr: ptr, delimiter: str) -> str:
+    mut res = ""
+    mut i = 0
+    while arr[i] != 0:
+        if len(res) > 0:
+            res = res + delimiter
+        res = res + (arr[i] as str)
+        i += 1
+    return res

@@ -64,16 +64,27 @@ class LLVMCodegen(HelpersCodegen, TypesCodegen, AccessCodegen, ExpressionCodegen
     def generate_module(self, declarations):
         self.struct_defs = {d.name: d for d in declarations if isinstance(d, StructDecl)}
         self.function_defs = {d.name: d for d in declarations if isinstance(d, Function)}
+        
         for decl in declarations:
             if isinstance(decl, StructDecl): self.create_struct(decl)
             elif isinstance(decl, EnumDecl): self.create_enum(decl)
+            
         for decl in declarations:
             if isinstance(decl, VarDecl): self.create_global_var(decl)
+            
+        # NOVO: Passada 1 - Cria os protótipos de todas as funções (resolve forward declarations)
         for decl in declarations:
-            if isinstance(decl, Function): self.create_function(decl)
+            if isinstance(decl, Function): self.create_function_prototype(decl)
             elif isinstance(decl, ImplBlock):
-                for method in decl.methods: self.create_function(method)
+                for method in decl.methods: self.create_function_prototype(method)
             elif isinstance(decl, ExternDecl): self.create_extern(decl)
+                
+        # NOVO: Passada 2 - Gera os corpos (IR) de todas as funções
+        for decl in declarations:
+            if isinstance(decl, Function): self.generate_function_body(decl)
+            elif isinstance(decl, ImplBlock):
+                for method in decl.methods: self.generate_function_body(method)
+                
         return str(self.module)
 
     def cleanup_block(self, vars_set): vars_set.clear()
@@ -249,3 +260,90 @@ class LLVMCodegen(HelpersCodegen, TypesCodegen, AccessCodegen, ExpressionCodegen
             if ret_ty == ir.VoidType(): self.builder.ret_void()
             elif isinstance(ret_ty, ir.PointerType): self.builder.ret(ir.Constant(ret_ty, None))
             else: self.builder.ret(ir.Constant(ret_ty, 0))
+
+    def create_function_prototype(self, func_node: Function):
+        if func_node.name == "main":
+            is_wasm = getattr(self, 'is_wasm', False)
+            ret_ty = self.i32_ty if is_wasm else self.i64_ty
+            if is_wasm:
+                param_types = []
+            else:
+                param_types = [self.i32_ty, self.i8_ty.as_pointer().as_pointer()]
+            func_type = ir.FunctionType(ret_ty, param_types)
+            func = ir.Function(self.module, func_type, name="main")
+            self.functions_table[func_node.name] = (func, func_type)
+        else:
+            ret_ty = self.get_llvm_type(func_node.return_type)
+            param_types = [self.get_llvm_param_type(p[1]) for p in func_node.params]
+            func_type = ir.FunctionType(ret_ty, param_types)
+            func = ir.Function(self.module, func_type, name=func_node.name)
+            if func_node.name != "main": 
+                func.attributes.add('alwaysinline')
+                func.attributes.add('nounwind')
+            self.functions_table[func_node.name] = (func, func_type)
+
+    def generate_function_body(self, func_node: Function):
+        func, func_type = self.functions_table[func_node.name]
+        block = func.append_basic_block(name="entry")
+        self.builder = ir.IRBuilder(block)
+        
+        self.current_ret_ty = func_type.return_type
+        self.symbol_table = {}; self.var_types = {}
+        self.cleanup_vars = [set()]; self.freed_vars = set(); self.deferred_stmts = []
+        
+        if self.is_debug and self.di_cu:
+            di_sp = self.module.add_debug_info("DISubprogram", {
+                "name": func_node.name, "linkageName": func_node.name,
+                "scope": self.di_cu, "file": self.di_file,
+                "line": getattr(func_node, 'line', 0), "type": None,
+                "isLocal": False, "isDefinition": True, "scopeLine": getattr(func_node, 'line', 0),
+                "isOptimized": True, "unit": self.di_cu,
+            })
+            func.set_metadata("dbg", di_sp)
+            self.builder.debug_metadata = di_sp
+
+        if hasattr(self, 'global_symbols'):
+            self.symbol_table.update(self.global_symbols); self.var_types.update(self.global_types)
+            
+        if func_node.name == "main":
+            is_wasm = getattr(self, 'is_wasm', False)
+            if not is_wasm:
+                ptr_argc = self.builder.alloca(self.i32_ty, name="argc_ptr")
+                self.builder.store(func.args[0], ptr_argc)
+                self.symbol_table['argc'] = ptr_argc
+                self.var_types['argc'] = self.i32_ty
+                
+                ptr_argv = self.builder.alloca(self.i8_ty.as_pointer().as_pointer(), name="argv_ptr")
+                self.builder.store(func.args[1], ptr_argv)
+                self.symbol_table['argv'] = ptr_argv
+                self.var_types['argv'] = self.i8_ty.as_pointer().as_pointer()
+                
+                if len(func_node.params) >= 1:
+                    p_name = func_node.params[0][0]
+                    self.symbol_table[p_name] = ptr_argc
+                    self.var_types[p_name] = self.i32_ty
+                if len(func_node.params) >= 2:
+                    p_name = func_node.params[1][0]
+                    self.symbol_table[p_name] = ptr_argv
+                    self.var_types[p_name] = self.i8_ty.as_pointer().as_pointer()
+
+            if hasattr(self, 'global_allocs'):
+                for node in self.global_allocs:
+                    val = self.codegen_expr(node.value); global_ptr = self.symbol_table.get(node.name)
+                    if global_ptr: self.builder.store(val, global_ptr)
+        else:
+            for i, param in enumerate(func_node.params):
+                p_name, p_type = param[0], param[1]; p_ty = self.get_llvm_param_type(p_type)
+                if isinstance(p_ty, ir.PointerType) and isinstance(p_ty.pointee, ir.IdentifiedStructType):
+                    self.symbol_table[p_name] = func.args[i]; self.var_types[p_name] = p_ty
+                else:
+                    ptr = self.builder.alloca(p_ty, name=p_name); self.builder.store(func.args[i], ptr)
+                    self.symbol_table[p_name] = ptr; self.var_types[p_name] = p_ty
+                    
+        for stmt in func_node.body: self.codegen_stmt(stmt)
+        
+        if not self.builder.block.is_terminated:
+            for scope in self.cleanup_vars: self.cleanup_block(scope)
+            if self.current_ret_ty == ir.VoidType(): self.builder.ret_void()
+            elif isinstance(self.current_ret_ty, ir.PointerType): self.builder.ret(ir.Constant(self.current_ret_ty, None))
+            else: self.builder.ret(ir.Constant(self.current_ret_ty, 0))

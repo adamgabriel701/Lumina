@@ -37,6 +37,13 @@ class StatementParser(DeclarationsParser, ControlFlowParser):
                 if op != '=': expr = BinaryExpr(op, node, expr)
                 return AssignStmt(node, expr)
             self.consume(TokenType.NEWLINE); return node
+        elif token.type == TokenType.IDENT and self.peek() and self.peek().type == TokenType.OP and self.peek().value == ':=':
+            name = self.consume(TokenType.IDENT).value
+            self.consume(TokenType.OP) # ':='
+            expr = self.parse_expression()
+            self.consume(TokenType.NEWLINE)
+            # NOVO: Cria um VarDecl mutável sem tipo explicito (deixa o semantic inferir)
+            return VarDecl(name, None, expr, True)
         elif token.type == TokenType.KEYWORD and token.value == 'import':
             self.consume(); filename = self.consume(TokenType.STRING).value; self.consume(TokenType.NEWLINE); return ImportStmt(filename)
         elif token.type == TokenType.KEYWORD and token.value == 'extern': return self.parse_extern()

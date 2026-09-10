@@ -107,8 +107,8 @@ class ControlFlowParser:
             
             if self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'case':
                 self.consume()
-                # NOVO: Lê apenas o nome do identificador (ex: Texto, Erro) em vez de uma expressão completa
-                variant_name = self.consume(TokenType.IDENT).value
+                # NOVO: Usa parse_expression() em vez de só IDENT, permitindo inteiros
+                val = self.parse_expression()
                 self.consume(TokenType.OP) # ':'
                 self.consume(TokenType.NEWLINE)
                 self.consume(TokenType.INDENT)
@@ -118,7 +118,7 @@ class ControlFlowParser:
                     body.append(self.parse_statement())
                 self.consume(TokenType.DEDENT)
                 # Reaproveita a struct do MatchStmt, mas com var_name = None
-                cases.append((variant_name, None, body))
+                cases.append((val, None, body))
                 
             elif self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'default':
                 self.consume()

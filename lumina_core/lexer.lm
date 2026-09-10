@@ -1,0 +1,47 @@
+# lumina_core/lexer.lm
+# O primeiro passo para o bootstrapping da Lumina!
+
+# Não precisamos declarar printf, a função 'print' nativa da Lumina faz isso!
+
+fn tokenize(code: str):
+    let length = len(code)
+    mut i = 0
+    
+    while i < length:
+        let c = code[i]
+        
+        # Ignora espaços (ASCII 32) e quebras de linha (ASCII 10)
+        if c == 32 or c == 10:
+            i += 1
+            continue
+            
+        # Identificadores e Palavras-chave (a-z, A-Z, _)
+        elif (c >= 97 and c <= 122) or (c >= 65 and c <= 90) or c == 95:
+            mut word = ""
+            while i < length and ((code[i] >= 97 and code[i] <= 122) or (code[i] >= 65 and code[i] <= 90) or (code[i] >= 48 and code[i] <= 57) or code[i] == 95):
+                word = word + chr(code[i])
+                i += 1
+            print("IDENT:", word)
+            continue
+            
+        # Números (0-9)
+        elif c >= 48 and c <= 57:
+            mut num = ""
+            while i < length and code[i] >= 48 and code[i] <= 57:
+                num = num + chr(code[i])
+                i += 1
+            print("NUMBER:", num)
+            continue
+            
+        # Operadores e Símbolos
+        else:
+            print("OP:", chr(c))
+            i += 1
+
+fn main() -> int:
+    let code = "let x = 42\nfn main(): print(x)"
+    print("--- Código Fonte ---")
+    print(code)
+    print("--- Tokens ---")
+    tokenize(code)
+    return 0

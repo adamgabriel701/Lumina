@@ -3,10 +3,10 @@ import re
 import sys
 import json
 import glob
+import hashlib
 import subprocess
 import ctypes
 import ctypes.util
-import hashlib
 
 from lumina.ast.statements import ImportStmt
 
@@ -280,8 +280,8 @@ def cmd_build(entry_file=None, extra_flags=[]):
         target_flag = "-march=native -funroll-loops"
         output_ext = "" # Binário nativo sem extensão
         
-        # NOVO: Adicionado -lm para linkar a biblioteca matemática do C (libm)
-        cmd = (f"clang -O3 {target_flag} {debug_flag} {ir_file} "
+        # NOVO: Adicionado -flto (Link-Time Optimization) para Dead Code Elimination na std/
+        cmd = (f"clang -O3 -flto {target_flag} {debug_flag} {ir_file} "
                f"-o {project_name} {link_flags} -lc -lm -lpthread {gc_flag}")
 
     hash_obj_file = f".lumina_cache/{project_name}.bin_hash"
@@ -292,7 +292,6 @@ def cmd_build(entry_file=None, extra_flags=[]):
         with open(hash_obj_file, "r") as f:
             old_hash = f.read()
         # Compara o hash do IR atual com o salvo
-        import hashlib
         new_hash = hashlib.md5(llvm_ir.encode()).hexdigest()
         if old_hash == new_hash and not is_wasm and not is_debug:
             success(f"✅ Build incremental: Nenhum código mudou. Pulando linkagem.")
@@ -307,6 +306,12 @@ def cmd_build(entry_file=None, extra_flags=[]):
         
         # Salva o hash do IR para a próxima vez
         os.makedirs(".lumina_cache", exist_ok=True)
+        
+        # NOVO: Garante que a subpasta do cache exista (ex: .lumina_cache/lumina_core/)
+        cache_subdir = os.path.dirname(hash_obj_file)
+        if cache_subdir:
+            os.makedirs(cache_subdir, exist_ok=True)
+            
         with open(hash_obj_file, "w") as f:
             f.write(hashlib.md5(llvm_ir.encode()).hexdigest())
             

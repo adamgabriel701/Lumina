@@ -103,8 +103,15 @@ class StatementCodegen(ControlFlowCodegen):
                 self.var_types[node.name] = self.i64_ty.as_pointer()
                 self.heap_int_arrays.add(node.name)
             else:
-                self.cleanup_vars[-1].add(node.name)
+                # NOVO: Se a variável escapa (ex: retorna da função), aloca no Heap (malloc) para não perder a memória!
+                size_bytes = self.builder.mul(self.codegen_expr(node.value.args[0]), ir.Constant(self.i64_ty, 8), name="size_bytes")
+                heap_ptr = self.builder.call(self.malloc, [size_bytes], name=node.name + "_malloc")
+                ptr = self.builder.bitcast(heap_ptr, self.i64_ty.as_pointer(), name=node.name + "_ptr")
+                
+                self.symbol_table[node.name] = ptr
+                self.var_types[node.name] = self.i64_ty.as_pointer()
                 self.heap_int_arrays.add(node.name)
+                self.cleanup_vars[-1].add(node.name)
 
     def codegen_destructure(self, node):
         val = self.codegen_expr(node.value)
@@ -156,7 +163,11 @@ class StatementCodegen(ControlFlowCodegen):
                 self.builder.store(val, elem_ptr)
         elif isinstance(node.target, MemberExpr):
             obj_ptr = self.resolve_member_ptr(node.target); val = self.codegen_expr(node.value)
-            if isinstance(val.type, ir.PointerType) and isinstance(obj_ptr.type.pointee, ir.PointerType): val = self.builder.bitcast(val, obj_ptr.type.pointee, name="ptr_cast")
+            # NOVO: Se o campo for um ponteiro (ptr) e o valor for um inteiro (ex: 0), converte int para ptr
+            if isinstance(obj_ptr.type.pointee, ir.PointerType) and val.type == self.i64_ty:
+                val = self.builder.inttoptr(val, obj_ptr.type.pointee, name="int_to_ptr_field")
+            elif isinstance(val.type, ir.PointerType) and isinstance(obj_ptr.type.pointee, ir.PointerType): 
+                val = self.builder.bitcast(val, obj_ptr.type.pointee, name="ptr_cast")
             self.builder.store(val, obj_ptr)
         else:
             ptr = self.symbol_table.get(node.target.name)

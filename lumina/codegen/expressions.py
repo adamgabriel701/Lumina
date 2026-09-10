@@ -202,7 +202,7 @@ class ExpressionCodegen:
             elif isinstance(val.type, ir.PointerType) and target_ty == self.i64_ty:
                 return self.builder.ptrtoint(val, self.i64_ty, name="ptr_to_int")
                 
-            # Int -> Ptr
+            # Int -> Ptr (NOVO: Essencial para ler strings de arrays de int)
             elif val.type == self.i64_ty and isinstance(target_ty, ir.PointerType):
                 return self.builder.inttoptr(val, target_ty, name="int_to_ptr")
                 

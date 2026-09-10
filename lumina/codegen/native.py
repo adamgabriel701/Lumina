@@ -22,8 +22,22 @@ class NativeCallCodegen:
             self.builder.call(self.free, [ptr], name="free_call"); return ir.Constant(self.i64_ty, 0)
         elif node.name == "alloc":
             size_bytes = self.builder.mul(self.codegen_expr(node.args[0]), ir.Constant(self.i64_ty, 8), name="size_bytes")
-            return self.builder.bitcast(self.builder.call(self.malloc, [size_bytes], name="malloc_ptr"), self.i64_ty.as_pointer(), name="malloc_ptr_i64")
-        elif node.name == "alloc_bytes": return self.builder.call(self.malloc, [self.codegen_expr(node.args[0])], name="malloc_bytes_ptr")
+            # NOVO: Usa calloc (que zera a memória) em vez de malloc
+            calloc_fn = next((f for f in self.module.functions if f.name == "calloc"), None)
+            if not calloc_fn:
+                calloc_ty = ir.FunctionType(self.voidptr_ty, [self.i64_ty, self.i64_ty])
+                calloc_fn = ir.Function(self.module, calloc_ty, name="calloc")
+            ptr = self.builder.call(calloc_fn, [size_bytes, ir.Constant(self.i64_ty, 1)], name="calloc_ptr")
+            return self.builder.bitcast(ptr, self.i64_ty.as_pointer(), name="alloc_ptr_i64")
+            
+        elif node.name == "alloc_bytes": 
+            # NOVO: Usa calloc aqui também
+            calloc_fn = next((f for f in self.module.functions if f.name == "calloc"), None)
+            if not calloc_fn:
+                calloc_ty = ir.FunctionType(self.voidptr_ty, [self.i64_ty, self.i64_ty])
+                calloc_fn = ir.Function(self.module, calloc_ty, name="calloc")
+            ptr = self.builder.call(calloc_fn, [self.codegen_expr(node.args[0]), ir.Constant(self.i64_ty, 1)], name="calloc_bytes_ptr")
+            return ptr
         elif node.name == "argv": return self.builder.load(self.builder.gep(self.builder.load(self.symbol_table['argv'], name="argv_val"), [self.codegen_expr(node.args[0])], name="arg_ptr_ptr"), name="arg_val")
         elif node.name == "read_file": return self.codegen_read_file(node)
         elif node.name == "write_file":

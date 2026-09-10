@@ -62,7 +62,6 @@ def get_cache_hash(filename):
 
 # --- Módulos do Compilador ---
 def parse_module(filename, current_stack=None):
-    # 1. Detecção de Importações Circulares
     abs_path = os.path.abspath(filename)
     if current_stack is None:
         current_stack = set()
@@ -71,6 +70,21 @@ def parse_module(filename, current_stack=None):
         
     current_stack.add(abs_path)
     
+    resolved_ast = []
+    
+    # NOVO: Injeta o Prelude automaticamente se for o arquivo principal
+    if len(current_stack) == 1:
+        cli_dir = os.path.dirname(os.path.abspath(__file__))
+        prelude_path = os.path.join(cli_dir, "std", "prelude.lm")
+        if os.path.exists(prelude_path):
+            with open(prelude_path, "r") as f:
+                prelude_code = f.read()
+            lexer = Lexer(prelude_code)
+            tokens = lexer.tokenize()
+            parser = Parser(tokens, prelude_path, prelude_code)
+            prelude_ast = parser.parse()
+            resolved_ast.extend(prelude_ast)
+            
     with open(filename, "r") as f:
         code = f.read()
         
@@ -79,31 +93,23 @@ def parse_module(filename, current_stack=None):
     parser = Parser(tokens, filename, code)
     ast = parser.parse()
     
-    resolved_ast = []
     for node in ast:
         if isinstance(node, ImportStmt):
             if node.filename.startswith("std/"):
                 cli_dir = os.path.dirname(os.path.abspath(__file__))
                 clean_name = node.filename.replace("std/", "")
-                if clean_name.endswith(".lm"):
-                    clean_name = clean_name[:-3]
+                if clean_name.endswith(".lm"): clean_name = clean_name[:-3]
                 std_path = os.path.join(cli_dir, "std", clean_name + ".lm")
                 imported_ast = parse_module(std_path, current_stack)
-                
             elif os.path.exists(node.filename if node.filename.endswith(".lm") else node.filename + ".lm"):
                 imported_path = node.filename if node.filename.endswith(".lm") else node.filename + ".lm"
                 imported_ast = parse_module(imported_path, current_stack)
-                
             else:
                 mod_path = os.path.join("lumina_modules", node.filename)
-                if not mod_path.endswith(".lm"):
-                    mod_path += ".lm"
-                    
+                if not mod_path.endswith(".lm"): mod_path += ".lm"
                 if not os.path.exists(mod_path):
-                    raise LuminaError(f"Módulo '{node.filename}' não encontrado localmente, na stdlib ou em lumina_modules/.", filename, 0, 0, code)
-                    
+                    raise LuminaError(f"Módulo '{node.filename}' não encontrado.", filename, 0, 0, code)
                 imported_ast = parse_module(mod_path, current_stack)
-                
             print(f"--> Importando módulo: {node.filename}")
             resolved_ast.extend(imported_ast)
         else:

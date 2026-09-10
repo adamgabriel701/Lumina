@@ -38,7 +38,7 @@ fn main() -> int:
             if client_fd >= 0:
                 recv(client_fd, request_buffer, 1024, 0)
                 
-                # Extrai o path da requisição HTTP
+                # Extrai o path da requisição HTTP (simplificado)
                 mut path = ""
                 mut i = 4 # Pula "GET "
                 while i < 100:
@@ -48,18 +48,12 @@ fn main() -> int:
                     path = path + chr(c)
                     i += 1
                     
-                print("Requisição recebida para:", path)
+                print("Requisição recebida:", path)
                 
                 let res = handle_request(path)
                 
-                # Monta a resposta HTTP
-                let status_str = str(res.status)
-                let body_len = len(res.body)
-                
-                # NOVO: Usa formatação de string para garantir que os cabeçalhos fiquem corretos
-                let http_resp = "HTTP/1.1 " + status_str + " OK\r\nContent-Type: text/plain\r\nContent-Length: " + body_len + "\r\n\r\n" + res.body + "\n"
-                
-                print("Enviando resposta:", http_resp)
+                # NOVO: Usa a função nativa http_response para montar a string
+                let http_resp = http_response(res.status, res.body)
                 
                 send(client_fd, http_resp, len(http_resp), 0)
                 close(client_fd)

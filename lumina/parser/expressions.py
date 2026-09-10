@@ -1,4 +1,4 @@
-from ..ast import NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr, ArrayExpr, IndexExpr, MemberExpr, AddressOfExpr, DerefExpr, TupleExpr, UnaryExpr, PropagateExpr, ComptimeExpr, StructLiteralExpr, MatchExpr, CastExpr
+from ..ast import NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr, ArrayExpr, IndexExpr, MemberExpr, AddressOfExpr, DerefExpr, TupleExpr, UnaryExpr, PropagateExpr, ComptimeExpr, StructLiteralExpr, MatchExpr, CastExpr, LambdaExpr
 from ..lexer import TokenType
 from ..errors import LuminaError
 
@@ -46,6 +46,44 @@ class ExpressionParser:
     def parse_factor(self):
         token = self.current_token()
         
+        # NOVO: Lambda Expressions (funções anônimas)
+        if token.type == TokenType.KEYWORD and token.value == 'fn':
+            self.consume() # 'fn'
+            self.consume(TokenType.OP) # '('
+            params = []
+            if self.current_token().type != TokenType.OP or self.current_token().value != ')':
+                while True:
+                    p_name = self.consume(TokenType.IDENT).value
+                    self.consume(TokenType.OP) # ':'
+                    p_type = self.parse_type()
+                    params.append((p_name, p_type, None))
+                    if self.current_token().type == TokenType.OP and self.current_token().value == ',':
+                        self.consume()
+                    else:
+                        break
+            self.consume(TokenType.OP) # ')'
+            
+            return_type = "void"
+            if self.current_token().type == TokenType.OP and self.current_token().value == '->':
+                self.consume()
+                return_type = self.parse_type()
+                
+            self.consume(TokenType.OP) # ':'
+            
+            # NOVO: Suporta corpo de bloco (multilinha) ou expressão única
+            if self.current_token().type == TokenType.NEWLINE:
+                self.consume(TokenType.NEWLINE)
+                self.consume(TokenType.INDENT)
+                body = []
+                while self.current_token() and self.current_token().type != TokenType.DEDENT:
+                    if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
+                    body.append(self.parse_statement())
+                self.consume(TokenType.DEDENT)
+            else:
+                body = [self.parse_statement()]
+                
+            return LambdaExpr(params, return_type, body)
+        
         # Operadores Unários e Acesso à Memória
         if token.type == TokenType.OP and token.value in ('-', '+'):
             op = self.consume().value
@@ -59,7 +97,6 @@ class ExpressionParser:
         if token.type == TokenType.OP and token.value == '*':
             self.consume()
             node = DerefExpr(self.parse_factor())
-            # Pode haver acesso após derrefência
             return self.parse_postfix(node)
             
         # Booleanos

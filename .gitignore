@@ -49,6 +49,7 @@ __pycache__/
 /string_methods_test
 /struct_lit_test
 /trait_test
+/lambda_test
 /MeuBanco
 
 # Outputs de Bancos de Dados e Logs

@@ -40,6 +40,24 @@ class NativeCallCodegen:
             self.builder.call(self.sprintf, [buf, self.create_global_string("%c"), self.codegen_expr(node.args[0])], name="chr_sprintf")
             return buf
         elif node.name == "print": return self.codegen_print(node)
+        elif node.name == "http_response":
+            status_val = self.codegen_expr(node.args[0])
+            body_val = self.codegen_expr(node.args[1])
+            
+            # Calcula o tamanho do corpo
+            body_len = self.builder.call(self.strlen, [body_val], name="body_len")
+            
+            # Aloca um buffer grande o suficiente (512 bytes)
+            buf_size = ir.Constant(self.i64_ty, 512)
+            buf = self.builder.call(self.malloc, [buf_size], name="http_resp_buf")
+            
+            # Formata a string de resposta HTTP
+            fmt_str = self.create_global_string("HTTP/1.1 %ld OK\r\nContent-Type: text/plain\r\nContent-Length: %ld\r\n\r\n%s\n")
+            
+            # Chama snprintf para montar a string
+            self.builder.call(self.snprintf, [buf, buf_size, fmt_str, status_val, body_len, body_val], name="sprintf_http")
+            
+            return buf
         return None
 
     def codegen_native_method(self, node: CallExpr):

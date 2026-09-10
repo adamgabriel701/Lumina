@@ -76,6 +76,13 @@ class CastExpr:
     expr: any
     target_type: str
 
+# NOVO NÓ PARA LAMBDAS
+@dataclass
+class LambdaExpr:
+    params: List[tuple]
+    return_type: str
+    body: List[any]
+
 # NOVO NÓ PARA MATCH EXPRESSION
 @dataclass
 class MatchExpr:

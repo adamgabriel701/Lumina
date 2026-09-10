@@ -37,6 +37,7 @@ class LLVMCodegen(HelpersCodegen, TypesCodegen, AccessCodegen, ExpressionCodegen
         self.escapes = set()
         self.global_symbols = {} # NOVO: Dicionário para variáveis globais
         self.global_types = {}   # NOVO: Dicionário para tipos globais
+        self.lambda_counter = 0
 
     def generate_module(self, declarations):
         self.struct_defs = {d.name: d for d in declarations if isinstance(d, StructDecl)}

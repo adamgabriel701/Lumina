@@ -15,6 +15,8 @@ class DeclarationsParser:
 
     def parse_let(self):
         is_mutable = (self.consume().value == 'mut')
+        
+        # Destructuring: let (x, y) = expr
         if self.current_token().type == TokenType.OP and self.current_token().value == '(':
             self.consume()
             names = []
@@ -23,17 +25,29 @@ class DeclarationsParser:
                 if self.current_token().type == TokenType.OP and self.current_token().value == ',': self.consume()
                 else: break
             self.consume(TokenType.OP); self.consume(TokenType.OP)
-            expr = self.parse_expression(); self.consume(TokenType.NEWLINE)
+            expr = self.parse_expression()
+            if self.current_token() and self.current_token().type == TokenType.NEWLINE: self.consume()
             return DestructureStmt(names, expr, is_mutable)
-        var_name = self.consume(TokenType.IDENT).value
+            
+        # Declaração normal: let x = expr
+        var_token = self.consume(TokenType.IDENT)
+        var_name = var_token.value
+        # NOVO: Guarda linha e coluna do nome da variável
+        var_line, var_col = var_token.line, var_token.col
         var_type = None
         if self.current_token().type == TokenType.OP and self.current_token().value == ':':
             self.consume(); var_type = self.parse_type()
+            
         expr = None
         if self.current_token().type == TokenType.OP and self.current_token().value == '=':
-            self.consume(); expr = self.parse_expression()
-        self.consume(TokenType.NEWLINE)
-        return VarDecl(var_name, var_type, expr, is_mutable)
+            self.consume()
+            expr = self.parse_expression()
+            
+        # NOVO: Consome o NEWLINE apenas se ele existir (necessário para Lambdas embutidas)
+        if self.current_token() and self.current_token().type == TokenType.NEWLINE:
+            self.consume(TokenType.NEWLINE)
+            
+        return VarDecl(var_name, var_type, expr, is_mutable, var_line, var_col)
 
     def parse_defer(self):
         self.consume()
@@ -130,8 +144,11 @@ class DeclarationsParser:
         return EnumDecl(name, variants)
 
     def parse_function(self):
-        self.consume(TokenType.KEYWORD)
-        name = self.consume(TokenType.IDENT).value
+        fn_token = self.consume(TokenType.KEYWORD) # 'fn'
+        name_token = self.consume(TokenType.IDENT)
+        name = name_token.value
+        # NOVO: Guarda linha e coluna do nome da função
+        line, col = name_token.line, name_token.col
         type_params = self.parse_type_params() if self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == '<' else None
         params = []
         self.consume(TokenType.OP)
@@ -155,7 +172,7 @@ class DeclarationsParser:
             if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
             body.append(self.parse_statement())
         self.consume(TokenType.DEDENT)
-        return Function(name, params, return_type, body, type_params)
+        return Function(name, params, return_type, body, type_params, line, col)
 
     def parse_extern(self):
         self.consume(); self.consume(TokenType.KEYWORD)

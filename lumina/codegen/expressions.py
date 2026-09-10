@@ -1,5 +1,5 @@
 from llvmlite import ir
-from ..ast import NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr, ArrayExpr, IndexExpr, MemberExpr, AddressOfExpr, DerefExpr, TupleExpr, UnaryExpr, PropagateExpr, ComptimeExpr, StructLiteralExpr, MatchExpr, CastExpr
+from ..ast import NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr, ArrayExpr, IndexExpr, MemberExpr, AddressOfExpr, DerefExpr, TupleExpr, UnaryExpr, PropagateExpr, ComptimeExpr, StructLiteralExpr, MatchExpr, CastExpr, LambdaExpr
 
 class ExpressionCodegen:
     def codegen_expr(self, node):
@@ -127,6 +127,55 @@ class ExpressionCodegen:
                 for val, blk in incoming: phi.add_incoming(val, blk)
                 return phi
             
+        # NOVO: Geração de código para LambdaExpr
+        elif isinstance(node, LambdaExpr):
+            # Gera um nome único para a função anônima
+            func_name = f"__lambda_{self.lambda_counter}"
+            self.lambda_counter += 1
+            
+            # Salva o estado atual do builder
+            old_builder = self.builder
+            old_symbol_table = self.symbol_table
+            old_var_types = self.var_types
+            old_ret_ty = getattr(self, 'current_ret_ty', self.i64_ty)
+            
+            # Cria a função no módulo
+            ret_ty = self.get_llvm_type(node.return_type)
+            self.current_ret_ty = ret_ty
+            param_types = [self.get_llvm_param_type(p[1]) for p in node.params]
+            func_type = ir.FunctionType(ret_ty, param_types)
+            func = ir.Function(self.module, func_type, name=func_name)
+            block = func.append_basic_block(name="entry")
+            self.builder = ir.IRBuilder(block)
+            self.symbol_table = {}
+            self.var_types = {}
+            
+            # Mapeia os parâmetros
+            for i, param in enumerate(node.params):
+                p_name, p_type = param[0], param[1]
+                p_ty = self.get_llvm_param_type(p_type)
+                ptr = self.builder.alloca(p_ty, name=p_name)
+                self.builder.store(func.args[i], ptr)
+                self.symbol_table[p_name] = ptr
+                self.var_types[p_name] = p_ty
+                
+            # Gera o corpo da função
+            for stmt in node.body:
+                self.codegen_stmt(stmt)
+            if not self.builder.block.is_terminated:
+                if ret_ty == ir.VoidType(): self.builder.ret_void()
+                else: self.builder.ret(ir.Constant(ret_ty, 0))
+                
+            # Restaura o estado do builder original
+            self.builder = old_builder
+            self.symbol_table = old_symbol_table
+            self.var_types = old_var_types
+            self.current_ret_ty = old_ret_ty
+            
+            # Retorna o ponteiro da função como i8* (voidptr)
+            func_ptr = self.builder.bitcast(func, self.voidptr_ty, name="lambda_ptr")
+            return func_ptr
+
         # NOVO: Geração de código para CastExpr
         elif isinstance(node, CastExpr):
             val = self.codegen_expr(node.expr)
@@ -227,15 +276,29 @@ class ExpressionCodegen:
             elif node.op in ('==', '!=', '<', '>', '<=', '>='): return self.builder.icmp_signed(node.op, left, right, name="cmp_tmp")
 
     def codegen_str_concat(self, left, right):
+        # Se for inteiro, converte para string temporária
         if right.type == self.i64_ty:
             int_buf = self.builder.alloca(ir.ArrayType(self.i8_ty, 32), name="int_buf")
             int_buf_ptr = self.builder.bitcast(int_buf, self.voidptr_ty, name="int_ptr")
             self.builder.call(self.snprintf, [int_buf_ptr, ir.Constant(self.i64_ty, 32), self.create_global_string("%ld"), right], name="int_to_str")
             right = int_buf_ptr
-        if left.type == self.i64_ty and right.type == self.voidptr_ty: left, right = right, left
+        if left.type == self.i64_ty and right.type == self.voidptr_ty:
+            left, right = right, left
+            
         if left.type == self.voidptr_ty and right.type == self.voidptr_ty:
-            buf = self.builder.call(self.malloc, [ir.Constant(self.i64_ty, 256)], name="concat_buf")
-            self.builder.call(self.strcpy, [buf, left], name="copy_left"); self.builder.call(self.strcat, [buf, right], name="cat_right")
+            # NOVO: Calcula o tamanho exato (len1 + len2 + 1)
+            len1 = self.builder.call(self.strlen, [left], name="len1")
+            len2 = self.builder.call(self.strlen, [right], name="len2")
+            sum_len = self.builder.add(len1, len2, name="sum_len")
+            total_len = self.builder.add(sum_len, ir.Constant(self.i64_ty, 1), name="total_len")
+            
+            # Aloca exatamente o tamanho necessário (Heap/GC)
+            buf = self.builder.call(self.malloc, [total_len], name="str_concat_buf")
+            
+            # Copia a string da esquerda
+            self.builder.call(self.strcpy, [buf, left], name="copy_left")
+            # Concatena a string da direita
+            self.builder.call(self.strcat, [buf, right], name="cat_right")
             return buf
 
     def codegen_compound_assign(self, op, left, right):

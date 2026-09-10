@@ -14,12 +14,17 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
         self.source_code = source_code
         self.heap_allocs = set()
         self.escapes = set()
+        self.definition_locations = {} # NOVO: Mapa de nome -> (uri, line, col)
 
     def analyze(self, declarations):
         for decl in declarations:
             if isinstance(decl, (Function, ExternDecl)):
                 self.functions.add(decl.name)
-                if isinstance(decl, Function): self.function_defs[decl.name] = decl
+                if isinstance(decl, Function):
+                    self.function_defs[decl.name] = decl
+                    # NOVO: Registra a localização da função
+                    if hasattr(decl, 'line'):
+                        self.definition_locations[decl.name] = (self.filename, decl.line, decl.col)
             elif isinstance(decl, StructDecl):
                 self.structs.add(decl.name); self.struct_defs[decl.name] = decl
             elif isinstance(decl, EnumDecl):
@@ -41,7 +46,6 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
                         if expected_name not in self.functions:
                             raise LuminaError(f"Struct '{decl.struct_name}' não implementa o método '{trait_method.name}' exigido pelo Trait '{decl.trait_name}'.", self.filename, 0, 0, self.source_code)
                         
-                        # NOVO: Verifica se o tipo de retorno do método implementado bate com o do Trait
                         impl_method = self.function_defs.get(expected_name)
                         if impl_method and impl_method.return_type != trait_method.return_type:
                             raise LuminaError(f"Assinatura incorreta para '{trait_method.name}'. Esperado retorno '{trait_method.return_type}', mas obteve '{impl_method.return_type}'.", self.filename, 0, 0, self.source_code)
@@ -73,11 +77,10 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
         for p_name, p_type, _ in node.params: self.declare_var(p_name, p_type, True)
         for stmt in node.body: self.analyze_stmt(stmt)
 
-    # NOVO: Override para checar exaustividade do Pattern Matching antes de delegar ao StatementAnalyzer
+    # NOVO: Override para checar exaustividade do Pattern Matching e registrar variáveis locais
     def analyze_stmt(self, node):
         if isinstance(node, MatchStmt):
             cond_type = self.analyze_expr(node.condition)
-            # Se a condição for um Enum, checa se todos os casos foram cobertos
             if cond_type in self.struct_defs:
                 struct_def = self.struct_defs[cond_type]
                 if hasattr(struct_def, 'variants'):
@@ -87,5 +90,8 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
                         if not set(all_variants).issubset(set(covered_variants)):
                             raise LuminaError("Match não exaustivo. Faltam variantes ou um ramo 'default'.", self.filename, 0, 0, self.source_code)
                             
-        # Delega o resto da análise (escopos, etc) para a classe pai
         super().analyze_stmt(node)
+
+        # NOVO: Registra localização de variáveis (locais e globais)
+        if isinstance(node, VarDecl) and hasattr(node, 'line'):
+            self.definition_locations[node.name] = (self.filename, node.line, node.col)

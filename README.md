@@ -8,22 +8,24 @@
 
 **Lumina** é uma linguagem de programação de sistemas de propósito geral, focada em alta performance, ergonomia moderna, concorrência e segurança de memória. Ela combina a sintaxe limpa e expressiva baseada em indentação (estilo Python/Nim) com o poder de baixo nível e otimização industrial do backend **LLVM**.
 
-A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums), Generics com **Monomorphization** (`<T>`), Traits, operadores modernos (`|>`, `defer`, `?.`, `?`), Match Expressions, interoperabilidade nativa com C/C++ (FFI), suporte a I/O Assíncrono (`epoll`), um REPL interativo, um Web Playground, compilação incremental, e é **Cross-Platform** (compila para binários nativos x86_64/ARM, WebAssembly e Bare-Metal).
+A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums), Generics com **Monomorphization** (`<T>`), Traits, Standard Prelude (Auto-import), Match Expressions, Closures (Lambdas), operadores modernos (`|>`, `defer`, `?.`, `?`, `as`), interoperabilidade nativa com C/C++ (FFI), suporte a I/O Assíncrono (`epoll`), um REPL interativo, um Web Playground, um LSP com "Go to Definition", compilação incremental, e é **Cross-Platform** (compila para binários nativos x86_64/ARM, WebAssembly e Bare-Metal).
 
 ---
 
 ## ✨ Funcionalidades Principais
 
 * **Sintaxe Limpa & Ergonômica:** Escopo definido por indentação significativa. Sem chaves `{}` ou pontos e vírgulas `;`.
-* **Tipagem Estática com Inferência:** O compilador deduz os tipos automaticamente, incluindo retornos de métodos.
+* **Standard Prelude:** Tipos básicos (`Option`, `Result`) e funções nativas são auto-importados em todos os arquivos.
+* **Tipagem Estática com Inferência:** O compilador deduz os tipos automaticamente, incluindo retornos de métodos e Lambdas.
 * **Generics com Monomorphization:** Suporte a tipos genéricos `<T>` que geram cópias especializadas em tempo de compilação (`Box<int>` vira `Box_int` no LLVM IR), garantindo zero overhead de runtime.
-* **Traits (Interfaces):** Suporte a polimorfismo estático com verificação em tempo de compilação (`impl Trait for Struct`).
-* **Tipos Algébricos (ADTs) & Pattern Matching:** `enum`s com payloads e extração via `match`. `match` também funciona como expressão que retorna valores.
+* **Traits (Interfaces):** Suporte a polimorfismo estático com verificação de assinaturas em tempo de compilação (`impl Trait for Struct`).
+* **Tipos Algébricos (ADTs) & Pattern Matching:** `enum`s com payloads e extração via `match`. `match` também funciona como expressão que retorna valores. O compilador checa a exaustividade dos casos.
+* **Closures (Lambdas):** Funções anônimas inline (`fn(x: int) -> int: x * 2`) que podem ser passadas como argumentos.
 * **Ergonomia Moderna:**
   * **F-strings Nativas:** `$"Usuário {id} logou."`.
   * **Operador Pipe (`|>`):** `5 |> dobrar |> imprimir`.
   * **Navegação Segura (`?.`):** Evita Segmentation Faults ao acessar structs nulas: `usuario?.perfil?.nome`.
-  * **Propagação de Erros (`?`):** Retorna erros automaticamente sem `try/catch`: `let val = abrir_arquivo()?`.
+  * **Propagação de Erros (`?`):** Retorna erros automaticamente: `let val = abrir_arquivo()?`.
   * **Casting Explícito (`as`):** `10 as float`, `ptr as int`.
   * **Struct Literals:** Inicialização inline: `Point { x: 10, y: 20 }`.
   * **Defer & Assert:** Garantia de limpeza de escopo e testes nativos.
@@ -37,7 +39,7 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
   * **Multithreading:** Threads nativas do SO via `pthread_create`.
   * **Green Threads:** Suporte a Corrotinas via troca de contexto de CPU (`ucontext`).
   * **Async I/O:** Event Loop não-bloqueante de baixa latência usando `epoll` do Linux (Validado a **5.8k requisições/segundo**).
-* **Ecossistema Integrado:** CLI (`lumina.toml`), REPL, Web Playground (JIT), Package Manager, Auto-Gerador de Bindings C, Native Benchmarking (`bench`) e Extensão VS Code com **LSP (Autocomplete)**.
+* **Ecossistema Integrado:** CLI (`lumina.toml`), REPL, Web Playground (JIT), Package Manager, Auto-Gerador de Bindings C, Native Benchmarking (`bench`) e Extensão VS Code/Sublime Text com **LSP (Autocomplete, Diagnósticos e Go to Definition)**.
 * **Cross-Platform:** Compila para binários nativos, WebAssembly (`.wasm`) e Bare-Metal (`--no-gc`).
 
 ---
@@ -90,7 +92,7 @@ python3 playground.py
 
 ## 🛠️ Exemplos de Código
 
-### 1. Traits e Struct Literals
+### 1. Traits, Struct Literals e Pattern Matching
 ```lumina
 trait Drawable:
     fn draw()
@@ -112,9 +114,10 @@ fn main() -> int:
     return 0
 ```
 
-### 2. Match Expressions e Operadores
+### 2. Match Expressions, Closures e Standard Prelude
 ```lumina
 fn avaliar(n: int) -> int:
+    # Match retorna um valor diretamente
     return match n {
         1 => 100,
         2 => 200,
@@ -122,9 +125,15 @@ fn avaliar(n: int) -> int:
     }
 
 fn main() -> int:
-    let val = 10
-    let res = avaliar(val) |> (x) -> x + 1
+    # Closure passada como argumento
+    let res = avaliar(2) |> (x) -> x + 1
     print("Resultado:", res)
+    
+    # Option e Result já estão disponíveis via Prelude
+    let opt = Some(42)
+    match opt:
+        case Some(v): print("Option contém:", v)
+        case None: print("Vazio")
     return 0
 ```
 
@@ -141,6 +150,8 @@ fn main() -> int:
 * `std/vector`: Array Dinâmico que cresce automaticamente na memória (Heap).
 * `std/map`: Hash Map (Dicionário) com tratamento de colisões via Linked List.
 * `std/alloc`: Arena Allocator para sistemas Bare-Metal.
+* `std/str`: Funções utilitárias de string (find, substr).
+* `std/json`: Parser de JSON nativo escrito em Lumina.
 * `std/sqlite`: Bindings para banco de dados SQLite.
 * `std/raylib`: Bindings para engine gráfica Raylib.
 
@@ -151,7 +162,7 @@ fn main() -> int:
 ```text
 Lumina/
 ├── lumina_cli.py            # CLI, Build System, REPL, Cache e Package Manager
-├── lumina_lsp.py            # Language Server Protocol (Autocomplete e Diagnóstico)
+├── lumina_lsp.py            # Language Server Protocol (Autocomplete e Go to Definition)
 ├── playground.py            # Web Playground (JIT HTTP Server)
 ├── lumina/                  # Núcleo do Compilador (Lexer, Parser, Semantic, Codegen)
 ├── std/                     # Standard Library (.lm)
@@ -164,14 +175,15 @@ Lumina/
 
 ---
 
-## 🎨 Extensão para o VS Code
+## 🎨 Extensão para o VS Code e Sublime Text
 
-A Lumina oferece suporte a realce de sintaxe, regras de indentação, **Autocomplete** e **Diagnóstico de Erros em tempo real** para o VS Code:
+A Lumina oferece suporte a realce de sintaxe, regras de indentação, **Autocomplete**, **Diagnóstico de Erros em tempo real** e **Go to Definition**:
 
 1. Gere o pacote `.vsix` executando `npx vsce package` na pasta `lumina-vscode`.
 2. No VS Code, abra o painel de Extensões (`Ctrl+Shift+X`).
 3. Clique no menu de três pontos (`...`) no canto superior direito > **Instalar de VSIX...**.
 4. Selecione o arquivo `.vsix` gerado e reinicie a janela.
+5. Para Sublime Text, copie o arquivo `syntaxes/lumina.tmLanguage.json` para a pasta `Packages/Lumina/` e instale o pacote `LSP` da Package Control.
 
 ---
 

@@ -1,4 +1,4 @@
-from ..ast import NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr, ArrayExpr, IndexExpr, MemberExpr, AddressOfExpr, DerefExpr, UnaryExpr, PropagateExpr, ComptimeExpr, StructLiteralExpr, MatchExpr, CastExpr
+from ..ast import NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr, ArrayExpr, IndexExpr, MemberExpr, AddressOfExpr, DerefExpr, UnaryExpr, PropagateExpr, ComptimeExpr, StructLiteralExpr, MatchExpr, CastExpr, LambdaExpr
 from ..errors import LuminaError
 
 class ExpressionAnalyzer:
@@ -35,7 +35,7 @@ class ExpressionAnalyzer:
                     real_method_name = f"{struct_name}_{node.name}"
                     if real_method_name not in self.functions:
                         raise LuminaError(f"Método '{node.name}' não declarado na struct '{struct_name}'.", self.filename, 0, 0, self.source_code)
-            elif node.name not in ("print", "input", "atoi", "len", "alloc", "alloc_bytes", "free", "read_file", "write_file", "int", "float", "str", "argv", "chr") and node.name not in self.functions:
+            elif node.name not in ("print", "input", "atoi", "len", "alloc", "alloc_bytes", "free", "read_file", "write_file", "int", "float", "str", "argv", "chr", "http_response") and node.name not in self.functions:
                 raise LuminaError(f"Função '{node.name}' não declarada.", self.filename, 0, 0, self.source_code)
             for arg in node.args: self.analyze_expr(arg)
         elif isinstance(node, ArrayExpr):
@@ -86,8 +86,17 @@ class ExpressionAnalyzer:
         # NOVO: Validação do CastExpr
         elif isinstance(node, CastExpr):
             self.analyze_expr(node.expr)
-            # Apenas valida se o tipo alvo existe
             if node.target_type not in ("int", "float", "bool", "str", "ptr"):
                 base = node.target_type.split('<')[0]
                 if base not in self.structs:
                     raise LuminaError(f"Tipo de destino '{node.target_type}' não declarado.", self.filename, 0, 0, self.source_code)
+                    
+        # NOVO: Validação do LambdaExpr
+        elif isinstance(node, LambdaExpr):
+            self.push_scope()
+            for p_name, p_type, _ in node.params:
+                self.declare_var(p_name, p_type, True)
+            for stmt in node.body:
+                self.analyze_stmt(stmt)
+            self.pop_scope()
+            

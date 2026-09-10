@@ -3,7 +3,6 @@ import json
 from lumina.lexer import Lexer
 from lumina.parser import Parser
 from lumina.semantic import SemanticAnalyzer
-from lumina.ast import Function, VarDecl, StructDecl, EnumDecl
 from lumina.errors import LuminaError
 
 def read_message():
@@ -24,29 +23,47 @@ def write_message(msg):
     sys.stdout.write(f"Content-Length: {len(body)}\r\n\r\n{body}")
     sys.stdout.flush()
 
+def get_word_at_position(text, line, char):
+    lines = text.split('\n')
+    if line >= len(lines): return ""
+    line_str = lines[line]
+    if char >= len(line_str): return ""
+    
+    start = char
+    while start > 0 and (line_str[start-1].isalnum() or line_str[start-1] == '_'):
+        start -= 1
+    end = char
+    while end < len(line_str) and (line_str[end].isalnum() or line_str[end] == '_'):
+        end += 1
+    return line_str[start:end]
+
 def validate_and_extract_symbols(code):
     diagnostics = []
     symbols = {"functions": [], "vars": []}
+    definitions = {}
     try:
         lexer = Lexer(code)
         tokens = lexer.tokenize()
         parser = Parser(tokens, "lsp.lm", code)
         ast = parser.parse()
         
-        # Extrai símbolos para Autocomplete e Hover
         for decl in ast:
             if isinstance(decl, Function):
                 params_str = ", ".join([f"{p[0]}: {p[1]}" for p in decl.params])
                 symbols["functions"].append({
                     "name": decl.name,
                     "detail": f"fn {decl.name}({params_str}) -> {decl.return_type}",
-                    "line": 0 # Linha simplificada para o LSP
+                    "line": decl.line
                 })
+                definitions[decl.name] = {"line": decl.line - 1, "col": decl.col - 1}
             elif isinstance(decl, VarDecl):
-                symbols["vars"].append({"name": decl.name, "detail": f"{decl.name}: {decl.var_type or 'inferred'}"})
+                symbols["vars"].append({"name": decl.name, "detail": f"{decl.name}: {decl.var_type or 'inferred'}", "line": decl.line})
+                definitions[decl.name] = {"line": decl.line - 1, "col": decl.col - 1}
                 
         analyzer = SemanticAnalyzer("lsp.lm", code)
         analyzer.analyze(ast)
+        definitions.update({k: {"line": v[1] - 1, "col": v[2] - 1} for k, v in analyzer.definition_locations.items()})
+        
     except LuminaError as e:
         diagnostics.append({
             "range": {
@@ -57,77 +74,90 @@ def validate_and_extract_symbols(code):
             "message": e.message
         })
     except Exception as e:
-        pass # Ignora erros de parse incompletos durante a digitação
-    return diagnostics, symbols
+        pass
+    return diagnostics, symbols, definitions
 
-def get_completions(symbols):
-    items = []
-    # Palavras-chave da linguagem
-    keywords = ['fn', 'let', 'mut', 'if', 'elif', 'else', 'while', 'for', 'in', 'return', 'print', 'true', 'false', 'match', 'case', 'default', 'and', 'or', 'not', 'struct', 'enum', 'extern', 'import', 'defer', 'break', 'continue']
-    for kw in keywords:
-        items.append({"label": kw, "kind": 14, "detail": "Lumina Keyword"})
-    
-    # Funções do usuário
-    for func in symbols.get("functions", []):
-        items.append({"label": func["name"], "kind": 3, "detail": func["detail"], "documentation": "Função definida no arquivo"})
-        
-    # Variáveis do usuário
-    for var in symbols.get("vars", []):
-        items.append({"label": var["name"], "kind": 6, "detail": var["detail"]})
-        
-    return items
+class LuminaLSP:
+    def __init__(self):
+        self.latest_text = ""
+        self.latest_definitions = {}
 
-def main():
-    latest_symbols = {"functions": [], "vars": []}
-    while True:
-        msg = read_message()
-        if not msg: break
-        
-        method = msg.get("method")
-        params = msg.get("params", {})
-        msg_id = msg.get("id")
-        
-        if method == "initialize":
-            write_message({
-                "jsonrpc": "2.0", "id": msg_id,
-                "result": {
-                    "capabilities": {
-                        "textDocumentSync": 1,
-                        "completionProvider": {"resolveProvider": False, "triggerCharacters": ["", "."]},
-                        "hoverProvider": True
-                    }
-                }
-            })
-        elif method in ("textDocument/didOpen", "textDocument/didChange"):
-            text = params.get("textDocument", {}).get("text", "")
-            if not text:
-                changes = params.get("contentChanges", [])
-                if changes: text = changes[0].get("text", "")
+    def run(self):
+        while True:
+            msg = read_message()
+            if not msg: break
             
-            diagnostics, latest_symbols = validate_and_extract_symbols(text)
-            write_message({
-                "jsonrpc": "2.0",
-                "method": "textDocument/publishDiagnostics",
-                "params": {
-                    "uri": params.get("textDocument", {}).get("uri", ""),
-                    "diagnostics": diagnostics
-                }
-            })
-        elif method == "textDocument/completion":
-            write_message({
-                "jsonrpc": "2.0", "id": msg_id,
-                "result": {"isIncomplete": False, "items": get_completions(latest_symbols)}
-            })
-        elif method == "textDocument/hover":
-            # Hover simples: se passar o mouse em uma função conhecida, mostra a assinatura
-            word = params.get("position", {}).get("word", "") # Note: VS Code não envia 'word', mas para simplificar o LSP aqui
-            # Como o VS Code não envia a palavra no hover, uma implementação real exigiria mapear a posição.
-            # Vamos deixar um placeholder para provar que o capability está ativo.
-            write_message({"jsonrpc": "2.0", "id": msg_id, "result": {"contents": "Lumina Language Server"}})
-        elif method == "shutdown":
-            write_message({"jsonrpc": "2.0", "id": msg_id, "result": None})
-        elif method == "exit":
-            break
+            method = msg.get("method")
+            params = msg.get("params", {})
+            msg_id = msg.get("id")
+            
+            if method == "initialize":
+                write_message({
+                    "jsonrpc": "2.0", "id": msg_id,
+                    "result": {
+                        "capabilities": {
+                            "textDocumentSync": 1,
+                            "completionProvider": {"resolveProvider": False, "triggerCharacters": ["", "."]},
+                            "hoverProvider": True,
+                            "definitionProvider": True
+                        }
+                    }
+                })
+            elif method in ("textDocument/didOpen", "textDocument/didChange"):
+                text = params.get("textDocument", {}).get("text", "")
+                if not text:
+                    changes = params.get("contentChanges", [])
+                    if changes: text = changes[0].get("text", "")
+                
+                self.latest_text = text
+                diagnostics, symbols, defs = validate_and_extract_symbols(text)
+                self.latest_definitions = defs
+                
+                write_message({
+                    "jsonrpc": "2.0",
+                    "method": "textDocument/publishDiagnostics",
+                    "params": {
+                        "uri": params.get("textDocument", {}).get("uri", ""),
+                        "diagnostics": diagnostics
+                    }
+                })
+            elif method == "textDocument/completion":
+                write_message({
+                    "jsonrpc": "2.0", "id": msg_id,
+                    "result": {"isIncomplete": False, "items": self.get_completions()}
+                })
+            elif method == "textDocument/hover":
+                write_message({"jsonrpc": "2.0", "id": msg_id, "result": {"contents": "Lumina Language Server"}})
+            elif method == "textDocument/definition":
+                pos = params.get("position", {})
+                line = pos.get("line", 0)
+                char = pos.get("character", 0)
+                word = get_word_at_position(self.latest_text, line, char)
+                
+                def_loc = self.latest_definitions.get(word)
+                if def_loc:
+                    result = {
+                        "uri": params.get("textDocument", {}).get("uri", ""),
+                        "range": {
+                            "start": {"line": def_loc["line"], "character": def_loc["col"]},
+                            "end": {"line": def_loc["line"], "character": def_loc["col"] + len(word)}
+                        }
+                    }
+                    write_message({"jsonrpc": "2.0", "id": msg_id, "result": result})
+                else:
+                    write_message({"jsonrpc": "2.0", "id": msg_id, "result": None})
+            elif method == "shutdown":
+                write_message({"jsonrpc": "2.0", "id": msg_id, "result": None})
+            elif method == "exit":
+                break
+
+    def get_completions(self):
+        items = []
+        keywords = ['fn', 'let', 'mut', 'if', 'elif', 'else', 'while', 'for', 'in', 'return', 'print', 'true', 'false', 'match', 'case', 'default', 'and', 'or', 'not', 'struct', 'enum', 'extern', 'import', 'defer', 'break', 'continue', 'assert', 'bench', 'trait', 'comptime', 'as']
+        for kw in keywords:
+            items.append({"label": kw, "kind": 14, "detail": "Lumina Keyword"})
+        return items
 
 if __name__ == "__main__":
-    main()
+    lsp = LuminaLSP()
+    lsp.run()

@@ -7,6 +7,8 @@ class VarDecl:
     var_type: Optional[str]
     value: any
     is_mutable: bool = False
+    line: int = 0
+    col: int = 0
 
 @dataclass
 class AssignStmt:
@@ -55,6 +57,8 @@ class Function:
     return_type: str
     body: List[any]
     type_params: Optional[List[str]] = None
+    line: int = 0
+    col: int = 0
 
 @dataclass
 class ImplBlock:

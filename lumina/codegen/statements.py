@@ -149,8 +149,20 @@ class StatementCodegen(ControlFlowCodegen):
                 for scope in self.cleanup_vars: self.cleanup_block(scope)
                 self.builder.ret_void(); return
         self.is_tail_return = True; val = self.codegen_expr(node.values[0]); self.is_tail_return = False
-        if isinstance(val.type, ir.PointerType) and isinstance(val.type.pointee, ir.IdentifiedStructType): val = self.builder.load(val, name="ret_val")
-        if hasattr(self, 'current_ret_ty') and isinstance(self.current_ret_ty, ir.PointerType) and val.type == self.i64_ty: val = ir.Constant(self.current_ret_ty, None)
+        
+        if isinstance(val.type, ir.PointerType) and isinstance(val.type.pointee, ir.IdentifiedStructType): 
+            val = self.builder.load(val, name="ret_val")
+            
+        if hasattr(self, 'current_ret_ty') and isinstance(self.current_ret_ty, ir.PointerType) and val.type == self.i64_ty: 
+            val = ir.Constant(self.current_ret_ty, None)
+            
+        # NOVO: Se a função espera i32 (ex: WASM) mas o valor é i64, trunca para i32
+        if hasattr(self, 'current_ret_ty') and isinstance(self.current_ret_ty, ir.IntType) and isinstance(val.type, ir.IntType):
+            if val.type.width != self.current_ret_ty.width:
+                val = self.builder.trunc(val, self.current_ret_ty, name="ret_trunc")
+        elif hasattr(self, 'current_ret_ty') and isinstance(self.current_ret_ty, ir.IntType) and isinstance(val.type, ir.PointerType):
+            val = self.builder.ptrtoint(val, self.current_ret_ty, name="ret_ptr_to_int")
+            
         for scope in self.cleanup_vars: self.cleanup_block(scope)
         self.builder.ret(val)
 
@@ -159,12 +171,26 @@ class StatementCodegen(ControlFlowCodegen):
         if cond_val.type != ir.IntType(1): cond_val = self.builder.icmp_signed("!=", cond_val, ir.Constant(self.i64_ty, 0), name="assert_cond")
         then_bb, fail_bb, end_bb = self.builder.append_basic_block(name="assert.pass"), self.builder.append_basic_block(name="assert.fail"), self.builder.append_basic_block(name="assert.end")
         self.builder.cbranch(cond_val, then_bb, fail_bb)
+        
+        # Se a condição for FALSA (assert falhou)
         self.builder.position_at_end(fail_bb)
         self.builder.call(self.printf, [self.create_global_string("Assertion Failed!\n")])
-        exit_fn = self.functions_table.get("exit")
-        if not exit_fn: exit_fn = (ir.Function(self.module, ir.FunctionType(ir.VoidType(), [ir.IntType(32)]), name="exit"), None)
-        self.builder.call(exit_fn[0], [ir.Constant(ir.IntType(32), 1)]); self.builder.unreachable()
-        self.builder.position_at_end(then_bb); self.builder.branch(end_bb)
+        
+        # NOVO: Pega a função exit da tabela, ou cria e registra se não existir
+        exit_func = None
+        if "exit" in self.functions_table:
+            exit_func = self.functions_table["exit"][0]
+        else:
+            exit_ty = ir.FunctionType(ir.VoidType(), [ir.IntType(32)])
+            exit_func = ir.Function(self.module, exit_ty, name="exit")
+            self.functions_table["exit"] = (exit_func, exit_ty)
+            
+        self.builder.call(exit_func, [ir.Constant(ir.IntType(32), 1)])
+        self.builder.unreachable()
+        
+        # Se a condição for VERDADEIRA (assert passou)
+        self.builder.position_at_end(then_bb)
+        self.builder.branch(end_bb)
         self.builder.position_at_end(end_bb)
 
     def codegen_bench(self, node):

@@ -59,6 +59,7 @@ class Function:
     type_params: Optional[List[str]] = None
     line: int = 0
     col: int = 0
+    is_exported: bool = False # NOVO
 
 @dataclass
 class ImplBlock:

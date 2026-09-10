@@ -1,63 +1,27 @@
-# Binários e Arquivos Temporários
-*.ll
-*.o
-*.so
-*.out
-*.wasm
-programa_final
-output.ll
-
-# Caches
-.lumina_cache/
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
 
-# Arquivos de Testes Locais (binários gerados sem extensão)
-/app
-/proxy
-/database
-/search_engine
-/sql_engine
-/coroutines
-/threads
-/vm
-/chip8
-/bits
-/break_test
-/features
-/ffi_test
-/gc_test
-/quicksort
-/test_runner
-/wasm_math
-/async_server
-/error_handling
-/escape_test
-/vector_test
-/bootstrap_lexer
-/bench_test
-/cast_test
-/comptime_test
-/defaults_test
-/destructure_test
-/iterator_test
-/map_test
-/match_expr_test
-/monomorph_test
-/overload_test
-/serve
-/string_methods_test
-/struct_lit_test
-/trait_test
-/lambda_test
-/MeuBanco
+# Lumina Build Artifacts
+*.ll
+*.wasm
+*.o
+.lumina_cache/
+output.ll
 
-# Outputs de Bancos de Dados e Logs
-*.txt
-lumina.wal
-lumina_db.txt
-log.txt
+# Binários nativos gerados (sem extensão)
+/main
+/examples/meu_projeto
+/examples/tco_test
+/examples/wasm_math
+/benchmarks/fib
+/lumina_test_bin
 
-# Node e VS Code
-node_modules/
-*.vsix
+# Dependências baixadas
+lumina_modules/
+
+# Configurações locais
+.vscode/

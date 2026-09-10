@@ -1,5 +1,7 @@
+from pyclbr import Function
 import sys
 import json
+from lumina.ast.statements import VarDecl
 from lumina.lexer import Lexer
 from lumina.parser import Parser
 from lumina.semantic import SemanticAnalyzer
@@ -28,7 +30,6 @@ def get_word_at_position(text, line, char):
     if line >= len(lines): return ""
     line_str = lines[line]
     if char >= len(line_str): return ""
-    
     start = char
     while start > 0 and (line_str[start-1].isalnum() or line_str[start-1] == '_'):
         start -= 1
@@ -73,7 +74,7 @@ def validate_and_extract_symbols(code):
             "severity": 1,
             "message": e.message
         })
-    except Exception as e:
+    except Exception:
         pass
     return diagnostics, symbols, definitions
 
@@ -81,6 +82,7 @@ class LuminaLSP:
     def __init__(self):
         self.latest_text = ""
         self.latest_definitions = {}
+        self.symbols = {"functions": [], "vars": []} # NOVO
 
     def run(self):
         while True:
@@ -112,6 +114,7 @@ class LuminaLSP:
                 self.latest_text = text
                 diagnostics, symbols, defs = validate_and_extract_symbols(text)
                 self.latest_definitions = defs
+                self.symbols = symbols # NOVO: Salva os símbolos
                 
                 write_message({
                     "jsonrpc": "2.0",
@@ -127,7 +130,22 @@ class LuminaLSP:
                     "result": {"isIncomplete": False, "items": self.get_completions()}
                 })
             elif method == "textDocument/hover":
-                write_message({"jsonrpc": "2.0", "id": msg_id, "result": {"contents": "Lumina Language Server"}})
+                pos = params.get("position", {})
+                line = pos.get("line", 0)
+                char = pos.get("character", 0)
+                word = get_word_at_position(self.latest_text, line, char)
+                
+                # NOVO: Procura a palavra nas funções do usuário
+                hover_content = None
+                for func in self.symbols.get("functions", []):
+                    if func["name"] == word:
+                        hover_content = {"language": "lumina", "value": func["detail"]}
+                        break
+                
+                if hover_content:
+                    write_message({"jsonrpc": "2.0", "id": msg_id, "result": {"contents": hover_content}})
+                else:
+                    write_message({"jsonrpc": "2.0", "id": msg_id, "result": None})
             elif method == "textDocument/definition":
                 pos = params.get("position", {})
                 line = pos.get("line", 0)
@@ -156,6 +174,11 @@ class LuminaLSP:
         keywords = ['fn', 'let', 'mut', 'if', 'elif', 'else', 'while', 'for', 'in', 'return', 'print', 'true', 'false', 'match', 'case', 'default', 'and', 'or', 'not', 'struct', 'enum', 'extern', 'import', 'defer', 'break', 'continue', 'assert', 'bench', 'trait', 'comptime', 'as']
         for kw in keywords:
             items.append({"label": kw, "kind": 14, "detail": "Lumina Keyword"})
+            
+        # NOVO: Adiciona funções definidas pelo usuário no autocomplete
+        for func in self.symbols.get("functions", []):
+            items.append({"label": func["name"], "kind": 3, "detail": func["detail"]})
+            
         return items
 
 if __name__ == "__main__":

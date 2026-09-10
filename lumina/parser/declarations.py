@@ -144,10 +144,15 @@ class DeclarationsParser:
         return EnumDecl(name, variants)
 
     def parse_function(self):
+        # NOVO: Verifica se tem 'export' antes do 'fn'
+        is_exported = False
+        if self.current_token() and self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'export':
+            self.consume()
+            is_exported = True
+            
         fn_token = self.consume(TokenType.KEYWORD) # 'fn'
         name_token = self.consume(TokenType.IDENT)
         name = name_token.value
-        # NOVO: Guarda linha e coluna do nome da função
         line, col = name_token.line, name_token.col
         type_params = self.parse_type_params() if self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == '<' else None
         params = []
@@ -172,7 +177,7 @@ class DeclarationsParser:
             if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
             body.append(self.parse_statement())
         self.consume(TokenType.DEDENT)
-        return Function(name, params, return_type, body, type_params, line, col)
+        return Function(name, params, return_type, body, type_params, line, col, is_exported)
 
     def parse_extern(self):
         self.consume(); self.consume(TokenType.KEYWORD)

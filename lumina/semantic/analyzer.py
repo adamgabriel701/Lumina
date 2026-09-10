@@ -14,7 +14,7 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
         self.source_code = source_code
         self.heap_allocs = set()
         self.escapes = set()
-        self.definition_locations = {} # NOVO: Mapa de nome -> (uri, line, col)
+        self.definition_locations = {}
 
     def analyze(self, declarations):
         for decl in declarations:

@@ -105,21 +105,33 @@ class LLVMCodegen(HelpersCodegen, TypesCodegen, AccessCodegen, ExpressionCodegen
 
     def create_function(self, func_node: Function):
         if func_node.name == "main":
-            ret_ty = self.i64_ty; self.current_ret_ty = ret_ty
-            param_types = [self.i32_ty, self.i8_ty.as_pointer().as_pointer()]
+            # NOVO: WASI (WebAssembly) exige que main retorne i32 e não receba argumentos
+            is_wasm = getattr(self, 'is_wasm', False)
+            ret_ty = self.i32_ty if is_wasm else self.i64_ty
+            self.current_ret_ty = ret_ty
+            
+            if is_wasm:
+                param_types = [] # WASM main não tem parâmetros
+            else:
+                param_types = [self.i32_ty, self.i8_ty.as_pointer().as_pointer()]
+                
             func_type = ir.FunctionType(ret_ty, param_types)
             func = ir.Function(self.module, func_type, name="main")
             block = func.append_basic_block(name="entry"); self.builder = ir.IRBuilder(block)
             self.symbol_table = {}; self.var_types = {}
             self.cleanup_vars = [set()]; self.freed_vars = set(); self.deferred_stmts = []
+            
             if hasattr(self, 'global_symbols'):
                 self.symbol_table.update(self.global_symbols); self.var_types.update(self.global_types)
-            if len(func_node.params) >= 1:
-                p_name = func_node.params[0][0]; ptr = self.builder.alloca(self.i32_ty, name=p_name)
-                self.builder.store(func.args[0], ptr); self.symbol_table[p_name] = ptr; self.var_types[p_name] = self.i32_ty
-            if len(func_node.params) >= 2:
-                p_name = func_node.params[1][0]; ptr = self.builder.alloca(self.i8_ty.as_pointer().as_pointer(), name=p_name)
-                self.builder.store(func.args[1], ptr); self.symbol_table[p_name] = ptr; self.var_types[p_name] = self.i8_ty.as_pointer().as_pointer()
+                
+            if not is_wasm:
+                if len(func_node.params) >= 1:
+                    p_name = func_node.params[0][0]; ptr = self.builder.alloca(self.i32_ty, name=p_name)
+                    self.builder.store(func.args[0], ptr); self.symbol_table[p_name] = ptr; self.var_types[p_name] = self.i32_ty
+                if len(func_node.params) >= 2:
+                    p_name = func_node.params[1][0]; ptr = self.builder.alloca(self.i8_ty.as_pointer().as_pointer(), name=p_name)
+                    self.builder.store(func.args[1], ptr); self.symbol_table[p_name] = ptr; self.var_types[p_name] = self.i8_ty.as_pointer().as_pointer()
+                    
             if hasattr(self, 'global_allocs'):
                 for node in self.global_allocs:
                     val = self.codegen_expr(node.value); global_ptr = self.symbol_table.get(node.name)

@@ -1,176 +1,275 @@
-import re
-
-from lumina.errors import LuminaError
-from .tokens import TokenType, Token, KEYWORDS
+from .tokens import Token, TokenType, KEYWORDS
 
 class Lexer:
-    def __init__(self, code):
-        self.code = code
+    def __init__(self, source: str, filename: str = "<string>"):
+        self.source = source.replace('\r\n', '\n').replace('\r', '\n')
+        self.filename = filename
+        self.pos = 0
+        self.line = 1
+        self.col = 1
         self.tokens = []
         self.indent_stack = [0]
+        self.paren_depth = 0
+        self.at_line_start = True
+
+    def error(self, msg):
+        raise SyntaxError(f"{self.filename}: Linha {self.line}, Coluna {self.col}: {msg}")
+
+    def peek(self, offset=0):
+        idx = self.pos + offset
+        if idx < len(self.source):
+            return self.source[idx]
+        return '\0'
+
+    def advance(self):
+        c = self.peek()
+        self.pos += 1
+        if c == '\n':
+            self.line += 1
+            self.col = 1
+        else:
+            self.col += 1
+        return c
+
+    def add_token(self, type: TokenType, value: str, line=None, col=None):
+        self.tokens.append(Token(type, value, line or self.line, col or self.col, self.pos))
 
     def tokenize(self):
-        # Remove comentários multi-linha
-        self.code = re.sub(r'/\*.*?\*/', '', self.code, flags=re.DOTALL)
-        lines = self.code.split('\n')
-        
-        for line_num, line in enumerate(lines, 1):
-            # Remove comentários inline (#) que não estão dentro de strings
-            in_string = False
-            clean_line = ""
-            for c in line:
-                if c == '"': in_string = not in_string
-                if c == '#' and not in_string: break
-                clean_line += c
-            
-            stripped = clean_line.lstrip()
-            if not stripped or stripped.startswith('#'):
-                # Mesmo em linhas vazias, precisamos emitir NEWLINE para o parser não travar
-                if stripped == "":
-                    self.tokens.append(Token(TokenType.NEWLINE, '', line_num, 1, 0))
-                continue
-            
-            indent = len(clean_line) - len(stripped)
-            if indent > self.indent_stack[-1]:
-                self.tokens.append(Token(TokenType.INDENT, '', line_num, indent, 0))
-                self.indent_stack.append(indent)
-            elif indent < self.indent_stack[-1]:
-                while indent < self.indent_stack[-1]:
-                    self.indent_stack.pop()
-                    self.tokens.append(Token(TokenType.DEDENT, '', line_num, indent, 0))
-            
-            i = 0
-            while i < len(stripped):
-                c = stripped[i]
-                col = indent + i + 1
-                
-                if c == ' ':
-                    i += 1
-                    continue
-                    
-                # F-strings (prefixo $)
-                elif c == '$':
-                    self.tokens.append(Token(TokenType.OP, '$', line_num, col, 0))
-                    i += 1
-                    continue
-                    
-                # Strings
-                elif c == '"':
-                    j = i + 1
-                    raw_str = ""
-                    while j < len(stripped) and stripped[j] != '"':
-                        if stripped[j] == '\\' and j + 1 < len(stripped):
-                            next_char = stripped[j+1]
-                            if next_char == 'n':
-                                raw_str += '\n'
-                                j += 2
-                                continue
-                            elif next_char == 'r':
-                                raw_str += '\r'
-                                j += 2
-                                continue
-                            elif next_char == 't':
-                                raw_str += '\t'
-                                j += 2
-                                continue
-                            elif next_char == '\\':
-                                raw_str += '\\'
-                                j += 2
-                                continue
-                            elif next_char == '"':
-                                raw_str += '"'
-                                j += 2
-                                continue
-                        raw_str += stripped[j]
-                        j += 1
-                        
-                    self.tokens.append(Token(TokenType.STRING, raw_str, line_num, col, 0))
-                    i = j + 1
-                    continue
-                    
-                # Números (Hexadecimal e Decimal/Float)
-                elif c.isdigit():
-                    j = i
-                    if c == '0' and j + 1 < len(stripped) and (stripped[j+1] == 'x' or stripped[j+1] == 'X'):
-                        j += 2
-                        while j < len(stripped) and (stripped[j].isdigit() or stripped[j] in 'abcdefABCDEF'): j += 1
-                        self.tokens.append(Token(TokenType.NUMBER, stripped[i:j], line_num, col, 0))
-                        i = j
-                        continue
-                        
-                    while j < len(stripped) and stripped[j].isdigit(): j += 1
-                    if j < len(stripped) and stripped[j] == '.' and j+1 < len(stripped) and stripped[j+1].isdigit():
-                        j += 1
-                        while j < len(stripped) and stripped[j].isdigit(): j += 1
-                    self.tokens.append(Token(TokenType.NUMBER, stripped[i:j], line_num, col, 0))
-                    i = j
-                    continue
-                    
-                # Identificadores e Palavras-Chave
-                elif c.isalpha() or c == '_':
-                    j = i
-                    while j < len(stripped) and (stripped[j].isalnum() or stripped[j] == '_'): j += 1
-                    word = stripped[i:j]
-                    
-                    # Removido o hack do print, agora ele é lido como IDENT normal
-                    token_type = KEYWORDS.get(word, TokenType.IDENT)
-                    self.tokens.append(Token(token_type, word, line_num, col, 0))
-                    i = j
-                    continue
-                    
-                # Operadores de 2 caracteres
-                elif i + 1 < len(stripped) and stripped[i:i+2] in ('==', '!=', '<=', '>=', '->', '..', '+=', '-=', '*=', '/=', '|>', '<<', '>>', '?.', '=>', ':='):
-                    op_map = {
-                        '==': TokenType.EQ, '!=': TokenType.NEQ, '<=': TokenType.LTE, '>=': TokenType.GTE,
-                        '->': TokenType.ARROW, '..': TokenType.DOT, '+=': TokenType.PLUS_ASSIGN, 
-                        '-=': TokenType.MINUS_ASSIGN, '*=': TokenType.STAR_ASSIGN, '/=': TokenType.SLASH_ASSIGN,
-                        '|>': TokenType.PIPE, '<<': TokenType.SHL, '>>': TokenType.SHR, 
-                        '?.': TokenType.DOT, '=>': TokenType.FAT_ARROW, ':=': TokenType.ASSIGN
-                    }
-                    op_str = stripped[i:i+2]
-                    # CORREÇÃO: Em vez de usar TokenType.OP como fallback, disparamos um erro se o operador não for reconhecido
-                    if op_str in op_map:
-                        self.tokens.append(Token(op_map[op_str], op_str, line_num, col, 0))
-                    else:
-                        raise LuminaError(f"Operador desconhecido: '{op_str}'", self.filename if hasattr(self, 'filename') else "lexer", line_num, col, self.code)
-                    i += 2
-                    continue
-                    
-                # Operadores e Pontuação de 1 caractere
-                elif c == '@':
-                    self.tokens.append(Token(TokenType.OP, '@', line_num, col, 0))
-                    i += 1
-                    continue
-                elif c == '?':
-                    self.tokens.append(Token(TokenType.QUESTION, '?', line_num, col, 0))
-                    i += 1
-                    continue
-                    
-                # Mapeamento direto de símbolos simples para seus respectivos Tokens
+        while self.pos < len(self.source):
+            if self.paren_depth > 0:
+                self._skip_whitespace()
+                while self.peek() == '\n':
+                    self.advance()
+            else:
+                if self.at_line_start:
+                    self._handle_indent()
+                    if self.peek() == '\0': break
                 else:
-                    single_ops = {
-                        '+': TokenType.PLUS, '-': TokenType.MINUS, '*': TokenType.STAR, '/': TokenType.SLASH,
-                        '%': TokenType.PERCENT, '!': TokenType.BANG, '&': TokenType.AMP, '|': TokenType.PIPE,
-                        '^': TokenType.CARET, '~': TokenType.TILDE, '=': TokenType.ASSIGN,
-                        '<': TokenType.LT, '>': TokenType.GT, '(': TokenType.LPAREN, ')': TokenType.RPAREN,
-                        '{': TokenType.LBRACE, '}': TokenType.RBRACE, '[': TokenType.LBRACKET, ']': TokenType.RBRACKET,
-                        ',': TokenType.COMMA, '.': TokenType.DOT, ':': TokenType.COLON, ';': TokenType.SEMICOLON,
-                        '@': TokenType.AT
-                    }
-                    
-                    if c in single_ops:
-                        self.tokens.append(Token(single_ops[c], c, line_num, col, 0))
-                        i += 1
+                    self._skip_whitespace()
+                    if self.peek() == '\n':
+                        self.advance()
+                        self.add_token(TokenType.NEWLINE, "\n")
+                        self.at_line_start = True
                         continue
-                    
-                    # Se chegou até aqui, é um caractere ilegal
-                    raise LuminaError(f"Caractere inesperado no código: '{c}'", getattr(self, 'filename', "lexer"), line_num, col, self.code)
+                    elif self.peek() == '\0':
+                        break
+
+            if self.pos >= len(self.source):
+                break
+
+            c = self.peek()
+
+            if c == '#':
+                while self.peek() not in ('\n', '\0'):
+                    self.advance()
+                continue
+
+            if c.isdigit():
+                self._number()
+                self.at_line_start = False
+                continue
+
+            if c == 'f' and self.peek(1) == '"':
+                self.advance()
+                self._string(interpolated=True)
+                self.at_line_start = False
+                continue
+
+            if c == '"':
+                self._string(interpolated=False)
+                self.at_line_start = False
+                continue
+
+            if c.isalpha() or c == '_':
+                start_col = self.col
+                self._identifier(start_col)
+                self.at_line_start = False
+                continue
+
+            self._operator()
+            self.at_line_start = False
+
+        if self.tokens and self.tokens[-1].type != TokenType.NEWLINE:
+            self.add_token(TokenType.NEWLINE, "\n")
             
-            self.tokens.append(Token(TokenType.NEWLINE, '', line_num, indent + 1, 0))
-            
-        while self.indent_stack[-1] > 0:
+        while len(self.indent_stack) > 1:
             self.indent_stack.pop()
-            self.tokens.append(Token(TokenType.DEDENT, '', len(lines), 1, 0))
+            self.add_token(TokenType.DEDENT, "")
             
-        self.tokens.append(Token(TokenType.EOF, '', len(lines), 1, 0))
+        self.add_token(TokenType.EOF, "")
         return self.tokens
+
+    def _skip_whitespace(self):
+        while self.peek() in (' ', '\t'):
+            self.advance()
+
+    def _handle_indent(self):
+        self._skip_whitespace()
+        
+        if self.peek() == '\n':
+            self.advance()
+            self.add_token(TokenType.NEWLINE, "\n")
+            self.at_line_start = True
+            return
+            
+        if self.peek() == '\0':
+            self.at_line_start = False
+            return
+            
+        indent = self.col - 1
+        if indent > self.indent_stack[-1]:
+            self.indent_stack.append(indent)
+            self.add_token(TokenType.INDENT, "")
+        elif indent < self.indent_stack[-1]:
+            while indent < self.indent_stack[-1]:
+                self.indent_stack.pop()
+                self.add_token(TokenType.DEDENT, "")
+                
+        self.at_line_start = False
+
+    def _number(self):
+        num_str = ""
+        is_float = False
+
+        if self.peek() == '0' and self.peek(1) in ('x', 'X'):
+            num_str += self.advance() + self.advance()
+            while self.peek().isalnum():
+                num_str += self.advance()
+            self.add_token(TokenType.NUMBER, num_str)
+            return
+
+        while self.peek().isdigit():
+            num_str += self.advance()
+
+        if self.peek() == '.' and self.peek(1).isdigit():
+            is_float = True
+            num_str += self.advance()
+            while self.peek().isdigit():
+                num_str += self.advance()
+
+        if self.peek() in ('e', 'E'):
+            is_float = True
+            num_str += self.advance()
+            if self.peek() in ('+', '-'):
+                num_str += self.advance()
+            while self.peek().isdigit():
+                num_str += self.advance()
+
+        if is_float:
+            self.add_token(TokenType.FLOAT, num_str)
+        else:
+            self.add_token(TokenType.NUMBER, num_str)
+
+    def _string(self, interpolated=False):
+        self.advance()
+        val = ""
+        if interpolated:
+            while self.peek() != '"' and self.peek() != '\0':
+                if self.peek() == '\\':
+                    val += self.advance()
+                    if self.peek() != '\0': val += self.advance()
+                else:
+                    val += self.advance()
+            if self.peek() == '\0': self.error("String não terminada")
+            self.advance()
+            self.add_token(TokenType.STRING, "f" + '"' + val + '"')
+        else:
+            while self.peek() != '"' and self.peek() != '\0':
+                if self.peek() == '\\':
+                    val += self.advance()
+                    if self.peek() != '\0': val += self.advance()
+                elif self.peek() == '\n':
+                    self.error("String não terminada")
+                else:
+                    val += self.advance()
+            if self.peek() == '\0': self.error("String não terminada")
+            self.advance()
+            self.add_token(TokenType.STRING, val)
+
+    def _identifier(self, start_col):
+        ident = ""
+        while self.peek().isalnum() or self.peek() == '_':
+            ident += self.advance()
+
+        if ident in KEYWORDS:
+            self.add_token(KEYWORDS[ident], ident, self.line, start_col)
+        else:
+            self.add_token(TokenType.IDENT, ident, self.line, start_col)
+
+    def _operator(self):
+        c = self.peek()
+        c2 = self.peek(1)
+
+        if c == '(':
+            self.paren_depth += 1; self.advance(); self.add_token(TokenType.LPAREN, "(")
+        elif c == ')':
+            self.paren_depth -= 1; self.advance(); self.add_token(TokenType.RPAREN, ")")
+        elif c == '[':
+            self.paren_depth += 1; self.advance(); self.add_token(TokenType.LBRACKET, "[")
+        elif c == ']':
+            self.paren_depth -= 1; self.advance(); self.add_token(TokenType.RBRACKET, "]")
+        elif c == '{':
+            self.paren_depth += 1; self.advance(); self.add_token(TokenType.LBRACE, "{")
+        elif c == '}':
+            self.paren_depth -= 1; self.advance(); self.add_token(TokenType.RBRACE, "}")
+        elif c == ',':
+            self.advance(); self.add_token(TokenType.COMMA, ",")
+        elif c == ':':
+            if c2 == ':': self.advance(); self.advance(); self.add_token(TokenType.DOUBLE_COLON, "::")
+            else: self.advance(); self.add_token(TokenType.COLON, ":")
+        elif c == ';':
+            self.advance(); self.add_token(TokenType.SEMICOLON, ";")
+        elif c == '@':
+            self.advance(); self.add_token(TokenType.AT, "@")
+        elif c == '$':
+            self.advance(); self.add_token(TokenType.DOLLAR, "$")
+        elif c == '?':
+            self.advance(); self.add_token(TokenType.QUESTION, "?")
+        elif c == '.':
+            if c2 == '.': self.advance(); self.advance(); self.add_token(TokenType.DOT_DOT, "..")
+            else: self.advance(); self.add_token(TokenType.DOT, ".")
+        elif c == '+':
+            if c2 == '=': self.advance(); self.advance(); self.add_token(TokenType.PLUS_ASSIGN, "+=")
+            else: self.advance(); self.add_token(TokenType.PLUS, "+")
+        elif c == '-':
+            if c2 == '=': self.advance(); self.advance(); self.add_token(TokenType.MINUS_ASSIGN, "-=")
+            elif c2 == '>': self.advance(); self.advance(); self.add_token(TokenType.ARROW, "->")
+            else: self.advance(); self.add_token(TokenType.MINUS, "-")
+        elif c == '*':
+            if c2 == '=': self.advance(); self.advance(); self.add_token(TokenType.STAR_ASSIGN, "*=")
+            else: self.advance(); self.add_token(TokenType.STAR, "*")
+        elif c == '/':
+            if c2 == '=': self.advance(); self.advance(); self.add_token(TokenType.SLASH_ASSIGN, "/=")
+            else: self.advance(); self.add_token(TokenType.SLASH, "/")
+        elif c == '%':
+            self.advance(); self.add_token(TokenType.PERCENT, "%")
+        elif c == '=':
+            if c2 == '=': self.advance(); self.advance(); self.add_token(TokenType.EQ, "==")
+            elif c2 == '>': self.advance(); self.advance(); self.add_token(TokenType.FAT_ARROW, "=>")
+            else: self.advance(); self.add_token(TokenType.ASSIGN, "=")
+        elif c == '!':
+            if c2 == '=': self.advance(); self.advance(); self.add_token(TokenType.NEQ, "!=")
+            else: self.advance(); self.add_token(TokenType.BANG, "!")
+        elif c == '<':
+            if c2 == '=': self.advance(); self.advance(); self.add_token(TokenType.LTE, "<=")
+            elif c2 == '<': self.advance(); self.advance(); self.add_token(TokenType.SHL, "<<")
+            else: self.advance(); self.add_token(TokenType.LT, "<")
+        elif c == '>':
+            if c2 == '=': self.advance(); self.advance(); self.add_token(TokenType.GTE, ">=")
+            elif c2 == '>': self.advance(); self.advance(); self.add_token(TokenType.SHR, ">>")
+            else: self.advance(); self.add_token(TokenType.GT, ">")
+        elif c == '&':
+            if c2 == '=': self.advance(); self.advance(); self.add_token(TokenType.AMP_ASSIGN, "&=")
+            elif c2 == '&': self.advance(); self.advance(); self.add_token(TokenType.AND, "&&")
+            else: self.advance(); self.add_token(TokenType.AMP, "&")
+        elif c == '|':
+            if c2 == '=': self.advance(); self.advance(); self.add_token(TokenType.PIPE_ASSIGN, "|=")
+            elif c2 == '|': self.advance(); self.advance(); self.add_token(TokenType.OR, "||")
+            else: self.advance(); self.add_token(TokenType.PIPE, "|")
+        elif c == '^':
+            if c2 == '=': self.advance(); self.advance(); self.add_token(TokenType.CARET_ASSIGN, "^=")
+            else: self.advance(); self.add_token(TokenType.CARET, "^")
+        elif c == '~':
+            self.advance(); self.add_token(TokenType.TILDE, "~")
+        else:
+            self.error(f"Caractere inesperado: '{c}'")

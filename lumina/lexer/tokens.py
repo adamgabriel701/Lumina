@@ -23,11 +23,11 @@ class TokenType(Enum):
     BREAK = auto()
     CONTINUE = auto()
     DEFER = auto()
-    ERRDEFER = auto()  # <--- ADICIONADO
+    ERRDEFER = auto()
     MATCH = auto()
-    CASE = auto()      # <--- ADICIONADO
-    DEFAULT = auto()   # <--- ADICIONADO
-    SWITCH = auto()    # <--- ADICIONADO
+    CASE = auto()
+    DEFAULT = auto()
+    SWITCH = auto()
     STRUCT = auto()
     IMPL = auto()
     TRAIT = auto()
@@ -43,7 +43,7 @@ class TokenType(Enum):
     TRUE = auto()
     FALSE = auto()
     NONE = auto()
-    NOT = auto()       # <--- ADICIONADO (operador lógico/not)
+    NOT = auto()
     
     # Operadores Aritméticos e Lógicos
     PLUS = auto()
@@ -67,6 +67,9 @@ class TokenType(Enum):
     MINUS_ASSIGN = auto()
     STAR_ASSIGN = auto()
     SLASH_ASSIGN = auto()
+    AMP_ASSIGN = auto()
+    PIPE_ASSIGN = auto()
+    CARET_ASSIGN = auto()
     
     # Operadores de Comparação
     EQ = auto()
@@ -87,6 +90,7 @@ class TokenType(Enum):
     RBRACKET = auto()
     COMMA = auto()
     DOT = auto()
+    DOT_DOT = auto()
     COLON = auto()
     DOUBLE_COLON = auto()
     SEMICOLON = auto()
@@ -94,6 +98,7 @@ class TokenType(Enum):
     FAT_ARROW = auto()
     QUESTION = auto()
     AT = auto()
+    DOLLAR = auto()
     
     # Controle de Escopo
     NEWLINE = auto()
@@ -129,11 +134,11 @@ KEYWORDS: Dict[str, TokenType] = {
     "break": TokenType.BREAK,
     "continue": TokenType.CONTINUE,
     "defer": TokenType.DEFER,
-    "errdefer": TokenType.ERRDEFER, # <--- ADICIONADO
+    "errdefer": TokenType.ERRDEFER,
     "match": TokenType.MATCH,
-    "case": TokenType.CASE,         # <--- ADICIONADO
-    "default": TokenType.DEFAULT,   # <--- ADICIONADO
-    "switch": TokenType.SWITCH,     # <--- ADICIONADO
+    "case": TokenType.CASE,
+    "default": TokenType.DEFAULT,
+    "switch": TokenType.SWITCH,
     "struct": TokenType.STRUCT,
     "impl": TokenType.IMPL,
     "trait": TokenType.TRAIT,
@@ -151,5 +156,5 @@ KEYWORDS: Dict[str, TokenType] = {
     "none": TokenType.NONE,
     "and": TokenType.AND,
     "or": TokenType.OR,
-    "not": TokenType.NOT,           # <--- ADICIONADO
+    "not": TokenType.NOT,
 }

@@ -12,7 +12,6 @@ from ..errors import LuminaError
 
 class LuminaParserMixin:
     
-    # --- HELPERS ---
     def check(self, t_type: TokenType, t_val: str = None) -> bool:
         t = self.current_token()
         if not t: return False
@@ -34,7 +33,6 @@ class LuminaParserMixin:
         found = f"{t.type.name} ('{t.value}')" if t else "EOF"
         raise LuminaError(f"Esperado {expected}, mas encontrei {found}", filename=self.filename, line=t.line if t else 0, col=t.col if t else 0, source_code=self.source_code)
 
-    # --- EXPRESSÕES ---
     def parse_expression(self):
         node = self.parse_logical()
         while self.check(TokenType.PIPE, '|>'):
@@ -54,22 +52,25 @@ class LuminaParserMixin:
     def parse_comparison(self):
         node = self.parse_range()
         ops = [TokenType.EQ, TokenType.NEQ, TokenType.LT, TokenType.GT, TokenType.LTE, TokenType.GTE]
-        while any(self.check(op) for op in ops) or self.check(TokenType.IN):
+        if any(self.check(op) for op in ops) or self.check(TokenType.IN):
             op = self.consume().value
             right = self.parse_range()
-            node = BinaryExpr(op, node, right)
+            if any(self.check(op) for op in ops):
+                next_op = self.consume().value
+                right2 = self.parse_range()
+                left_node = BinaryExpr(op, node, right)
+                right_node = BinaryExpr(next_op, right, right2)
+                node = BinaryExpr('and', left_node, right_node)
+            else:
+                node = BinaryExpr(op, node, right)
         return node
 
     def parse_range(self):
         node = self.parse_additive()
-        while self.check(TokenType.DOT):
+        while self.check(TokenType.DOT_DOT):
             self.consume()
-            if self.check(TokenType.DOT):
-                self.consume()
-                right = self.parse_additive()
-                node = BinaryExpr('..', node, right)
-            else:
-                break
+            right = self.parse_additive()
+            node = BinaryExpr('..', node, right)
         return node
 
     def parse_additive(self):
@@ -91,7 +92,29 @@ class LuminaParserMixin:
     def parse_factor(self):
         token = self.current_token()
         if not token: raise LuminaError("Fim inesperado do código", filename=self.filename, line=0, col=0, source_code=self.source_code)
-        
+        if self.check(TokenType.MATCH): return self.parse_match_expr()
+        if self.check(TokenType.DOLLAR):
+            self.consume()
+            str_token = self.expect(TokenType.STRING)
+            s = str_token.value
+            if '{' not in s: return StringExpr(s)
+            parts, current, i = [], "", 0
+            while i < len(s):
+                if s[i] == '{':
+                    if current: parts.append(StringExpr(current))
+                    current = ""
+                    j = i + 1
+                    var_name = ""
+                    while j < len(s) and s[j] != '}':
+                        var_name += s[j]
+                        j += 1
+                    parts.append(VariableExpr(var_name, token.line, token.col))
+                    i = j + 1
+                else:
+                    current += s[i]
+                    i += 1
+            if current: parts.append(StringExpr(current))
+            return ArrayExpr(parts)
         if self.check(TokenType.FN):
             self.consume()
             self.expect(TokenType.LPAREN)
@@ -106,7 +129,6 @@ class LuminaParserMixin:
             self.expect(TokenType.RPAREN)
             return_type = "void"
             if self.match(TokenType.ARROW): return_type = self.parse_type()
-            
             if self.match(TokenType.FAT_ARROW):
                 body_expr = self.parse_expression()
                 return LambdaExpr(params, return_type, [body_expr])
@@ -121,7 +143,6 @@ class LuminaParserMixin:
                 return LambdaExpr(params, return_type, body)
             else:
                 raise LuminaError("Esperado '=>' ou ':' no corpo do lambda", filename=self.filename, line=token.line, col=token.col, source_code=self.source_code)
-            
         if self.check(TokenType.MINUS) or self.check(TokenType.PLUS):
             op = self.consume().value
             return UnaryExpr(op, self.parse_factor())
@@ -135,11 +156,9 @@ class LuminaParserMixin:
             self.consume()
             node = DerefExpr(self.parse_factor())
             return self.parse_postfix(node)
-            
         if self.check(TokenType.TRUE) or self.check(TokenType.FALSE):
             val = self.consume().value
             return BoolExpr(val == 'true')
-            
         if self.match(TokenType.LBRACKET):
             elements = []
             if not self.check(TokenType.RBRACKET):
@@ -148,23 +167,17 @@ class LuminaParserMixin:
                     if not self.match(TokenType.COMMA): break
             self.expect(TokenType.RBRACKET)
             return ArrayExpr(elements)
-            
-        if self.check(TokenType.NUMBER):
+        if self.check(TokenType.NUMBER) or self.check(TokenType.FLOAT):
             self.consume()
             is_float = '.' in token.value
             return NumberExpr(token.value, is_float)
-            
-        # NOVO: Lida com literais de String diretamente
         if self.check(TokenType.STRING):
             str_token = self.consume()
             return StringExpr(str_token.value)
-            
         if self.check(TokenType.IDENT):
             name = self.consume().value
-            
-            # Struct Literal (ex: Point { x: 10, y: 20 })
             if not getattr(self, 'no_struct_literal', False) and self.check(TokenType.LBRACE):
-                self.consume() # '{'
+                self.consume()
                 fields = []
                 while not self.check(TokenType.RBRACE):
                     if self.match(TokenType.NEWLINE) or self.match(TokenType.INDENT) or self.match(TokenType.DEDENT): continue
@@ -175,31 +188,55 @@ class LuminaParserMixin:
                     if not self.match(TokenType.COMMA): break
                 self.expect(TokenType.RBRACE)
                 return StructLiteralExpr(name, fields)
-                
-            # Chamada de Função (ex: soma(1, 2) ou print("Hello"))
             if self.check(TokenType.LPAREN):
-                self.consume() # '('
+                self.consume()
                 args = []
                 if not self.check(TokenType.RPAREN):
                     while True:
                         args.append(self.parse_expression())
                         if not self.match(TokenType.COMMA): break
                 self.expect(TokenType.RPAREN)
-                # CORREÇÃO: Cria um VariableExpr para o callee
                 callee_node = VariableExpr(name, token.line, token.col)
                 node = CallExpr(callee_node, args)
             else:
                 node = VariableExpr(name, token.line, token.col)
-                
             return self.parse_postfix(node)
-            
-        # NOVO: Lida com expressões entre parênteses, como (1 + 2) ou ("string")
         if self.match(TokenType.LPAREN):
             node = self.parse_expression()
             self.expect(TokenType.RPAREN)
             return self.parse_postfix(node)
-            
         raise LuminaError(f"Token inesperado {token.type.name} ('{token.value}')", filename=self.filename, line=token.line, col=token.col, source_code=self.source_code)
+
+    def parse_match_expr(self):
+        self.consume(TokenType.MATCH)
+        self.no_struct_literal = True
+        cond = self.parse_expression()
+        self.no_struct_literal = False
+        if self.check(TokenType.COLON):
+            self.consume()
+            self.expect(TokenType.NEWLINE)
+            while self.check(TokenType.NEWLINE): self.consume()
+            self.expect(TokenType.INDENT)
+        else:
+            self.expect(TokenType.LBRACE)
+        cases = []
+        default = None
+        while not self.check(TokenType.DEDENT) and not self.check(TokenType.RBRACE) and not self.check(TokenType.EOF):
+            if self.match(TokenType.NEWLINE): continue
+            if self.check(TokenType.ELSE):
+                self.consume()
+                self.expect(TokenType.FAT_ARROW)
+                default = self.parse_expression()
+                self.match(TokenType.COMMA)
+            else:
+                val = self.parse_expression()
+                self.expect(TokenType.FAT_ARROW)
+                res = self.parse_expression()
+                cases.append((val, res))
+                self.match(TokenType.COMMA)
+        if self.check(TokenType.DEDENT): self.consume(TokenType.DEDENT)
+        elif self.check(TokenType.RBRACE): self.consume(TokenType.RBRACE)
+        return MatchExpr(cond, cases, default)
 
     def parse_postfix(self, node):
         while True:
@@ -212,36 +249,31 @@ class LuminaParserMixin:
                 member_name = self.expect(TokenType.IDENT).value
                 if self.check(TokenType.LPAREN):
                     self.consume()
+                    member_node = MemberExpr(node, member_name, is_safe=False)
                     args = [node]
                     if not self.check(TokenType.RPAREN):
                         while True:
                             args.append(self.parse_expression())
                             if not self.match(TokenType.COMMA): break
                     self.expect(TokenType.RPAREN)
-                    node = CallExpr(member_name, args, is_method=True)
+                    node = CallExpr(member_node, args, is_method=True)
                 else:
                     node = MemberExpr(node, member_name, is_safe=False)
             else:
                 break
-            
-        if self.match(TokenType.QUESTION):
-            node = PropagateExpr(node)
-            
+        if self.match(TokenType.QUESTION): node = PropagateExpr(node)
         if self.check(TokenType.AS):
             self.consume()
             target_type = self.expect(TokenType.IDENT).value
             node = CastExpr(node, target_type)
-            
         return node
 
-    # --- DECLARAÇÕES E STATEMENTS ---
     def parse_type(self):
         type_name = self.expect(TokenType.IDENT).value
         if self.check(TokenType.LT):
             self.consume()
             args = [self.parse_type()]
-            while self.match(TokenType.COMMA):
-                args.append(self.parse_type())
+            while self.match(TokenType.COMMA): args.append(self.parse_type())
             self.expect(TokenType.GT)
             type_name = type_name + "<" + ",".join(args) + ">"
         return type_name
@@ -257,7 +289,12 @@ class LuminaParserMixin:
         return params
 
     def parse_let(self):
-        is_mutable = self.match(TokenType.MUT)
+        if self.check(TokenType.MUT):
+            is_mutable = True
+            self.consume()
+        else:
+            is_mutable = False
+            self.expect(TokenType.LET)
         if self.check(TokenType.LPAREN):
             self.consume()
             names = []
@@ -270,13 +307,11 @@ class LuminaParserMixin:
             expr = self.parse_expression()
             self.match(TokenType.NEWLINE)
             return DestructureStmt(names, expr, is_mutable)
-            
         var_token = self.expect(TokenType.IDENT)
         var_name = var_token.value
         var_line, var_col = var_token.line, var_token.col
         var_type = None
         if self.match(TokenType.COLON): var_type = self.parse_type()
-        
         expr = None
         if self.match(TokenType.ASSIGN): expr = self.parse_expression()
         self.match(TokenType.NEWLINE)
@@ -287,8 +322,7 @@ class LuminaParserMixin:
         values = []
         if not self.check(TokenType.NEWLINE) and not self.check(TokenType.DEDENT):
             values.append(self.parse_expression())
-            while self.match(TokenType.COMMA):
-                values.append(self.parse_expression())
+            while self.match(TokenType.COMMA): values.append(self.parse_expression())
         self.match(TokenType.NEWLINE)
         return ReturnStmt(values)
 
@@ -297,13 +331,13 @@ class LuminaParserMixin:
         condition = self.parse_expression()
         self.expect(TokenType.COLON)
         self.expect(TokenType.NEWLINE)
+        while self.check(TokenType.NEWLINE): self.consume()
         self.expect(TokenType.INDENT)
         then_body = []
-        while not self.check(TokenType.DEDENT):
+        while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
             if self.match(TokenType.NEWLINE): continue
             then_body.append(self.parse_statement())
         self.expect(TokenType.DEDENT)
-        
         else_body = None
         if self.check(TokenType.ELSE) or self.check(TokenType.ELIF):
             self.consume()
@@ -312,9 +346,10 @@ class LuminaParserMixin:
             else:
                 self.expect(TokenType.COLON)
                 self.expect(TokenType.NEWLINE)
+                while self.check(TokenType.NEWLINE): self.consume()
                 self.expect(TokenType.INDENT)
                 else_body = []
-                while not self.check(TokenType.DEDENT):
+                while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
                     if self.match(TokenType.NEWLINE): continue
                     else_body.append(self.parse_statement())
                 self.expect(TokenType.DEDENT)
@@ -325,9 +360,10 @@ class LuminaParserMixin:
         condition = self.parse_expression()
         self.expect(TokenType.COLON)
         self.expect(TokenType.NEWLINE)
+        while self.check(TokenType.NEWLINE): self.consume()
         self.expect(TokenType.INDENT)
         body = []
-        while not self.check(TokenType.DEDENT):
+        while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
             if self.match(TokenType.NEWLINE): continue
             body.append(self.parse_statement())
         self.expect(TokenType.DEDENT)
@@ -340,23 +376,19 @@ class LuminaParserMixin:
         start = None
         end = None
         iterable = None
-        first_expr = self.parse_expression()
-        if self.check(TokenType.DOT):
+        first_expr = self.parse_additive()
+        if self.check(TokenType.DOT_DOT):
             self.consume()
-            if self.check(TokenType.DOT):
-                self.consume()
-                start = first_expr
-                end = self.parse_expression()
-            else:
-                iterable = first_expr
+            start = first_expr
+            end = self.parse_additive()
         else:
             iterable = first_expr
-            
         self.expect(TokenType.COLON)
         self.expect(TokenType.NEWLINE)
+        while self.check(TokenType.NEWLINE): self.consume()
         self.expect(TokenType.INDENT)
         body = []
-        while not self.check(TokenType.DEDENT):
+        while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
             if self.match(TokenType.NEWLINE): continue
             body.append(self.parse_statement())
         self.expect(TokenType.DEDENT)
@@ -365,7 +397,9 @@ class LuminaParserMixin:
     def parse_statement(self):
         token = self.current_token()
         if not token: return None
-        
+        if token.type == TokenType.NEWLINE:
+            self.consume()
+            return self.parse_statement()
         if token.type == TokenType.LET or token.type == TokenType.MUT: return self.parse_let()
         elif token.type == TokenType.RETURN: return self.parse_return()
         elif token.type == TokenType.IF: return self.parse_if()
@@ -422,9 +456,10 @@ class LuminaParserMixin:
         self.consume(TokenType.DEFER)
         if self.match(TokenType.COLON):
             self.expect(TokenType.NEWLINE)
+            while self.check(TokenType.NEWLINE): self.consume()
             self.expect(TokenType.INDENT)
             body = []
-            while not self.check(TokenType.DEDENT):
+            while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
                 if self.match(TokenType.NEWLINE): continue
                 body.append(self.parse_statement())
             self.expect(TokenType.DEDENT)
@@ -446,9 +481,10 @@ class LuminaParserMixin:
         test_name = self.expect(TokenType.STRING).value
         self.expect(TokenType.COLON)
         self.expect(TokenType.NEWLINE)
+        while self.check(TokenType.NEWLINE): self.consume()
         self.expect(TokenType.INDENT)
         body = []
-        while not self.check(TokenType.DEDENT):
+        while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
             if self.match(TokenType.NEWLINE): continue
             body.append(self.parse_statement())
         self.expect(TokenType.DEDENT)
@@ -459,9 +495,10 @@ class LuminaParserMixin:
         bench_name = self.expect(TokenType.STRING).value
         self.expect(TokenType.COLON)
         self.expect(TokenType.NEWLINE)
+        while self.check(TokenType.NEWLINE): self.consume()
         self.expect(TokenType.INDENT)
         body = []
-        while not self.check(TokenType.DEDENT):
+        while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
             if self.match(TokenType.NEWLINE): continue
             body.append(self.parse_statement())
         self.expect(TokenType.DEDENT)
@@ -473,16 +510,17 @@ class LuminaParserMixin:
         type_params = self.parse_type_params() if self.check(TokenType.LT) else None
         self.expect(TokenType.COLON)
         self.expect(TokenType.NEWLINE)
+        while self.check(TokenType.NEWLINE): self.consume()
         self.expect(TokenType.INDENT)
         fields = {}
-        while not self.check(TokenType.DEDENT):
+        while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
             if self.match(TokenType.NEWLINE): continue
             fn = self.expect(TokenType.IDENT).value
             self.expect(TokenType.COLON)
             ft = self.expect(TokenType.IDENT).value
             fields[fn] = ft
             self.match(TokenType.NEWLINE)
-        self.expect(TokenType.DEDENT)
+        self.match(TokenType.DEDENT)
         return StructDecl(name, fields, type_params)
 
     def parse_enum(self):
@@ -490,10 +528,12 @@ class LuminaParserMixin:
         name = self.expect(TokenType.IDENT).value
         self.expect(TokenType.COLON)
         self.expect(TokenType.NEWLINE)
+        while self.check(TokenType.NEWLINE): self.consume()
         self.expect(TokenType.INDENT)
         variants = []
-        while not self.check(TokenType.DEDENT):
+        while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
             if self.match(TokenType.NEWLINE): continue
+            if self.check(TokenType.ENUM) or self.check(TokenType.STRUCT) or self.check(TokenType.FN): break
             vn = self.expect(TokenType.IDENT).value
             pt = None
             if self.check(TokenType.LPAREN):
@@ -502,7 +542,7 @@ class LuminaParserMixin:
                 self.expect(TokenType.RPAREN)
             variants.append((vn, pt))
             self.match(TokenType.NEWLINE)
-        self.expect(TokenType.DEDENT)
+        self.match(TokenType.DEDENT)
         return EnumDecl(name, variants)
 
     def parse_trait(self):
@@ -510,9 +550,10 @@ class LuminaParserMixin:
         name = self.expect(TokenType.IDENT).value
         self.expect(TokenType.COLON)
         self.expect(TokenType.NEWLINE)
+        while self.check(TokenType.NEWLINE): self.consume()
         self.expect(TokenType.INDENT)
         methods = []
-        while not self.check(TokenType.DEDENT):
+        while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
             if self.match(TokenType.NEWLINE): continue
             if self.check(TokenType.FN):
                 self.consume()
@@ -534,8 +575,9 @@ class LuminaParserMixin:
                 if self.check(TokenType.COLON):
                     self.consume()
                     self.expect(TokenType.NEWLINE)
+                    while self.check(TokenType.NEWLINE): self.consume()
                     self.expect(TokenType.INDENT)
-                    while not self.check(TokenType.DEDENT):
+                    while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
                         if self.match(TokenType.NEWLINE): continue
                         body.append(self.parse_statement())
                     self.expect(TokenType.DEDENT)
@@ -550,17 +592,16 @@ class LuminaParserMixin:
         first_name = self.expect(TokenType.IDENT).value
         trait_name = None
         struct_name = first_name
-        
-        if self.check(TokenType.FOR): # <--- CORRIGIDO
+        if self.check(TokenType.FOR):
             trait_name = first_name
             self.consume()
             struct_name = self.expect(TokenType.IDENT).value
-            
         self.expect(TokenType.COLON)
         self.expect(TokenType.NEWLINE)
+        while self.check(TokenType.NEWLINE): self.consume()
         self.expect(TokenType.INDENT)
         methods = []
-        while not self.check(TokenType.DEDENT):
+        while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
             if self.match(TokenType.NEWLINE): continue
             if self.check(TokenType.FN):
                 func = self.parse_function()
@@ -576,13 +617,11 @@ class LuminaParserMixin:
             attr_name = self.expect(TokenType.IDENT).value
             attrs.append(attr_name)
         is_exported = 'export' in attrs
-        
         self.expect(TokenType.FN)
         name_token = self.expect(TokenType.IDENT)
         name = name_token.value
         line, col = name_token.line, name_token.col
         type_params = self.parse_type_params() if self.check(TokenType.LT) else None
-        
         self.expect(TokenType.LPAREN)
         params = []
         if not self.check(TokenType.RPAREN):
@@ -596,15 +635,14 @@ class LuminaParserMixin:
                 if self.match(TokenType.COMMA): continue
                 else: break
         self.expect(TokenType.RPAREN)
-        
         return_type = "void"
         if self.match(TokenType.ARROW): return_type = self.parse_type()
-            
         self.expect(TokenType.COLON)
         self.expect(TokenType.NEWLINE)
+        while self.check(TokenType.NEWLINE): self.consume()
         self.expect(TokenType.INDENT)
         body = []
-        while not self.check(TokenType.DEDENT):
+        while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
             if self.match(TokenType.NEWLINE): continue
             body.append(self.parse_statement())
         self.expect(TokenType.DEDENT)

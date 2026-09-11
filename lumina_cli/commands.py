@@ -244,7 +244,8 @@ def cmd_build(entry_file=None, extra_flags=[]):
         gc_flag = "-lgc" if not is_no_gc else ""
         if is_no_gc: warn("⚠️ Modo Bare-Metal (--no-gc): Garbage Collector desativado.")
         
-        cmd_args = ["clang", "-O3", "-march=native", "-funroll-loops", debug_flag, ir_file, "-o", project_name, "-lc", "-lm", "-lpthread"]
+        # -O0 desabilita as otimizações para evitar o Segfault do LLVM 18 com loops/match
+        cmd_args = ["clang", "-O0", debug_flag, ir_file, "-o", project_name, "-lc", "-lm", "-lpthread"]
         if gc_flag: cmd_args.append(gc_flag)
         for lib in libs: cmd_args.append(f"-l{lib}")
         cmd_args.extend(linker_extra_flags)
@@ -379,15 +380,16 @@ def cmd_clean():
         subprocess.run(["rm", "-rf", ".lumina_cache"])
         success("✅ Cache (.lumina_cache) removido.")
 
+    # Apaga artefatos LLVM e WASM
     for ext in ["*.ll", "*.wasm"]:
         for f in glob.glob(ext):
             os.remove(f)
             success(f"✅ Removido: {paint(f, Color.MUTED)}")
 
-    # NOVO: Whitelist de arquivos que não devem ser apagados
-    protected_files = {"Makefile", "LICENSE", "Dockerfile", "CMakeLists.txt"}
+    # MELHORIA: Blacklist de binários conhecidos em vez de Whitelist (para não apagar arquivos do usuário)
+    known_outputs = {"programa_final", "lumina_test_bin", "output", "lumina_jit_temp"}
     for f in os.listdir("."):
-        if os.path.isfile(f) and "." not in f and not f.startswith(".") and f not in protected_files:
+        if f in known_outputs and os.path.isfile(f):
             os.remove(f)
             success(f"✅ Removido binário: {paint(f, Color.MUTED)}")
 

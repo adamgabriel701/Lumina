@@ -24,7 +24,7 @@ class Parser(LuminaParserMixin):
             return token
         if token:
             raise LuminaError(
-                f"Esperado {expected_type}, mas encontrei {token.type} ('{token.value}')", 
+                f"Esperado {expected_type.name if expected_type else 'token'}, mas encontrei {token.type.name} ('{token.value}')", 
                 filename=self.filename, line=token.line, col=token.col, source_code=self.source_code
             )
         raise LuminaError("Fim inesperado do código", filename=self.filename, line=0, col=0, source_code=self.source_code)
@@ -36,25 +36,37 @@ class Parser(LuminaParserMixin):
                 self.consume()
                 continue
                 
-            if self.check(TokenType.FN) or self.check(TokenType.EXPORT):
-                declarations.append(self.parse_function())
+            is_export = False
+            if self.check(TokenType.EXPORT):
+                is_export = True
+                self.consume()
+                
+            decl = None
+            if self.check(TokenType.FN):
+                decl = self.parse_function()
             elif self.check(TokenType.STRUCT):
-                declarations.append(self.parse_struct())
+                decl = self.parse_struct()
             elif self.check(TokenType.ENUM):
-                declarations.append(self.parse_enum())
+                decl = self.parse_enum()
             elif self.check(TokenType.IMPL):
-                declarations.append(self.parse_impl())
+                decl = self.parse_impl()
             elif self.check(TokenType.TRAIT):
-                declarations.append(self.parse_trait())
+                decl = self.parse_trait()
             elif self.check(TokenType.LET) or self.check(TokenType.MUT) or \
+                 self.check(TokenType.CONST) or \
                  self.check(TokenType.TEST) or self.check(TokenType.BENCH) or \
                  self.check(TokenType.IMPORT) or self.check(TokenType.EXTERN):
-                declarations.append(self.parse_statement())
+                decl = self.parse_statement()
             else:
                 t = self.current_token()
                 raise LuminaError(
                     f"Declaração de nível superior inválida: {t.type.name} ('{t.value}')", 
                     filename=self.filename, line=t.line, col=t.col, source_code=self.source_code
                 )
+                
+            if is_export and hasattr(decl, 'is_exported'):
+                decl.is_exported = True
+                
+            declarations.append(decl)
                 
         return declarations

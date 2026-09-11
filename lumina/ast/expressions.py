@@ -1,18 +1,14 @@
-# expressions.py
-from dataclasses import dataclass, field
-from typing import List, Union, Any, Optional
+from dataclasses import dataclass
+from typing import List, Union, Optional, Any, TYPE_CHECKING
 
-# ==========================================
-# CLASSE BASE PARA O PADRÃO VISITOR
-# ==========================================
+if TYPE_CHECKING:
+    from .statements import Stmt
+
 class Expr:
     """Classe base para todas as expressões."""
     def accept(self, visitor):
         return visitor.visit(self)
 
-# ==========================================
-# TIPOS AUXILIARES (Para evitar List[tuple] solto)
-# ==========================================
 @dataclass
 class Param:
     name: str
@@ -27,14 +23,10 @@ class StructField:
 
 @dataclass
 class MatchCase:
-    pattern: Any  # Pode ser NumberExpr, VariableExpr, etc.
-    body: Any     # Expr ou Stmt
-    guard: Optional[Expr] = None # Ex: match x { 1 if x > 0 => ... }
+    pattern: Any
+    body: Union["Stmt", Expr]
+    guard: Optional[Expr] = None
 
-
-# ==========================================
-# LITERAIS E VARIÁVEIS
-# ==========================================
 @dataclass
 class NumberExpr(Expr):
     value: str
@@ -50,17 +42,20 @@ class StringExpr(Expr):
 
 @dataclass
 class InterpolatedStringExpr(Expr):
-    """Para strings interpoladas tipo f"Olá {nome}" """
-    parts: List[Union[StringExpr, Expr]]
+    parts: List[Expr]  # Simplificado
 
 @dataclass
 class ArrayExpr(Expr):
     elements: List[Expr]
 
 @dataclass
+class MapPair:
+    key: Expr
+    value: Expr
+
+@dataclass
 class MapLiteralExpr(Expr):
-    """Literal para dicionários/hash maps: {"chave": valor}"""
-    pairs: List[tuple] # (Expr_key, Expr_value)
+    pairs: List[MapPair]  # Removido tuple
 
 @dataclass
 class TupleExpr(Expr):
@@ -72,10 +67,6 @@ class VariableExpr(Expr):
     line: int = 0
     col: int = 0
 
-
-# ==========================================
-# OPERAÇÕES E CHAMADAS
-# ==========================================
 @dataclass
 class BinaryExpr(Expr):
     op: str
@@ -89,34 +80,28 @@ class UnaryExpr(Expr):
 
 @dataclass
 class CallExpr(Expr):
-    callee: Expr  # Pode ser um VariableExpr, MemberExpr, etc.
+    callee: Expr
     args: List[Expr]
     is_method: bool = False
 
 @dataclass
 class IndexExpr(Expr):
-    obj: Expr
+    array: Expr
     index: Expr
 
 @dataclass
 class MemberExpr(Expr):
     obj: Expr
     member: str
-    is_safe: bool = False # Para o operador ?.
+    is_safe: bool = False
 
-
-# ==========================================
-# CONTROLE DE FLUXO COMO EXPRESSÃO
-# ==========================================
 @dataclass
 class BlockExpr(Expr):
-    """Um bloco de código que retorna um valor: { stmt1; stmt2; expr_final }"""
-    statements: List[Any] # Lista de Stmt
+    statements: List["Stmt"]
     final_expr: Optional[Expr] = None
 
 @dataclass
 class IfExpr(Expr):
-    """Um 'if' que retorna um valor (ex: let x = if cond { 1 } else { 2 })"""
     condition: Expr
     then_branch: BlockExpr
     else_branch: Optional[BlockExpr] = None
@@ -127,25 +112,22 @@ class MatchExpr(Expr):
     cases: List[MatchCase]
     default: Optional[Expr] = None
 
+@dataclass
+class StructLiteralField:
+    name: str
+    value: Expr
 
-# ==========================================
-# ESTRUTURAS DE DADOS E ORIENTAÇÃO A OBJETOS
-# ==========================================
 @dataclass
 class StructLiteralExpr(Expr):
     struct_name: str
-    fields: List[tuple] # (nome_do_campo, Expr)
+    fields: List[StructLiteralField]  # Removido tuple
 
 @dataclass
 class LambdaExpr(Expr):
     params: List[Param]
     return_type: str
-    body: List[Any] # Lista de Stmts ou um BlockExpr
+    body: List[Any]
 
-
-# ==========================================
-# SISTEMA DE TIPOS E METAPROGRAMAÇÃO
-# ==========================================
 @dataclass
 class CastExpr(Expr):
     expr: Expr
@@ -161,10 +143,8 @@ class DerefExpr(Expr):
 
 @dataclass
 class PropagateExpr(Expr):
-    """Operador ? para propagação de erros"""
     val: Expr
 
 @dataclass
 class ComptimeExpr(Expr):
-    """Metaprogramação executada em tempo de compilação"""
     expr: Expr

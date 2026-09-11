@@ -9,45 +9,41 @@ class StatementAnalyzer:
                 base_type = node.var_type.split('<')[0]
                 if base_type not in ("int", "float", "bool", "str", "ptr") and base_type not in self.structs:
                     raise LuminaError(f"Tipo '{node.var_type}' não declarado.", self.filename, 0, 0, self.source_code)
+                    
+            # Inferência de tipos se o tipo for None
             if node.var_type is None and node.value is not None:
                 if isinstance(node.value, StringExpr): node.var_type = "str"
                 elif isinstance(node.value, NumberExpr): node.var_type = "float" if node.value.is_float else "int"
                 elif isinstance(node.value, BoolExpr): node.var_type = "bool"
+                elif isinstance(node.value, StructLiteralExpr): node.var_type = node.value.struct_name
                 elif isinstance(node.value, CallExpr):
+                    func_name = getattr(node.value.callee, 'name', None) if hasattr(node.value, 'callee') else getattr(node.value, 'name', None)
+                    
                     if node.value.is_method:
                         obj_node = node.value.args[0]
                         if isinstance(obj_node, VariableExpr):
                             info = self.get_var_info(obj_node.name)
                             if info:
-                                # NOVO: Descobre o nome real do método (ex: Square_get_area)
                                 struct_name = info['type'].split('<')[0] if info['type'] else "Unknown"
-                                real_method_name = f"{struct_name}_{node.value.name}"
-                                # NOVO: Procura o tipo de retorno do método na tabela de funções!
+                                real_method_name = f"{struct_name}_{func_name}"
                                 if real_method_name in self.function_defs:
                                     node.var_type = self.function_defs[real_method_name].return_type
                                 else:
-                                    node.var_type = info['type'] # Fallback
+                                    # Se não achou o def do método, assume o tipo do objeto (comum para builtins como len() que retorna int)
+                                    node.var_type = "int" 
                     else:
-                        func_name = node.value.name
-                        if func_name in self.function_defs: node.var_type = self.function_defs[func_name].return_type
-                elif isinstance(node.value, BinaryExpr):
-                    if isinstance(node.value.left, VariableExpr):
-                        info = self.get_var_info(node.value.left.name)
-                        if info and info['type'] and info['type'].split('<')[0] in self.structs:
-                            struct_name = info['type'].split('<')[0]
-                            op_map = {'+': '__add__', '-': '__sub__', '*': '__mul__', '/': '__div__', '==': '__eq__'}
-                            method_name = op_map.get(node.value.op)
-                            if method_name:
-                                real_method_name = f"{struct_name}_{method_name}"
-                                if real_method_name in self.function_defs: node.var_type = self.function_defs[real_method_name].return_type
-                # NOVO: Inferência para Struct Literals (ex: let p = Point { x: 10, y: 20 })
-                elif isinstance(node.value, StructLiteralExpr):
-                    node.var_type = node.value.struct_name
-            if isinstance(node.value, CallExpr) and node.value.name == "alloc": self.heap_allocs.add(node.name)
-            if node.value: self.analyze_expr(node.value)
+                        if func_name in self.function_defs: 
+                            node.var_type = self.function_defs[func_name].return_type
+                        # Se for um builtin como print, não retorna nada útil, deixa como int
+                        else: node.var_type = "int"
+                            
+            if isinstance(node.value, CallExpr) and getattr(node.value.callee, 'name', None) == "alloc": 
+                self.heap_allocs.add(node.name)
+                
+            if node.value: self.visit(node.value)
             self.declare_var(node.name, node.var_type, node.is_mutable)
         elif isinstance(node, DestructureStmt):
-            self.analyze_expr(node.value)
+            self.visit(node)
             for name in node.names: self.declare_var(name, "int", node.is_mutable)
         elif isinstance(node, AssignStmt):
             if isinstance(node.target, MemberExpr):
@@ -66,43 +62,43 @@ class StatementAnalyzer:
                 info = self.get_var_info(node.target.name)
                 if not info: raise LuminaError(f"Variável '{node.target.name}' não declarada.", self.filename, 0, 0, self.source_code)
                 if not info['mutable']: raise LuminaError(f"Não pode reatribuir à variável imutável '{node.target.name}'.", self.filename, 0, 0, self.source_code)
-            self.check_escape(node.value); self.analyze_expr(node.value)
+            self.check_escape(node.value); self.visit(node.value)
         elif isinstance(node, ReturnStmt):
-            for val in node.values: self.check_escape(val); self.analyze_expr(val)
+            for val in node.values: self.check_escape(val); self.visit(val)
         elif isinstance(node, IfStmt):
-            self.analyze_expr(node.condition); self.push_scope()
-            for stmt in node.then_body: self.analyze_stmt(stmt)
+            self.visit(node.condition); self.push_scope()
+            for stmt in node.then_body: self.visit(stmt)
             self.pop_scope()
             if node.else_body:
                 self.push_scope()
-                for stmt in node.else_body: self.analyze_stmt(stmt)
+                for stmt in node.else_body: self.visit(stmt)
                 self.pop_scope()
         elif isinstance(node, WhileStmt):
-            self.analyze_expr(node.condition); self.push_scope()
-            for stmt in node.body: self.analyze_stmt(stmt)
+            self.visit(node.condition); self.push_scope()
+            for stmt in node.body: self.visit(stmt)
             self.pop_scope()
         elif isinstance(node, ForStmt):
-            if node.iterable is not None: self.analyze_expr(node.iterable)
-            else: self.analyze_expr(node.start); self.analyze_expr(node.end)
+            if node.iterable is not None: self.visit(node.iterable)
+            else: self.visit(node.start); self.visit(node.end)
             self.push_scope(); self.declare_var(node.var_name, "int", False)
-            for stmt in node.body: self.analyze_stmt(stmt)
+            for stmt in node.body: self.visit(stmt)
             self.pop_scope()
         elif isinstance(node, MatchStmt):
-            self.analyze_expr(node.condition)
+            self.visit(node.condition)
             for variant_name, var_name, body in node.cases:
                 self.push_scope()
                 if var_name: self.declare_var(var_name, "int", False)
-                for stmt in body: self.analyze_stmt(stmt)
+                for stmt in body: self.visit(stmt)
                 self.pop_scope()
             if node.default:
                 self.push_scope()
-                for stmt in node.default: self.analyze_stmt(stmt)
+                for stmt in node.default: self.visit(stmt)
                 self.pop_scope()
         elif isinstance(node, ContinueStmt): pass
         elif isinstance(node, BreakStmt): pass
         elif isinstance(node, DeferStmt):
-            for stmt in node.body: self.analyze_stmt(stmt)
-        elif isinstance(node, AssertStmt): self.analyze_expr(node.condition)
+            for stmt in node.body: self.visit(stmt)
+        elif isinstance(node, AssertStmt): self.visit(node.condition)
         elif isinstance(node, BenchStmt):
-            for stmt in node.body: self.analyze_stmt(stmt)
-        else: self.analyze_expr(node)
+            for stmt in node.body: self.visit(stmt)
+        else: self.visit(node)

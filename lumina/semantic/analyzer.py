@@ -1,5 +1,4 @@
 from lumina.ast.statements import ErrorNode
-
 from ..ast import Function, ExternDecl, StructDecl, EnumDecl, ImplBlock, VarDecl, VariableExpr, TraitDecl, MatchStmt
 from ..errors import LuminaError
 from .expressions import ExpressionAnalyzer
@@ -106,16 +105,22 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
             self.escapes.add(node.name)
 
     def analyze_function(self, node: Function):
-        global_scope = self.scopes[0] if self.scopes else {}
-        # Mantém o escopo global, mas cria um escopo local isolado
+        # CORREÇÃO: Salva e restaura a pilha de escopos
+        saved_scopes = self.scopes
+        global_scope = saved_scopes[0] if saved_scopes else {}
         self.scopes = [global_scope.copy()]
-        self.current_ret_type = node.return_type
         
-        for p_name, p_type, _ in node.params: 
-            self.declare_var(p_name, p_type, True)
-            
-        for stmt in node.body: 
-            self.analyze_stmt(stmt)
+        try:
+            self.current_ret_type = node.return_type
+            # ATUALIZADO: Usa Param dataclass
+            for param in node.params: 
+                self.declare_var(param.name, param.type_ann, True)
+                
+            for stmt in node.body: 
+                self.analyze_stmt(stmt)
+        finally:
+            # CORREÇÃO: Restaura escopos anteriores
+            self.scopes = saved_scopes
 
     def analyze_stmt(self, node):
         # Checagem de exaustividade do Pattern Matching (MatchStmt)

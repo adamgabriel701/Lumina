@@ -64,6 +64,18 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         # snprintf(buf, size, format, ...) -> int
         snprintf_ty = ir.FunctionType(ir.IntType(32), [self.i8_ty.as_pointer(), ir.IntType(64), self.i8_ty.as_pointer()], var_arg=True)
         self.snprintf = ir.Function(self.module, snprintf_ty, name="snprintf")
+        
+        # NOVO: strstr(str, substr) -> char* (usado no método contains)
+        strstr_ty = ir.FunctionType(self.i8_ty.as_pointer(), [self.i8_ty.as_pointer(), self.i8_ty.as_pointer()])
+        self.strstr = ir.Function(self.module, strstr_ty, name="strstr")
+        
+        # NOVO: strncmp(str1, str2, n) -> int (usado no método starts_with)
+        strncmp_ty = ir.FunctionType(ir.IntType(32), [self.i8_ty.as_pointer(), self.i8_ty.as_pointer(), ir.IntType(64)])
+        self.strncmp = ir.Function(self.module, strncmp_ty, name="strncmp")
+
+        # NOVO: atoi(str) -> int (Converte string para inteiro)
+        atoi_ty = ir.FunctionType(ir.IntType(64), [self.i8_ty.as_pointer()])
+        self.atoi = ir.Function(self.module, atoi_ty, name="atoi")
 
     def generate_module(self, ast):
         # 1. Pré-registra todas as structs e enums
@@ -107,7 +119,11 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         self.struct_fields[node.name] = {"tag": 0, "payload": 1}
 
     def register_function(self, node):
-        if node.name in self.functions_table: return
+        # NOVO: Prefixa o nome da função com o módulo para evitar colisão (Namespaces)
+        # Se a função não tiver módulo (ex: main), usa o nome original
+        func_name = getattr(node, 'module_prefix', '') + node.name if hasattr(node, 'module_prefix') else node.name
+        
+        if func_name in self.functions_table: return
         
         ret_ty = self.get_llvm_type(node.return_type)
         param_types = []
@@ -116,7 +132,9 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
             param_types.append(p_ty)
             
         func_type = ir.FunctionType(ret_ty, param_types)
-        func = ir.Function(self.module, func_type, name=node.name)
+        func = ir.Function(self.module, func_type, name=func_name)
+        self.functions_table[func_name] = (func, func_type)
+        # Mapeia o nome original também para facilitar a busca no Codegen
         self.functions_table[node.name] = (func, func_type)
         self.function_defs[node.name] = node
 
@@ -145,7 +163,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
             
         # Gera os statements da função
         for stmt in node.body:
-            self.codegen_stmt(stmt)
+            self.visit(stmt)
             
         # Adiciona um return vazio/0 se a função não terminar explicitamente
         if not self.builder.block.is_terminated:
@@ -157,3 +175,10 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         # Restaura o escopo
         self.symbol_table = old_symtab
         self.var_types = old_var_types
+
+    # NOVO: codegen_stmt e codegen_expr agora são apenas aliases para o Visitor
+    def codegen_stmt(self, node):
+        return self.visit(node)
+        
+    def codegen_expr(self, node):
+        return self.visit(node)

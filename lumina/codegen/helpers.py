@@ -2,6 +2,9 @@ from llvmlite import ir
 
 class HelpersCodegen:
     def create_global_string(self, text):
+        # Evita erros se chamado antes do setup
+        if not hasattr(self, 'string_counter'): self.string_counter = 0
+        
         name = f"str_{self.string_counter}"
         self.string_counter += 1
         b = bytearray(text, 'utf-8') + b"\0"

@@ -75,14 +75,21 @@ class NativeCallCodegen:
         return None
 
     def codegen_native_method(self, node: CallExpr):
+        # NOVO: UFCS check em primeiro lugar
+        if node.name in self.functions_table:
+            obj_val = self.codegen_expr(node.args[0])
+            func, func_type = self.functions_table[node.name]
+            args = [obj_val] + [self.codegen_expr(a) for a in node.args[1:]]
+            return self.builder.call(func, args, name=node.name + "_call")
+
         obj_val = self.codegen_expr(node.args[0])
-        if obj_val.type == self.voidptr_ty: return self.codegen_str_method(node, obj_val)
+        if obj_val.type == self.voidptr_ty: 
+            return self.codegen_str_method(node, obj_val)
+        
         struct_ty = self.var_types.get(node.args[0].name) if isinstance(node.args[0], VariableExpr) else None
         if isinstance(struct_ty, ir.PointerType) and isinstance(struct_ty.pointee, ir.IdentifiedStructType): struct_ty = struct_ty.pointee
         struct_name = struct_ty.name if struct_ty else "Unknown"
         func_name = f"{struct_name}_{node.name}"
-        
-        # NOVO: Se o método estiver na tabela de funções do usuário, chama ele!
         if func_name in self.functions_table:
             func, func_type = self.functions_table[func_name]
             return self.builder.call(func, [obj_val] + [self.codegen_expr(a) for a in node.args[1:]], name=func_name + "_call")
@@ -154,13 +161,19 @@ class NativeCallCodegen:
     def codegen_print(self, node):
         for arg_node in node.args:
             if isinstance(arg_node, ArrayExpr):
-                for el in arg_node.elements: self._print_val(el, self.codegen_expr(el))
-            else: self._print_val(arg_node, self.codegen_expr(arg_node))
+                for el in arg_node.elements: 
+                    self._print_val(el, self.codegen_expr(el))
+            else:
+                arg_val = self.codegen_expr(arg_node)
+                self._print_val(arg_node, arg_val)
+                
         self.builder.call(self.printf, [self.create_global_string("\n")])
         return ir.Constant(self.i64_ty, 0)
 
     def _print_val(self, arg_node, arg_val):
-        if isinstance(arg_node, StringExpr): self.builder.call(self.printf, [self.create_global_string("%s "), arg_val])
+        # NOVO: Garante que variáveis e retornos de função sejam tratados como ponteiros
+        if isinstance(arg_node, StringExpr):
+            self.builder.call(self.printf, [self.create_global_string("%s "), arg_val])
         else:
             fmt = "%f " if arg_val.type == self.f64_ty else ("%s " if arg_val.type == self.voidptr_ty else "%ld ")
             self.builder.call(self.printf, [self.create_global_string(fmt), arg_val])

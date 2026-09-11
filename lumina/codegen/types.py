@@ -22,15 +22,19 @@ class TypesCodegen:
 
     def get_or_create_monomorphized_struct(self, type_name):
         if type_name in self.struct_types: return self.struct_types[type_name]
+        
         base_name, _, args_str = type_name.partition('<')
         args_str = args_str.rstrip('>')
         type_args = [a.strip() for a in args_str.split(',')]
+        
         if base_name not in self.struct_defs: raise Exception(f"Struct base '{base_name}' não encontrada.")
         base_decl = self.struct_defs[base_name]
         if not base_decl.type_params: raise Exception(f"Struct '{base_name}' não é Genérica.")
+        
         type_map = dict(zip(base_decl.type_params, type_args))
         new_ty = self.module.context.get_identified_type(type_name.replace('<', '_').replace('>', '_').replace(',', '_'))
         self.struct_types[type_name] = new_ty
+        
         field_tys = [self.get_llvm_type(type_map.get(ft, ft)) for ft in base_decl.fields.values()]
         new_ty.set_body(*field_tys)
         self.struct_fields[type_name] = {name: i for i, name in enumerate(base_decl.fields.keys())}

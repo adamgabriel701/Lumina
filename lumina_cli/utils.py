@@ -2,15 +2,9 @@ import os
 import re
 import hashlib
 
-
-# --- Caminhos base do projeto ---
-# Como agora somos um pacote em /workspaces/Lumina/lumina_cli/,
-# precisamos subir um nível para achar o std/ e o lumina/ (compilador).
 LUMINA_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STD_DIR = os.path.join(LUMINA_ROOT, "std")
 
-
-# --- Códigos ANSI de Cor ---
 class Color:
     RESET       = '\033[0m'
     BOLD        = '\033[1m'
@@ -18,7 +12,6 @@ class Color:
     UNDERLINE   = '\033[4m'
     BLINK       = '\033[5m'
 
-    # Cores normais
     BLACK       = '\033[30m'
     RED         = '\033[31m'
     GREEN       = '\033[32m'
@@ -28,7 +21,6 @@ class Color:
     CYAN        = '\033[36m'
     WHITE       = '\033[37m'
 
-    # Cores brilhantes
     BRIGHT_BLACK   = '\033[90m'
     BRIGHT_RED     = '\033[91m'
     BRIGHT_GREEN   = '\033[92m'
@@ -38,7 +30,6 @@ class Color:
     BRIGHT_CYAN    = '\033[96m'
     BRIGHT_WHITE   = '\033[97m'
 
-    # Aliases semânticos
     ERROR   = BRIGHT_RED
     SUCCESS = BRIGHT_GREEN
     WARN    = BRIGHT_YELLOW
@@ -49,18 +40,13 @@ class Color:
     PROMPT  = BOLD + BRIGHT_CYAN
     MUTED   = BRIGHT_BLACK
 
-
 def paint(text, color):
-    """Envolve `text` com a cor ANSI `color` e reseta no fim."""
     return f"{color}{text}{Color.RESET}"
-
 
 def cprint(*args, color=Color.RESET, end='\n', sep=' '):
     text = sep.join(str(a) for a in args)
     print(f"{color}{text}{Color.RESET}", end=end)
 
-
-# Atalhos semânticos
 def info(msg):    cprint(msg, color=Color.INFO)
 def success(msg): cprint(msg, color=Color.SUCCESS)
 def warn(msg):    cprint(msg, color=Color.WARN)
@@ -69,12 +55,8 @@ def step(msg):    cprint(msg, color=Color.STEP)
 def header(msg):  cprint(msg, color=Color.HEADER)
 def arrow(msg):   cprint(msg, color=Color.ARROW)
 
-
-# --- Helpers de Cache ---
 def get_all_dependency_files(filename):
-    """Faz um scan rápido para encontrar todos os arquivos .lm envolvidos na compilação."""
     files = set()
-
     def resolve(f):
         abs_f = os.path.abspath(f)
         if abs_f in files:
@@ -101,9 +83,7 @@ def get_all_dependency_files(filename):
     resolve(filename)
     return list(files)
 
-
 def get_cache_hash(filename):
-    """Calcula um hash MD5 baseado no conteúdo de todos os arquivos do projeto."""
     hasher = hashlib.md5()
     deps = get_all_dependency_files(filename)
     for f in sorted(deps):

@@ -1,6 +1,7 @@
 import os
 import ctypes
 import ctypes.util
+from collections import deque
 
 from llvmlite import binding as llvm
 
@@ -26,73 +27,60 @@ from .utils import (
     STD_DIR, get_cache_hash
 )
 
-
-def parse_module(filename, current_stack=None):
+def parse_module(filename):
+    """Parses o módulo e resolve todos os imports de forma iterativa."""
     abs_path = os.path.abspath(filename)
-    if current_stack is None:
-        current_stack = set()
-    if abs_path in current_stack:
-        raise LuminaError(
-            f"Importação circular detectada envolvendo '{filename}'.",
-            filename, 0, 0, ""
-        )
-
-    current_stack.add(abs_path)
+    queue = deque([abs_path])
+    visited = set()
     resolved_ast = []
 
-    # Injeta o Prelude automaticamente se for o arquivo principal
-    if len(current_stack) == 1:
-        prelude_path = os.path.join(STD_DIR, "prelude.lm")
-        if os.path.exists(prelude_path):
-            with open(prelude_path, "r") as f:
-                prelude_code = f.read()
-            lexer = Lexer(prelude_code)
-            tokens = lexer.tokenize()
-            parser = Parser(tokens, prelude_path, prelude_code)
-            prelude_ast = parser.parse()
-            resolved_ast.extend(prelude_ast)
+    # Injeta o Prelude automaticamente
+    prelude_path = os.path.join(STD_DIR, "prelude.lm")
+    if os.path.exists(prelude_path):
+        queue.appendleft(prelude_path)
 
-    with open(filename, "r") as f:
-        code = f.read()
+    while queue:
+        current_file = queue.popleft()
+        if current_file in visited:
+            continue
+        visited.add(current_file)
 
-    lexer = Lexer(code)
-    tokens = lexer.tokenize()
-    parser = Parser(tokens, filename, code)
-    ast = parser.parse()
+        try:
+            with open(current_file, "r") as f:
+                code = f.read()
+        except Exception:
+            continue
 
-    for node in ast:
-        if isinstance(node, ImportStmt):
-            if node.filename.startswith("std/"):
-                clean_name = node.filename.replace("std/", "")
-                if clean_name.endswith(".lm"):
-                    clean_name = clean_name[:-3]
-                std_path = os.path.join(STD_DIR, clean_name + ".lm")
-                imported_ast = parse_module(std_path, current_stack)
-            elif os.path.exists(node.filename if node.filename.endswith(".lm") else node.filename + ".lm"):
-                imported_path = node.filename if node.filename.endswith(".lm") else node.filename + ".lm"
-                imported_ast = parse_module(imported_path, current_stack)
+        lexer = Lexer(code)
+        tokens = lexer.tokenize()
+        parser = Parser(tokens, current_file, code)
+        ast = parser.parse()
+
+        for node in ast:
+            if isinstance(node, ImportStmt):
+                # Resolução de caminho
+                if node.filename.startswith("std/"):
+                    clean_name = node.filename.replace("std/", "")
+                    if clean_name.endswith(".lm"): clean_name = clean_name[:-3]
+                    dep_path = os.path.join(STD_DIR, clean_name + ".lm")
+                elif os.path.exists(node.filename if node.filename.endswith(".lm") else node.filename + ".lm"):
+                    dep_path = node.filename if node.filename.endswith(".lm") else node.filename + ".lm"
+                else:
+                    mod_path = os.path.join("lumina_modules", node.filename)
+                    if not mod_path.endswith(".lm"): mod_path += ".lm"
+                    if not os.path.exists(mod_path):
+                        raise LuminaError(f"Módulo '{node.filename}' não encontrado.", current_file, 0, 0, code)
+                    dep_path = mod_path
+                
+                arrow(f"--> Importando módulo: {paint(node.filename, Color.BOLD)}")
+                queue.append(os.path.abspath(dep_path))
             else:
-                mod_path = os.path.join("lumina_modules", node.filename)
-                if not mod_path.endswith(".lm"):
-                    mod_path += ".lm"
-                if not os.path.exists(mod_path):
-                    raise LuminaError(
-                        f"Módulo '{node.filename}' não encontrado.",
-                        filename, 0, 0, code
-                    )
-                imported_ast = parse_module(mod_path, current_stack)
-            arrow(f"--> Importando módulo: {paint(node.filename, Color.BOLD)}")
-            resolved_ast.extend(imported_ast)
-        else:
-            resolved_ast.append(node)
+                resolved_ast.append(node)
 
-    current_stack.remove(abs_path)
     return resolved_ast
-
 
 def compile_lumina(filename, output_file="output.ll", use_cache=True, is_wasm=False, is_debug=False):
     cache_dir = ".lumina_cache"
-    # O hash agora considera se é WASM ou Debug, pois o IR gerado é diferente!
     raw_hash = get_cache_hash(filename)
     if is_wasm: raw_hash += "_wasm"
     if is_debug: raw_hash += "_debug"
@@ -140,7 +128,6 @@ def compile_lumina(filename, output_file="output.ll", use_cache=True, is_wasm=Fa
 
     return llvm_ir
 
-
 def run_jit(llvm_ir, cli_args):
     header("Execução JIT (Just-In-Time)")
     try:
@@ -162,8 +149,9 @@ def run_jit(llvm_ir, cli_args):
     engine.run_static_constructors()
 
     func_ptr = engine.get_function_address("main")
+    # NOVO: Padronizado para c_int (32 bits)
     cfunc = ctypes.CFUNCTYPE(
-        ctypes.c_int64, ctypes.c_int32, ctypes.POINTER(ctypes.c_char_p)
+        ctypes.c_int, ctypes.c_int32, ctypes.POINTER(ctypes.c_char_p)
     )(func_ptr)
 
     full_args = ["lumina_program"] + cli_args
@@ -180,13 +168,10 @@ def run_jit(llvm_ir, cli_args):
 def format_node(node, indent_level=0):
     indent = "    " * indent_level
     
-    # --- Statements e Declarações ---
     if isinstance(node, Function):
         params = ", ".join([f"{p[0]}: {p[1]}" for p in node.params])
         ret = f" -> {node.return_type}" if node.return_type != "void" else ""
         prefix = "export " if getattr(node, 'is_exported', False) else ""
-        
-        # Adiciona uma linha em branco antes de funções no nível raiz
         prefix_newline = "\n" if indent_level == 0 else ""
         s = f"{prefix_newline}{indent}{prefix}fn {node.name}({params}){ret}:\n"
         for stmt in node.body:
@@ -267,7 +252,6 @@ def format_node(node, indent_level=0):
         
     elif isinstance(node, IfStmt):
         cond = format_node(node.condition, 0)
-        # Adiciona quebra de linha extra se estiver dentro de uma função
         prefix_newline = "\n" if indent_level > 0 else ""
         s = f"{prefix_newline}{indent}if {cond}:\n"
         for stmt in node.then_body:
@@ -333,7 +317,6 @@ def format_node(node, indent_level=0):
     elif isinstance(node, (BreakStmt, ContinueStmt)):
         return f"{indent}{node.__class__.__name__.lower().replace('stmt','')}\n"
 
-    # --- Expressões ---
     elif isinstance(node, NumberExpr):
         if indent_level > 0: return f"{indent}{node.value}\n"
         return node.value

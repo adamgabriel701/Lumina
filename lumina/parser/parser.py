@@ -10,7 +10,7 @@ class Parser(ExpressionParser, StatementParser):
         self.pos = 0
         self.filename = filename
         self.source_code = source_code
-        self.no_struct_literal = False # NOVO: Flag para desativar Struct Literals no match
+        self.no_struct_literal = False
 
     def current_token(self):
         return self.tokens[self.pos] if self.pos < len(self.tokens) else None
@@ -24,38 +24,37 @@ class Parser(ExpressionParser, StatementParser):
         if token and (expected_type is None or token.type == expected_type):
             self.pos += 1
             return token
-        if token: 
-            raise LuminaError(f"Esperado {expected_type}, mas encontrei {token.type} ('{token.value}')", self.filename, token.line, token.col, self.source_code)
-        raise LuminaError("Fim inesperado do código", self.filename, 0, 0, self.source_code)
+        if token:
+            raise LuminaError(
+                f"Esperado {expected_type}, mas encontrei {token.type} ('{token.value}')", 
+                filename=self.filename, line=token.line, col=token.col, code=self.source_code
+            )
+        raise LuminaError("Fim inesperado do código", filename=self.filename, line=0, col=0, code=self.source_code)
 
     def parse(self):
         declarations = []
-        while self.current_token() and self.current_token().type != TokenType.EOF:
-            try:
-                if self.current_token().type == TokenType.KEYWORD and self.current_token().value in ('fn', 'export'):
-                    declarations.append(self.parse_function())
-                elif self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'struct':
-                    declarations.append(self.parse_struct())
-                elif self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'enum':
-                    declarations.append(self.parse_enum())
-                elif self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'impl':
-                    declarations.append(self.parse_impl())
-                elif self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'trait':
-                    declarations.append(self.parse_trait())
-                elif self.current_token().type == TokenType.KEYWORD and self.current_token().value in ('let', 'mut', 'test', 'bench', 'import', 'extern'):
-                    declarations.append(self.parse_statement())
-                else:
-                    self.consume()
-            except LuminaError as e:
-                # NOVO: Em vez de parar tudo, registra o erro e pula para a próxima declaração
-                # O LSP vai pegar esse erro da AST e reportar, mas continuará parseando o resto!
-                from ..ast import ErrorNode
-                declarations.append(ErrorNode(e.message, e.line, e.col))
+        while self.current_token() and not self.check(TokenType.EOF):
+            if self.check(TokenType.KEYWORD, 'fn') or self.check(TokenType.KEYWORD, 'export'):
+                declarations.append(self.parse_function())
+            elif self.check(TokenType.KEYWORD, 'struct'):
+                declarations.append(self.parse_struct())
+            elif self.check(TokenType.KEYWORD, 'enum'):
+                declarations.append(self.parse_enum())
+            elif self.check(TokenType.KEYWORD, 'impl'):
+                declarations.append(self.parse_impl())
+            elif self.check(TokenType.KEYWORD, 'trait'):
+                declarations.append(self.parse_trait())
+            elif self.check(TokenType.KEYWORD, 'let') or self.check(TokenType.KEYWORD, 'mut') or \
+                 self.check(TokenType.KEYWORD, 'test') or self.check(TokenType.KEYWORD, 'bench') or \
+                 self.check(TokenType.KEYWORD, 'import') or self.check(TokenType.KEYWORD, 'extern'):
+                declarations.append(self.parse_statement())
+            else:
+                # CORREÇÃO: Antes o parser engolia tokens inválidos silenciosamente.
+                # Agora ele acusa o erro de sintaxe explicitamente.
+                t = self.current_token()
+                raise LuminaError(
+                    f"Declaração de nível superior inválida: {t.type.name} ('{t.value}')", 
+                    filename=self.filename, line=t.line, col=t.col, code=self.source_code
+                )
                 
-                # Sincroniza: pula tokens até achar um 'fn', 'let', 'struct' ou fim do arquivo
-                while self.current_token() and self.current_token().type != TokenType.EOF:
-                    if self.current_token().type == TokenType.KEYWORD and self.current_token().value in ('fn', 'let', 'mut', 'struct', 'enum', 'impl', 'trait', 'import', 'extern', 'export'):
-                        break
-                    self.consume()
-                    
         return declarations

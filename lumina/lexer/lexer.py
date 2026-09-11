@@ -101,7 +101,7 @@ class Lexer:
                     j = i
                     while j < len(stripped) and (stripped[j].isalnum() or stripped[j] == '_'): j += 1
                     word = stripped[i:j]
-                    if word in ('fn', 'let', 'mut', 'if', 'elif', 'else', 'while', 'for', 'in', 'struct', 'impl', 'import', 'extern', 'enum', 'return', 'print', 'true', 'false', 'match', 'case', 'default', 'and', 'or', 'not', 'continue', 'defer', 'test', 'break', 'assert', 'bench', 'trait', 'comptime', 'as', 'switch'):
+                    if word in ('fn', 'let', 'mut', 'if', 'elif', 'else', 'while', 'for', 'in', 'struct', 'impl', 'import', 'extern', 'enum', 'return', 'print', 'true', 'false', 'match', 'case', 'default', 'and', 'or', 'not', 'continue', 'defer', 'errdefer', 'test', 'break', 'assert', 'bench', 'trait', 'comptime', 'as', 'export', 'switch'): # NOVO: errdefer
                         self.tokens.append(Token(TokenType.KEYWORD, word, line_num, col))
                     else:
                         self.tokens.append(Token(TokenType.IDENT, word, line_num, col))
@@ -110,6 +110,10 @@ class Lexer:
                 elif i + 1 < len(stripped) and stripped[i:i+2] in ('==', '!=', '<=', '>=', '->', '..', '+=', '-=', '*=', '/=', '|>', '<<', '>>', '?.', '=>', ':='): # NOVO: :=
                     self.tokens.append(Token(TokenType.OP, stripped[i:i+2], line_num, col))
                     i += 2
+                    continue
+                elif c == '@':
+                    self.tokens.append(Token(TokenType.OP, '@', line_num, col))
+                    i += 1
                     continue
                 else:
                     # NOVO: Se for '?', emite como OP

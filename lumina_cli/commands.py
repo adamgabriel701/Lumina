@@ -11,7 +11,7 @@ import ctypes.util
 from lumina.ast.statements import ImportStmt
 
 try:
-    import tomllib  # Python 3.11+
+    import tomllib
 except ImportError:
     tomllib = None
 
@@ -28,13 +28,11 @@ from .utils import (
 )
 from .compiler import compile_lumina, run_jit, format_node
 
-
 # ============================================================
 #  new
 # ============================================================
 def cmd_new(project_name):
     os.makedirs(project_name, exist_ok=True)
-
     config = f"""[package]
 name = "{project_name}"
 version = "0.1.0"
@@ -53,8 +51,7 @@ entry = "main.lm"
     with open(os.path.join(project_name, "main.lm"), "w") as f:
         f.write(main_code)
 
-    success(f"✅ Projeto '{paint(project_name, Color.BOLD + Color.BRIGHT_CYAN)}' criado com sucesso (lumina.toml)!")
-
+    success(f"✅ Projeto '{paint(project_name, Color.BOLD + Color.BRIGHT_CYAN)}' criado com sucesso!")
 
 # ============================================================
 #  install
@@ -102,7 +99,6 @@ def cmd_install():
             except subprocess.CalledProcessError:
                 error(f"❌ Falha ao baixar o repositório {url}")
 
-
 # ============================================================
 #  doc
 # ============================================================
@@ -126,19 +122,13 @@ def cmd_doc():
                 current_doc.append(stripped[2:])
             elif stripped == "" or stripped.startswith("#"):
                 current_doc = []
-            elif current_doc and (
-                stripped.startswith("fn ") or
-                stripped.startswith("struct ") or
-                stripped.startswith("enum ")
-            ):
+            elif current_doc and (stripped.startswith("fn ") or stripped.startswith("struct ") or stripped.startswith("enum ")):
                 clean_decl = stripped
                 if stripped.startswith("fn "):
                     clean_decl = stripped.replace("fn ", "").replace(" -> ", " ⟶ ")
                 docs_data.append({
                     "file": filepath,
-                    "type": ("Function" if stripped.startswith("fn ")
-                             else "Struct" if stripped.startswith("struct ")
-                             else "Enum"),
+                    "type": ("Function" if stripped.startswith("fn ") else "Struct" if stripped.startswith("struct ") else "Enum"),
                     "decl": clean_decl,
                     "doc": "\n".join(current_doc)
                 })
@@ -183,7 +173,6 @@ def cmd_doc():
 
     success("✅ Documentação gerada com sucesso em: docs/index.html")
 
-
 # ============================================================
 #  build
 # ============================================================
@@ -205,94 +194,63 @@ def cmd_build(entry_file=None, extra_flags=[]):
         project_name = config.get("package", {}).get("name", "programa_final")
         libs = config.get("dependencies", {}).keys()
 
-    # Detecta as flags passadas
     is_no_gc = "--no-gc" in extra_flags
     is_wasm = "--wasm" in extra_flags
     is_debug = "--debug" in extra_flags
-    is_native_frontend = "--use-native-frontend" in extra_flags # NOVO
-
-    if is_native_frontend:
-        info("⚡ Usando Lexer/Parser Nativo (lumina_core)...")
-        # Aqui no futuro ele chamaria o binário lumina_core/lexer
-        # Por enquanto, apenas loga e continua com o pipeline Python
 
     step(f"🛠️  Compilando projeto: {paint(project_name, Color.BOLD + Color.BRIGHT_CYAN)}")
     
-    # Compila o código. Ignora o cache se for WASM ou Debug, pois o binário final muda
     llvm_ir = compile_lumina(entry, use_cache=not (is_wasm or is_debug), is_wasm=is_wasm, is_debug=is_debug)
     if not llvm_ir:
         return None
 
-    # Filtra as flags internas da CLI para não passá-las para o clang
     cli_flags = {"--wasm", "--debug", "--no-gc"}
     linker_extra_flags = [f for f in extra_flags if f not in cli_flags]
     
-    link_flags = " ".join([f"-l{lib}" for lib in libs] + linker_extra_flags)
     ir_file = f"{project_name}.ll"
-    
-    # Salva o IR original
     with open(ir_file, "w") as f:
         f.write(llvm_ir)
 
-    # Lida com Debug Info (DWARF)
     debug_flag = "-g" if is_debug else ""
-
-    # Lida com WebAssembly
+    
+    # NOVO: Construção de lista de argumentos para evitar injeção de shell (shell=True)
     if is_wasm:
         warn("⚠️ Compilando para WebAssembly: Garbage Collector nativo desativado.")
-        
-        # HOTFIX WASM: Como não temos libgc no WASM, substituímos GC_malloc por malloc nativo do WASI
         with open(ir_file, "r") as f:
             ir_code = f.read()
         ir_code = ir_code.replace("GC_malloc", "malloc")
         with open(ir_file, "w") as f:
             f.write(ir_code)
         
-        # NOVO: Lida com exports de função para WebAssembly
-        import re
         export_names = []
         with open(entry, "r") as f:
             source_code = f.read()
-            
         for match in re.finditer(r'export\s+fn\s+(\w+)', source_code):
             export_names.append(match.group(1))
             
         clang_bin = "/opt/wasi-sdk/bin/clang" if os.path.exists("/opt/wasi-sdk/bin/clang") else "clang"
-        target_flag = "--target=wasm32-unknown-wasi"
-        sysroot_flag = "--sysroot=/opt/wasi-sdk/share/wasi-sysroot"
-        output_ext = "wasm"
+        
+        cmd_args = [clang_bin, "-O3", "-nostartfiles", debug_flag, "--target=wasm32-unknown-wasi", "--sysroot=/opt/wasi-sdk/share/wasi-sysroot", ir_file]
         
         if export_names:
             success(f"📦 Exportando funções para JS: {', '.join(export_names)}")
-            # --entry diz ao linker qual é a função principal (em vez de main)
-            # --export expõe as funções para o JavaScript chamá-las
-            entry_flag = f"-Wl,--entry={export_names[0]}"
-            export_flags = [f"-Wl,--export={name}" for name in export_names]
-            export_flags.append(entry_flag)
-            
-            # Como não usamos o main do WASI, não precisamos do crt1 que o procura
-            # Removemos o start file para evitar o erro undefined_weak:main
-            cmd = (f"{clang_bin} -O3 -nostartfiles {debug_flag} {target_flag} {sysroot_flag} {ir_file} "
-                   f"-o {project_name}.{output_ext} {' '.join(export_flags)} -lc -Wl,--allow-undefined")
+            cmd_args.append(f"-Wl,--entry={export_names[0]}")
+            for name in export_names:
+                cmd_args.append(f"-Wl,--export={name}")
+            cmd_args.extend(["-lc", "-Wl,--allow-undefined", f"-o", f"{project_name}.wasm"])
         else:
-            cmd = (f"{clang_bin} -O3 {debug_flag} {target_flag} {sysroot_flag} {ir_file} "
-                   f"-o {project_name}.{output_ext} -lc -Wl,--export=main -Wl,--allow-undefined")
+            cmd_args.extend(["-lc", "-Wl,--export=main", "-Wl,--allow-undefined", f"-o", f"{project_name}.wasm"])
     else:
-        # Lida com GC em compilação nativa
-        gc_flag = "" if is_no_gc else "-lgc"
-        if is_no_gc:
-            warn("⚠️ Modo Bare-Metal (--no-gc): Garbage Collector desativado.")
-            
-        target_flag = "-march=native -funroll-loops"
-        output_ext = "" # Binário nativo sem extensão
+        gc_flag = "-lgc" if not is_no_gc else ""
+        if is_no_gc: warn("⚠️ Modo Bare-Metal (--no-gc): Garbage Collector desativado.")
         
-        # Removido o -flto para acelerar o tempo de build
-        cmd = (f"clang -O3 {target_flag} {debug_flag} {ir_file} "
-               f"-o {project_name} {link_flags} -lc -lm -lpthread {gc_flag}")
+        cmd_args = ["clang", "-O3", "-march=native", "-funroll-loops", debug_flag, ir_file, "-o", project_name, "-lc", "-lm", "-lpthread"]
+        if gc_flag: cmd_args.append(gc_flag)
+        for lib in libs: cmd_args.append(f"-l{lib}")
+        cmd_args.extend(linker_extra_flags)
 
     hash_obj_file = f".lumina_cache/{project_name}.bin_hash"
     
-    # Verifica se o IR mudou desde a última build
     ir_changed = True
     if os.path.exists(hash_obj_file):
         with open(hash_obj_file, "r") as f:
@@ -300,22 +258,21 @@ def cmd_build(entry_file=None, extra_flags=[]):
         new_hash = hashlib.md5(llvm_ir.encode()).hexdigest()
         if old_hash == new_hash and not is_wasm and not is_debug:
             success(f"✅ Build incremental: Nenhum código mudou. Pulando linkagem.")
-            return project_name
+            return f"{project_name}.wasm" if is_wasm else project_name
 
     header("4. Linkagem Nativa")
-    info(f"Executando: {paint(cmd, Color.MUTED)}")
+    cmd_str = " ".join(cmd_args)
+    info(f"Executando: {paint(cmd_str, Color.MUTED)}")
+    
     try:
-        subprocess.run(cmd, shell=True, check=True)
-        output_path = f"{project_name}.{output_ext}" if is_wasm else project_name
+        # NOVO: shell=False por segurança
+        subprocess.run(cmd_args, check=True)
+        output_path = f"{project_name}.wasm" if is_wasm else project_name
         success(f"✅ Build concluído: {paint('./' + output_path, Color.BOLD + Color.SUCCESS)}")
         
-        # Salva o hash do IR para a próxima vez
         os.makedirs(".lumina_cache", exist_ok=True)
-        
-        # NOVO: Garante que a subpasta do cache exista (ex: .lumina_cache/lumina_core/)
         cache_subdir = os.path.dirname(hash_obj_file)
-        if cache_subdir:
-            os.makedirs(cache_subdir, exist_ok=True)
+        if cache_subdir: os.makedirs(cache_subdir, exist_ok=True)
             
         with open(hash_obj_file, "w") as f:
             f.write(hashlib.md5(llvm_ir.encode()).hexdigest())
@@ -324,13 +281,11 @@ def cmd_build(entry_file=None, extra_flags=[]):
     except subprocess.CalledProcessError:
         error("❌ Erro durante a linkagem com o clang.")
         return None
-    
 
 # ============================================================
 #  test
 # ============================================================
 def cmd_test(entry_file=None):
-    """Compila o projeto executando automaticamente todas as funções de teste, com cobertura."""
     if not entry_file:
         if os.path.exists("lumina.toml") and tomllib:
             with open("lumina.toml", "rb") as f:
@@ -350,9 +305,6 @@ def cmd_test(entry_file=None):
     
     from .compiler import parse_module
     from lumina.ast import Function, CallExpr, NumberExpr, ReturnStmt
-    from lumina.semantic import SemanticAnalyzer
-    from lumina.codegen import LLVMCodegen
-    from lumina.errors import LuminaError
     
     try:
         ast = parse_module(entry_file)
@@ -360,18 +312,13 @@ def cmd_test(entry_file=None):
         error(e); return None
 
     test_funcs = [decl for decl in ast if isinstance(decl, Function) and decl.name.startswith("test_")]
-    
     if not test_funcs:
         warn("⚠️ Nenhuma função de teste (ex: `test \"nome\":`) encontrada no código.")
         return
 
     new_ast = [decl for decl in ast if not (isinstance(decl, Function) and decl.name == "main")]
     
-    # NOVO: Chama os testes sequencialmente no main injetado
-    test_calls = []
-    for func in test_funcs:
-        test_calls.append(CallExpr(func.name, []))
-        
+    test_calls = [CallExpr(func.name, []) for func in test_funcs]
     new_main = Function("main", [], "int", test_calls + [ReturnStmt([NumberExpr("0")])])
     new_ast.append(new_main)
 
@@ -392,11 +339,11 @@ def cmd_test(entry_file=None):
     with open(ir_file, "w") as f:
         f.write(llvm_ir)
         
-    # NOVO: Adiciona -fprofile-instr-generate para mapear cobertura de código
-    cmd = f"clang -O0 -fprofile-instr-generate -fcoverage-mapping {ir_file} -o {binary_name} -lc -lpthread -lgc"
+    # Alterado para shell=False
+    cmd_args = ["clang", "-O0", "-fprofile-instr-generate", "-fcoverage-mapping", ir_file, "-o", binary_name, "-lc", "-lpthread", "-lgc"]
     
     try:
-        subprocess.run(cmd, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(cmd_args, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
         header("Executando Testes")
         result = subprocess.run([f"./{binary_name}"], capture_output=True, text=True, env={**os.environ, "LLVM_PROFILE_FILE": "lumina_test.profraw"})
@@ -404,8 +351,6 @@ def cmd_test(entry_file=None):
         
         if result.returncode == 0:
             success(f"✅ Todos os {len(test_funcs)} testes passaram!")
-            
-            # Gera o relatório de cobertura no terminal
             try:
                 subprocess.run(["llvm-profdata", "merge", "-sparse", "lumina_test.profraw", "-o", "lumina_test.profdata"], check=True, capture_output=True)
                 header("📊 Relatório de Cobertura de Código")
@@ -419,44 +364,39 @@ def cmd_test(entry_file=None):
     except subprocess.CalledProcessError:
         error("❌ Erro durante a compilação da suíte de testes.")
     finally:
-        # Limpa os arquivos temporários
         if os.path.exists(ir_file): os.remove(ir_file)
         if os.path.exists(binary_name): os.remove(binary_name)
         if os.path.exists("lumina_test.profraw"): os.remove("lumina_test.profraw")
         if os.path.exists("lumina_test.profdata"): os.remove("lumina_test.profdata")
 
-
 # ============================================================
 #  clean
 # ============================================================
 def cmd_clean():
-    """Limpa o cache de compilação e os binários gerados."""
     step("🧹 Limpando cache e binários...")
 
     if os.path.exists(".lumina_cache"):
         subprocess.run(["rm", "-rf", ".lumina_cache"])
         success("✅ Cache (.lumina_cache) removido.")
 
-    # Remove arquivos LLVM IR (.ll) e WebAssembly (.wasm)
     for ext in ["*.ll", "*.wasm"]:
         for f in glob.glob(ext):
             os.remove(f)
             success(f"✅ Removido: {paint(f, Color.MUTED)}")
 
-    # Remove binários sem extensão (gerados pelo build nativo)
+    # NOVO: Whitelist de arquivos que não devem ser apagados
+    protected_files = {"Makefile", "LICENSE", "Dockerfile", "CMakeLists.txt"}
     for f in os.listdir("."):
-        if os.path.isfile(f) and "." not in f and not f.startswith("."):
+        if os.path.isfile(f) and "." not in f and not f.startswith(".") and f not in protected_files:
             os.remove(f)
             success(f"✅ Removido binário: {paint(f, Color.MUTED)}")
 
     success("Limpeza concluída!")
 
-
 # ============================================================
 #  run / jit
 # ============================================================
 def cmd_run(entry_file=None, use_jit=False, extra_flags=[]):
-    """Compila (usando cache se possível) e executa o programa."""
     if not entry_file:
         if os.path.exists("lumina.toml") and tomllib:
             with open("lumina.toml", "rb") as f:
@@ -484,9 +424,7 @@ def cmd_run(entry_file=None, use_jit=False, extra_flags=[]):
         if not llvm_ir:
             error("❌ Falha na compilação.")
             return
-        # Limpa IR temporário
-        if os.path.exists(ir_file):
-            os.remove(ir_file)
+        if os.path.exists(ir_file): os.remove(ir_file)
         run_jit(llvm_ir, [])
         return
 
@@ -497,7 +435,6 @@ def cmd_run(entry_file=None, use_jit=False, extra_flags=[]):
 
     header("Executando Binário Nativo")
     subprocess.run([f"./{binary_name}"])
-
 
 # ============================================================
 #  bind
@@ -555,9 +492,7 @@ def cmd_bind(header_file, output_name):
         f.write(f"# Auto-gerado de {header_file} pelo Lumina Bind\n\n")
         f.write("\n".join(lumina_decls))
 
-    success(f"✅ Bindings gerados com sucesso em {paint(out_file, Color.BOLD + Color.BRIGHT_CYAN)} "
-            f"({len(lumina_decls)} funções)")
-
+    success(f"✅ Bindings gerados com sucesso em {paint(out_file, Color.BOLD + Color.BRIGHT_CYAN)} ({len(lumina_decls)} funções)")
 
 # ============================================================
 #  fmt
@@ -584,11 +519,9 @@ def cmd_fmt(filename):
             f.write(formatted_code)
 
         success(f"✅ Arquivo '{paint(filename, Color.BOLD + Color.BRIGHT_CYAN)}' formatado com sucesso!")
-
     except LuminaError as e:
         error("❌ Não foi possível formatar devido a erros de sintaxe:")
         print(e)
-
 
 # ============================================================
 #  repl
@@ -639,8 +572,9 @@ def cmd_repl():
                     engine.run_static_constructors()
 
                     func_ptr = engine.get_function_address("main")
+                    # NOVO: Padronizado para c_int (32-bit) que é o padrão do main em C
                     cfunc = ctypes.CFUNCTYPE(
-                        ctypes.c_int64, ctypes.c_int32, ctypes.POINTER(ctypes.c_char_p)
+                        ctypes.c_int, ctypes.c_int32, ctypes.POINTER(ctypes.c_char_p)
                     )(func_ptr)
                     cfunc(0, None)
                     ctypes.CDLL(None).fflush(None)

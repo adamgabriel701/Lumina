@@ -184,6 +184,7 @@ class StatementCodegen(ControlFlowCodegen):
         for body in reversed(self.deferred_stmts):
             for stmt in body: self.codegen_stmt(stmt)
         self.deferred_stmts.clear()
+        
         if hasattr(self, 'current_ret_ty') and self.current_ret_ty == ir.VoidType():
             if len(node.values) == 1 and isinstance(node.values[0], NumberExpr) and node.values[0].value == "0":
                 for scope in self.cleanup_vars: self.cleanup_block(scope)
@@ -196,7 +197,6 @@ class StatementCodegen(ControlFlowCodegen):
         if hasattr(self, 'current_ret_ty') and isinstance(self.current_ret_ty, ir.PointerType) and val.type == self.i64_ty: 
             val = ir.Constant(self.current_ret_ty, None)
             
-        # NOVO: Se a função espera i32 (ex: WASM) mas o valor é i64, trunca para i32
         if hasattr(self, 'current_ret_ty') and isinstance(self.current_ret_ty, ir.IntType) and isinstance(val.type, ir.IntType):
             if val.type.width != self.current_ret_ty.width:
                 val = self.builder.trunc(val, self.current_ret_ty, name="ret_trunc")

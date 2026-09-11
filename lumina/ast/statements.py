@@ -59,7 +59,8 @@ class Function:
     type_params: Optional[List[str]] = None
     line: int = 0
     col: int = 0
-    is_exported: bool = False # NOVO
+    is_exported: bool = False
+    attributes: Optional[List[str]] = None # NOVO
 
 @dataclass
 class ImplBlock:
@@ -90,6 +91,7 @@ class ContinueStmt:
 @dataclass
 class DeferStmt:
     body: List[any]
+    is_errdefer: bool = False # NOVO
 
 @dataclass
 class BreakStmt:

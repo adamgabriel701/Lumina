@@ -46,7 +46,7 @@ class StatementParser(DeclarationsParser, ControlFlowParser):
             elif token.type == TokenType.KEYWORD and token.value == 'extern': return self.parse_extern()
             elif token.type == TokenType.KEYWORD and token.value == 'continue': self.consume(); self.consume(TokenType.NEWLINE); return ContinueStmt()
             elif token.type == TokenType.KEYWORD and token.value == 'break': self.consume(); self.consume(TokenType.NEWLINE); return BreakStmt()
-            elif token.type == TokenType.KEYWORD and token.value == 'defer': return self.parse_defer()
+            elif token.type == TokenType.KEYWORD and token.value in ('defer', 'errdefer'): return self.parse_defer()
             elif token.type == TokenType.KEYWORD and token.value == 'assert': return self.parse_assert()
             elif token.type == TokenType.KEYWORD and token.value == 'test': return self.parse_test()
             elif token.type == TokenType.KEYWORD and token.value == 'bench': return self.parse_bench()

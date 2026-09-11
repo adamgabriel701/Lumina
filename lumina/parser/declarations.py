@@ -60,7 +60,13 @@ class DeclarationsParser:
         return VarDecl(var_name, var_type, expr, is_mutable, var_line, var_col)
 
     def parse_defer(self):
-        self.consume()
+        is_errdefer = False
+        if self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'errdefer':
+            self.consume()
+            is_errdefer = True
+        else:
+            self.consume() # 'defer'
+            
         if self.current_token().type == TokenType.OP and self.current_token().value == ':':
             self.consume(); self.consume(TokenType.NEWLINE); self.consume(TokenType.INDENT)
             body = []
@@ -68,9 +74,9 @@ class DeclarationsParser:
                 if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
                 body.append(self.parse_statement())
             self.consume(TokenType.DEDENT)
-            return DeferStmt(body)
+            return DeferStmt(body, is_errdefer)
         expr = self.parse_expression(); self.consume(TokenType.NEWLINE)
-        return DeferStmt([expr])
+        return DeferStmt([expr], is_errdefer)
 
     def parse_assert(self):
         self.consume(); self.consume(TokenType.OP)
@@ -153,9 +159,15 @@ class DeclarationsParser:
         return EnumDecl(name, variants)
 
     def parse_function(self):
-        is_exported = False
-        if self.current_token() and self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'export':
+        # NOVO: Lê atributos (@inline, @export)
+        attrs = []
+        while self.current_token() and self.current_token().type == TokenType.OP and self.current_token().value == '@':
             self.consume()
+            attr_name = self.consume(TokenType.IDENT).value
+            attrs.append(attr_name)
+            
+        is_exported = False
+        if 'export' in attrs:
             is_exported = True
             
         fn_token = self.consume(TokenType.KEYWORD) # 'fn'
@@ -185,7 +197,7 @@ class DeclarationsParser:
             if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
             body.append(self.parse_statement())
         self.consume(TokenType.DEDENT)
-        return Function(name, params, return_type, body, type_params, line, col, is_exported)
+        return Function(name, params, return_type, body, type_params, line, col, is_exported, attrs)
 
     def parse_extern(self):
         self.consume() # 'extern'

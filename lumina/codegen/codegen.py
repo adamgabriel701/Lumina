@@ -46,6 +46,7 @@ class LLVMCodegen(HelpersCodegen, TypesCodegen, AccessCodegen, ExpressionCodegen
         self.is_debug = getattr(self, 'is_debug', False)
         self.di_cu = None
         self.di_file = None
+        self.err_deferred_stmts = []
         
         if self.is_debug:
             self.module.add_debug_info("Dwarf Version", "4")
@@ -302,11 +303,23 @@ class LLVMCodegen(HelpersCodegen, TypesCodegen, AccessCodegen, ExpressionCodegen
             param_types = [self.get_llvm_param_type(p[1]) for p in func_node.params]
             func_type = ir.FunctionType(ret_ty, param_types)
             func = ir.Function(self.module, func_type, name=func_node.name)
-            if func_node.name != "main": 
-                func.attributes.add('alwaysinline')
+            
+            # NOVO: Aplica atributos do LLVM
+            if func_node.attributes:
+                for attr in func_node.attributes:
+                    if attr == 'inline' or attr == 'alwaysinline':
+                        func.attributes.add('alwaysinline')
+                    elif attr == 'noinline':
+                        func.attributes.add('noinline')
+                        
+            if func_node.name != "main":
+                if not func_node.attributes or 'noinline' not in func_node.attributes:
+                    func.attributes.add('alwaysinline')
                 func.attributes.add('nounwind')
+            else:
+                func.attributes.add('nounwind')
+                
             self.functions_table[func_node.name] = (func, func_type)
-
     def generate_function_body(self, func_node: Function):
         func, func_type = self.functions_table[func_node.name]
         block = func.append_basic_block(name="entry")

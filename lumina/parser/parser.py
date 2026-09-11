@@ -31,22 +31,31 @@ class Parser(ExpressionParser, StatementParser):
     def parse(self):
         declarations = []
         while self.current_token() and self.current_token().type != TokenType.EOF:
-            if self.current_token().type == TokenType.KEYWORD and self.current_token().value in ('fn', 'export'):
-                declarations.append(self.parse_function())
-            elif self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'struct':
-                declarations.append(self.parse_struct())
-            elif self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'enum':
-                declarations.append(self.parse_enum())
-            elif self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'impl':
-                declarations.append(self.parse_impl())
-            elif self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'trait':
-                declarations.append(self.parse_trait())
-            elif self.current_token().type == TokenType.KEYWORD and self.current_token().value in ('let', 'mut', 'test', 'bench'):
-                declarations.append(self.parse_statement())
-            elif self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'import':
-                declarations.append(self.parse_statement())
-            elif self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'extern':
-                declarations.append(self.parse_extern())
-            else:
-                self.consume()
+            try:
+                if self.current_token().type == TokenType.KEYWORD and self.current_token().value in ('fn', 'export'):
+                    declarations.append(self.parse_function())
+                elif self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'struct':
+                    declarations.append(self.parse_struct())
+                elif self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'enum':
+                    declarations.append(self.parse_enum())
+                elif self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'impl':
+                    declarations.append(self.parse_impl())
+                elif self.current_token().type == TokenType.KEYWORD and self.current_token().value == 'trait':
+                    declarations.append(self.parse_trait())
+                elif self.current_token().type == TokenType.KEYWORD and self.current_token().value in ('let', 'mut', 'test', 'bench', 'import', 'extern'):
+                    declarations.append(self.parse_statement())
+                else:
+                    self.consume()
+            except LuminaError as e:
+                # NOVO: Em vez de parar tudo, registra o erro e pula para a próxima declaração
+                # O LSP vai pegar esse erro da AST e reportar, mas continuará parseando o resto!
+                from ..ast import ErrorNode
+                declarations.append(ErrorNode(e.message, e.line, e.col))
+                
+                # Sincroniza: pula tokens até achar um 'fn', 'let', 'struct' ou fim do arquivo
+                while self.current_token() and self.current_token().type != TokenType.EOF:
+                    if self.current_token().type == TokenType.KEYWORD and self.current_token().value in ('fn', 'let', 'mut', 'struct', 'enum', 'impl', 'trait', 'import', 'extern', 'export'):
+                        break
+                    self.consume()
+                    
         return declarations

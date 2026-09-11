@@ -1,0 +1,49 @@
+# std/async_fs.lm - I/O de Arquivos Assíncrono (Non-blocking)
+
+import "std/epoll"
+
+# Constantes POSIX
+let O_RDONLY = 0
+let O_NONBLOCK = 2048
+
+# FFI para chamadas de sistema do Linux
+extern fn open(pathname: str, flags: int) -> int
+extern fn read(fd: int, buf: ptr, count: int) -> int
+extern fn close(fd: int) -> int
+
+# Lê um arquivo de forma assíncrona usando epoll
+fn read_file_async(path: str) -> str:
+    # Abre o arquivo com O_NONBLOCK
+    let fd = open(path, O_RDONLY | O_NONBLOCK)
+    if fd < 0:
+        return "ERRO: Não foi possível abrir o arquivo"
+        
+    # Cria instância do epoll
+    let epfd = criar()
+    adicionar(epfd, fd)
+    
+    # Aloca buffer de 4096 bytes
+    let buf = alloc_bytes(4096)
+    mut content = ""
+    
+    # Event Loop
+    while true:
+        # Espera o Kernel avisar que há dados para ler (não bloqueia a CPU)
+        let events = esperar(epfd, 100)
+        
+        if events != 0:
+            # Lê o máximo que puder
+            let bytes_read = read(fd, buf, 4096)
+            
+            if bytes_read <= 0:
+                # Fim do arquivo
+                break
+                
+            # Copia os bytes lidos para a string de conteúdo
+            mut i = 0
+            while i < bytes_read:
+                content = content + chr(buf[i])
+                i += 1
+                
+    close(fd)
+    return content

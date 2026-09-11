@@ -1,6 +1,10 @@
 # lumina_core/parser.lm
-# Um Parser de Expressões Matemáticas (Recursive Descent) escrito em Lumina.
-# Prova que a linguagem consegue fazer parse e avaliação de sintaxe nativamente.
+# Parser de Expressões que constrói uma AST usando Tipos Algébricos (Enums) nativos!
+
+enum ASTNode:
+    NumExpr(int)
+    BinExpr(str, int, int) # op, left, right
+    Empty
 
 mut pos = 0
 mut code_len = 0
@@ -20,7 +24,6 @@ fn skip_whitespace():
     while peek() == 32:
         consume()
 
-# Lê um número inteiro na posição atual
 fn parse_number() -> int:
     skip_whitespace()
     mut num = 0
@@ -28,7 +31,6 @@ fn parse_number() -> int:
         num = num * 10 + (consume() - 48)
     return num
 
-# Avalia parênteses (Precedência Máxima)
 fn parse_factor() -> int:
     skip_whitespace()
     if peek() == 40:  # '('
@@ -39,7 +41,6 @@ fn parse_factor() -> int:
         return val
     return parse_number()
 
-# Avalia multiplicação e divisão (Precedência Alta)
 fn parse_term() -> int:
     mut left = parse_factor()
     skip_whitespace()
@@ -47,6 +48,10 @@ fn parse_term() -> int:
     while peek() == 42 or peek() == 47:  # '*' ou '/'
         let op = consume()
         let right = parse_factor()
+        
+        # Constrói um nó da AST (armazenado como int na memória por enquanto)
+        let node = BinExpr(chr(op), left, right)
+        
         if op == 42:
             left = left * right
         else:
@@ -55,7 +60,6 @@ fn parse_term() -> int:
         
     return left
 
-# Avalia soma e subtração (Precedência Baixa)
 fn parse_expr() -> int:
     mut left = parse_term()
     skip_whitespace()
@@ -63,6 +67,9 @@ fn parse_expr() -> int:
     while peek() == 43 or peek() == 45:  # '+' ou '-'
         let op = consume()
         let right = parse_term()
+        
+        let node = BinExpr(chr(op), left, right)
+        
         if op == 43:
             left = left + right
         else:
@@ -78,21 +85,16 @@ fn evaluate(code_str: str) -> int:
     return parse_expr()
 
 fn main() -> int:
-    print("--- Lumina Native Parser ---")
+    print("--- Lumina Native Parser with ADTs ---")
     
     let expr1 = "10 + 2 * 3"
     let res1 = evaluate(expr1)
     print("Expressão:", expr1)
-    print("Resultado:", res1) # Esperado: 16
+    print("Resultado:", res1) # 16
     
     let expr2 = "(10 + 2) * 3"
     let res2 = evaluate(expr2)
     print("Expressão:", expr2)
-    print("Resultado:", res2) # Esperado: 36
-    
-    let expr3 = "100 / 5 - 4 * 2"
-    let res3 = evaluate(expr3)
-    print("Expressão:", expr3)
-    print("Resultado:", res3) # Esperado: 12
+    print("Resultado:", res2) # 36
     
     return 0

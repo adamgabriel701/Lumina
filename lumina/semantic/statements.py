@@ -1,8 +1,9 @@
-from ..ast import VarDecl, DestructureStmt, AssignStmt, ReturnStmt, IfStmt, WhileStmt, ForStmt, MatchStmt, ContinueStmt, DeferStmt, BreakStmt, AssertStmt, BenchStmt, CallExpr, MemberExpr, DerefExpr, IndexExpr, VariableExpr, StringExpr, NumberExpr, BoolExpr, BinaryExpr, StructLiteralExpr
+from ..ast import VarDecl, DestructureStmt, AssignStmt, ReturnStmt, IfStmt, WhileStmt, ForStmt, MatchStmt, ContinueStmt, DeferStmt, BreakStmt, AssertStmt, BenchStmt, CallExpr, MemberExpr, DerefExpr, IndexExpr, VariableExpr, StringExpr, NumberExpr, BoolExpr, BinaryExpr, StructLiteralExpr, ErrorNode
 from ..errors import LuminaError
 
 class StatementAnalyzer:
     def analyze_stmt(self, node):
+        if isinstance(node, ErrorNode): return
         if isinstance(node, VarDecl):
             if node.var_type is not None:
                 base_type = node.var_type.split('<')[0]

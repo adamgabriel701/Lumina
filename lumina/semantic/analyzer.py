@@ -1,3 +1,5 @@
+from lumina.ast.statements import ErrorNode
+
 from ..ast import Function, ExternDecl, StructDecl, EnumDecl, ImplBlock, VarDecl, VariableExpr, TraitDecl, MatchStmt
 from ..errors import LuminaError
 from .expressions import ExpressionAnalyzer
@@ -18,6 +20,7 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
 
     def analyze(self, declarations):
         for decl in declarations:
+            if isinstance(decl, ErrorNode): continue # NOVO: Ignora nós de erro
             if isinstance(decl, (Function, ExternDecl)):
                 self.functions.add(decl.name)
                 if isinstance(decl, Function):
@@ -44,12 +47,14 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
                     for trait_method in trait_def.methods:
                         expected_name = f"{decl.struct_name}_{trait_method.name}"
                         if expected_name not in self.functions:
-                            raise LuminaError(f"Struct '{decl.struct_name}' não implementa o método '{trait_method.name}' exigido pelo Trait '{decl.trait_name}'.", self.filename, 0, 0, self.source_code)
+                            # NOVO: Se o método tem corpo no Trait (padrão), não exige que a struct implemente!
+                            if not trait_method.body:
+                                raise LuminaError(f"Struct '{decl.struct_name}' não implementa o método '{trait_method.name}' exigido pelo Trait '{decl.trait_name}'.", self.filename, 0, 0, self.source_code)
                         
                         impl_method = self.function_defs.get(expected_name)
                         if impl_method and impl_method.return_type != trait_method.return_type:
                             raise LuminaError(f"Assinatura incorreta para '{trait_method.name}'. Esperado retorno '{trait_method.return_type}', mas obteve '{impl_method.return_type}'.", self.filename, 0, 0, self.source_code)
-                            
+
         for decl in declarations:
             if isinstance(decl, VarDecl):
                 if decl.var_type is not None:

@@ -105,9 +105,16 @@ class AccessCodegen:
         return self.builder.load(ptr, name="deref_val")
 
     def codegen_address_of(self, node):
+        # NOVO: Suporta pegar o endereço de um campo de struct (ex: &c.mutex)
+        if isinstance(node.val, MemberExpr):
+            ptr = self.resolve_member_ptr(node.val)
+            # NOVO: FFI sempre espera ponteiros genéricos (i64*), então faz bitcast
+            return self.builder.bitcast(ptr, self.i64_ty.as_pointer(), name="member_addr_cast")
+            
         if isinstance(node.val, VariableExpr):
-            if node.val.name in self.functions_table: return self.builder.ptrtoint(self.functions_table[node.val.name][0], self.i64_ty, name="fn_ptr_int")
+            if node.val.name in self.functions_table: 
+                return self.builder.ptrtoint(self.functions_table[node.val.name][0], self.i64_ty, name="fn_ptr_int")
             ptr = self.symbol_table.get(node.val.name)
             if not ptr: raise Exception(f"Variável '{node.val.name}' não declarada.")
-            return self.builder.bitcast(ptr, self.voidptr_ty, name="addr_of")
+            return self.builder.bitcast(ptr, self.ivoidptr_ty, name="addr_of")
         raise Exception("Endereço de memória só pode ser pego de variáveis ou funções.")

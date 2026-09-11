@@ -1,4 +1,6 @@
 from llvmlite import ir
+
+from lumina.ast.statements import TraitDecl
 from ..ast import Function, StructDecl, ArrayExpr, ImplBlock, CallExpr, ExternDecl, EnumDecl, VarDecl, StringExpr, NumberExpr, BoolExpr, BinaryExpr, VariableExpr, IndexExpr, MemberExpr, AddressOfExpr, DerefExpr, TupleExpr, UnaryExpr, PropagateExpr, ComptimeExpr
 from .builtins import BuiltinManager
 from .helpers import HelpersCodegen
@@ -64,6 +66,7 @@ class LLVMCodegen(HelpersCodegen, TypesCodegen, AccessCodegen, ExpressionCodegen
     def generate_module(self, declarations):
         self.struct_defs = {d.name: d for d in declarations if isinstance(d, StructDecl)}
         self.function_defs = {d.name: d for d in declarations if isinstance(d, Function)}
+        self.trait_defs = {d.name: d for d in declarations if isinstance(d, TraitDecl)} # Garanta que isto está aqui
         
         for decl in declarations:
             if isinstance(decl, StructDecl): self.create_struct(decl)
@@ -72,19 +75,41 @@ class LLVMCodegen(HelpersCodegen, TypesCodegen, AccessCodegen, ExpressionCodegen
         for decl in declarations:
             if isinstance(decl, VarDecl): self.create_global_var(decl)
             
-        # NOVO: Passada 1 - Cria os protótipos de todas as funções (resolve forward declarations)
+        # 1. Cria os protótipos de todas as funções declaradas
         for decl in declarations:
             if isinstance(decl, Function): self.create_function_prototype(decl)
             elif isinstance(decl, ImplBlock):
                 for method in decl.methods: self.create_function_prototype(method)
             elif isinstance(decl, ExternDecl): self.create_extern(decl)
                 
-        # NOVO: Passada 2 - Gera os corpos (IR) de todas as funções
+        # NOVO: 1.5. Injeta e cria protótipos dos métodos padrão de Traits ANTES de gerar qualquer corpo!
+        for decl in declarations:
+            if isinstance(decl, ImplBlock) and decl.trait_name:
+                trait_def = self.trait_defs.get(decl.trait_name)
+                if trait_def:
+                    for trait_method in trait_def.methods:
+                        expected_name = f"{decl.struct_name}_{trait_method.name}"
+                        if expected_name not in self.function_defs and trait_method.body:
+                            trait_method.name = expected_name
+                            self.function_defs[expected_name] = trait_method
+                            self.create_function_prototype(trait_method)
+                            
+        # 2. Gera os corpos (IR) de todas as funções (incluindo as injetadas)
         for decl in declarations:
             if isinstance(decl, Function): self.generate_function_body(decl)
             elif isinstance(decl, ImplBlock):
                 for method in decl.methods: self.generate_function_body(method)
                 
+        # Gera os corpos dos métodos padrão injetados
+        for decl in declarations:
+            if isinstance(decl, ImplBlock) and decl.trait_name:
+                trait_def = self.trait_defs.get(decl.trait_name)
+                if trait_def:
+                    for trait_method in trait_def.methods:
+                        expected_name = f"{decl.struct_name}_{trait_method.name}"
+                        if expected_name not in [m.name for m in decl.methods] and trait_method.body:
+                            self.generate_function_body(trait_method)
+                            
         return str(self.module)
 
     def cleanup_block(self, vars_set): vars_set.clear()
@@ -291,6 +316,14 @@ class LLVMCodegen(HelpersCodegen, TypesCodegen, AccessCodegen, ExpressionCodegen
         self.symbol_table = {}; self.var_types = {}
         self.cleanup_vars = [set()]; self.freed_vars = set(); self.deferred_stmts = []
         
+        # NOVO: Guarda o contexto da struct atual (ex: "English" em "English_greet")
+        self.current_struct_name = None
+        if "_" in func_node.name:
+            parts = func_node.name.split("_")
+            base_name = parts[0]
+            if base_name in self.struct_defs:
+                self.current_struct_name = base_name
+
         if self.is_debug and self.di_cu:
             di_sp = self.module.add_debug_info("DISubprogram", {
                 "name": func_node.name, "linkageName": func_node.name,

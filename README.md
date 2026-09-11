@@ -8,21 +8,22 @@
 
 **Lumina** é uma linguagem de programação de sistemas de propósito geral, focada em alta performance, ergonomia moderna, concorrência e segurança de memória. Ela combina a sintaxe limpa e expressiva baseada em indentação (estilo Python/Nim) com o poder de baixo nível e otimização industrial do backend **LLVM**.
 
-A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums), Generics com **Monomorphization** (`<T>`), Traits, Standard Library Bootstrapped, Match/Switch Statements, Closures (Lambdas), operadores modernos (`|>`, `defer`, `?.`, `?`, `as`, `:=`), interoperabilidade nativa com C/C++ (FFI), suporte a I/O Assíncrono (`epoll`), um REPL interativo, um Web Playground, um LSP com Autocomplete e "Go to Definition", compilação incremental com LTO, testes nativos com relatório de cobertura, e é **Cross-Platform** (compila para binários nativos x86_64/ARM, WebAssembly e Bare-Metal).
+A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums), Generics com **Monomorphization** (`<T>`), Traits com Métodos Padrão, Standard Library Bootstrapped, Pattern Matching em Structs (Destructuring), Canais de Concorrência (CSP), operadores modernos (`|>`, `defer`, `?.`, `?`, `as`, `:=`), interoperabilidade nativa com C/C++ (FFI), suporte a I/O Assíncrono (`epoll`/`O_NONBLOCK`), um REPL interativo, um Web Playground, um LSP com Autocomplete e "Go to Definition", compilação incremental, testes nativos com relatório de cobertura, e é **Cross-Platform** (compila para binários nativos x86_64/ARM, WebAssembly e Bare-Metal).
 
 ---
 
 ## ✨ Funcionalidades Principais
 
-* **Sintaxe Limpa & Ergonômica:** Escopo definido por indentação significativa. Sem chaves `{}` ou pontos e vírgulas `;`.
-* **Standard Library Bootstrapped:** Módulos como `std/math`, `std/str`, `std/time` e `std/list` são escritos 100% na própria Lumina.
+* **Sintaxe Limpa & Ergonômica:** Escopo definido por indentação significativa. Sem chaves `{}` ou pontos e vírgula `;`.
+* **Standard Library Bootstrapped:** Módulos como `std/math`, `std/str`, `std/time`, `std/list`, `std/channel` e `std/async_fs` são escritos 100% na própria Lumina.
 * **Tipagem Estática com Inferência:** O compilador deduz os tipos automaticamente, incluindo retornos de métodos e Lambdas.
 * **Generics com Monomorphization:** Suporte a tipos genéricos `<T>` que geram cópias especializadas em tempo de compilação, garantindo zero overhead de runtime.
 * **Tipos Algébricos (ADTs) & Pattern Matching:** `enum`s com payloads e extração via `match` ou `switch`. O compilador checa a exaustividade dos casos.
+* **Pattern Matching em Structs:** Destructuring direto no `match` para extrair campos de structs literais de forma elegente.
 * **Closures (Lambdas):** Funções anônimas inline (`fn(x: int) -> int: x * 2`).
 * **Ergonomia Moderna:**
   * **Sintaxe Curta (`:=`):** Declare variáveis mutáveis rapidamente: `x := 10`.
-  * **Escopo de Bloco:** Variáveis declaradas dentro de `if`/`for`/`while` "morrem" ao sair do bloco, garantindo segurança de memória.
+  * **Escopo de Bloco Lexical:** Variáveis declaradas dentro de `if`/`for`/`while` "morrem" ao sair do bloco, garantindo segurança de memória.
   * **F-strings Nativas:** `$"Usuário {id} logou."`.
   * **Operador Pipe (`|>`):** `5 |> dobrar |> imprimir`.
   * **Navegação Segura (`?.`):** Evita Segmentation Faults ao acessar structs nulas.
@@ -32,14 +33,18 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
   * **Switch Statements:** Sintaxe limpa de salto (jump table nativa do LLVM) para inteiros e enums.
   * **Defer & Assert:** Garantia de limpeza de escopo e testes nativos.
   * **Auto-Formatter:** `lumina fmt` formata o código automaticamente (100% da AST).
+  * **Error Recovery:** O Parser se recupera de erros de sintaxe e continua analisando o resto do arquivo, permitindo que o LSP destaque múltiplos erros de uma vez.
 * **Mensagens Inteligentes:** Erros léxicos e semânticos sugerem correções ("Did you mean?").
+* **Concorrência e I/O Assíncrono:**
+  * **Canais (CSP):** Comunicação segura entre threads estilo Go usando `pthread_mutex` e `pthread_cond`.
+  * **Green Threads:** Suporte a Corrotinas via troca de contexto de CPU (`ucontext`).
+  * **Async I/O:** Event Loop não-bloqueante de baixa latência usando `epoll` e `O_NONBLOCK`.
 * **Gerenciamento de Memória Avançado:**
   * **Garbage Collector:** Integração nativa com o **Boehm GC** (`libgc`).
   * **Escape Analysis:** Variáveis alocadas são colocadas na Stack automaticamente se não fugirem do escopo; se fugirem, vão para o Heap.
   * **Arena Allocator:** Modo Bare-Metal (`--no-gc`) com alocador determinístico.
 * **Otimizações de Compilador:** 
   * Tail Call Optimization (TCO), Constant Folding, Comptime Evaluation.
-  * **Link-Time Optimization (LTO):** O compilador usa `-flto` nativamente para remover código morto da Standard Library.
   * **Forward Declarations:** Funções podem ser chamadas antes de serem definidas no arquivo.
   * **Build Incremental:** A CLI detecta se o LLVM IR não mudou e pula a linkagem instantaneamente.
   * **Debug Info (DWARF):** Gera metadados de depuração (`--debug`) permitindo inspectar código `.lm` no GDB/LLDB.
@@ -50,7 +55,7 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
 
 ## 🏎️ Benchmarks de Performance
 
-### CPU (Média de 10 Execuções - `clang -O3 -flto -march=native`)
+### CPU (Média de 10 Execuções - `clang -O3 -march=native`)
 | Teste | C | Rust | **Lumina** | Go | Node.js | Python |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Loop Matemático** (10M) | 0.000038s | - | **0.000049s** 🥈 | - | - | - |
@@ -88,7 +93,7 @@ lumina run arquivo.lm           # Compila e executa o binário nativo
 lumina test arquivo.lm          # Compila e executa a suíte de testes nativa
 lumina repl                     # Inicia o console interativo (REPL JIT)
 lumina jit arquivo.lm           # Executa instantaneamente na memória RAM
-lumina build                    # Compila para binário nativo otimizado (-O3 -flto)
+lumina build                    # Compila para binário nativo otimizado (-O3)
 lumina build app.lm --debug     # Compila com símbolos DWARF (GDB/LLDB)
 lumina build app.lm --wasm      # Compila para WebAssembly (.wasm)
 lumina build app.lm --no-gc     # Compila para Bare-Metal (sem Garbage Collector)
@@ -152,37 +157,53 @@ fn main() -> int:
     return 0
 ```
 
-### 2. Estruturas de Dados Nativas (Lista Ligada)
+### 2. Pattern Matching em Structs e Traits com Métodos Padrão
 ```lumina
-import "std/list"
+struct Point:
+    x: int
+    y: int
+
+trait Greeter:
+    fn name() -> str
+    fn greet():
+        let n = name()
+        print("Hello from", n)
+
+struct English:
+    dummy: int
+
+impl Greeter for English:
+    fn name() -> str:
+        return "Lumina"
 
 fn main() -> int:
-    mut l = new()
-    push(l, 10)
-    push(l, 20)
+    mut p: Point
+    p.x = 10
+    p.y = 20
     
-    print("Tamanho:", l.size)
-    print("Elemento 1:", get(l, 1))
+    # Destructuring Match!
+    let msg = match p {
+        Point { x: 0, y: 0 } => "Origem",
+        Point { x: val_x, y: val_y } => "Outro ponto",
+        else => "Desconhecido"
+    }
+    print(msg)
+    
+    # Trait com método padrão
+    mut e: English
+    e.greet()
     return 0
 ```
 
-### 3. Match Expressions, Closures e Standard Prelude
+### 3. Canais de Concorrência (CSP)
 ```lumina
-fn avaliar(n: int) -> int:
-    return match n {
-        1 => 100,
-        2 => 200,
-        else => 999
-    }
+import "std/channel"
 
 fn main() -> int:
-    let res = avaliar(2) |> (x) -> x + 1
-    print("Resultado:", res)
-    
-    let opt = Some(42)
-    match opt:
-        case Some(v): print("Option contém:", v)
-        case None: print("Vazio")
+    let c = new(10)
+    send(c, 42)
+    let val = recv(c)
+    print("Recebido do canal:", val)
     return 0
 ```
 
@@ -193,6 +214,8 @@ fn main() -> int:
 * `std/math`: Funções matemáticas via FFI (`potencia`, `raiz_quadrada`, `valor_absoluto`).
 * `std/str`: Manipulação de strings nativa (`to_upper`, `to_lower`, `trim`, `split`, `join`).
 * `std/list`: Lista Ligada (Linked List) dinâmica usando Structs e Ponteiros.
+* `std/channel`: Canais de concorrência seguros entre threads (CSP).
+* `std/async_fs`: I/O de arquivos não-bloqueante usando `O_NONBLOCK`.
 * `std/time`: Medição de tempo de alta precisão.
 * `std/fs`: Manipulação de arquivos.
 * `std/http`: Web Framework HTTP nativo.

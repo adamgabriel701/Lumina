@@ -1,8 +1,9 @@
 from llvmlite import ir
-from ..ast import NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr, ArrayExpr, IndexExpr, MemberExpr, AddressOfExpr, DerefExpr, TupleExpr, UnaryExpr, PropagateExpr, ComptimeExpr, StructLiteralExpr, MatchExpr, CastExpr, LambdaExpr
+from ..ast import NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr, ArrayExpr, IndexExpr, MemberExpr, AddressOfExpr, DerefExpr, TupleExpr, UnaryExpr, PropagateExpr, ComptimeExpr, StructLiteralExpr, MatchExpr, CastExpr, LambdaExpr, ErrorNode
 
 class ExpressionCodegen:
     def codegen_expr(self, node):
+        if isinstance(node, ErrorNode): return ir.Constant(self.i64_ty, 0)
         if isinstance(node, NumberExpr):
             # NOVO: Suporta hexadecimais (0x...) e decimais normais
             if node.value.startswith('0x') or node.value.startswith('0X'):
@@ -93,7 +94,7 @@ class ExpressionCodegen:
                 return phi
                 
             # 2. Lowering de Match para Inteiros (switch nativo)
-            else:
+            elif cond_val.type == self.i64_ty:
                 default_bb = self.builder.append_basic_block(name="match_expr.default")
                 end_bb = self.builder.append_basic_block(name="match_expr.end")
                 sw = self.builder.switch(cond_val, default_bb)
@@ -131,6 +132,78 @@ class ExpressionCodegen:
                 phi = self.builder.phi(phi_ty, name="match_expr_res")
                 for val, blk in incoming: phi.add_incoming(val, blk)
                 return phi
+
+            # 3. NOVO: Lowering de Match para Structs (Destructuring)
+            elif isinstance(cond_val.type, ir.PointerType) and isinstance(cond_val.type.pointee, ir.IdentifiedStructType):
+                struct_name = cond_val.type.pointee.name
+                struct_def = self.struct_defs.get(struct_name)
+                if not struct_def: raise Exception(f"Struct '{struct_name}' não encontrada para match.")
+                
+                end_bb = self.builder.append_basic_block(name="match_struct.end")
+                incoming = []
+                phi_ty = None
+                
+                for val_node, res_node in node.cases:
+                    if not isinstance(val_node, StructLiteralExpr) or val_node.struct_name != struct_name:
+                        raise Exception("Match de struct requer Struct Literals do mesmo tipo.")
+                        
+                    # Gera checagens de campos (if-else chain)
+                    cond_bb = self.builder.append_basic_block(name="match_struct.check")
+                    next_bb = self.builder.append_basic_block(name="match_struct.next")
+                    self.builder.branch(cond_bb)
+                    self.builder.position_at_end(cond_bb)
+                    
+                    all_match = ir.Constant(ir.IntType(1), 1)
+                    for field_name, field_val_node in val_node.fields:
+                        elem_index = self.struct_fields[struct_name].get(field_name)
+                        elem_ptr = self.builder.gep(cond_val, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, elem_index)], name="match_field_ptr")
+                        field_val = self.builder.load(elem_ptr, name="match_field_val")
+                        
+                        # Se for uma Variável (ex: y: y_val), vincula a variável
+                        if isinstance(field_val_node, VariableExpr):
+                            var_ptr = self.builder.alloca(self.i64_ty, name=field_val_node.name)
+                            self.builder.store(field_val, var_ptr)
+                            self.symbol_table[field_val_node.name] = var_ptr
+                            self.var_types[field_val_node.name] = self.i64_ty
+                        # Se for um literal, compara
+                        else:
+                            expected_val = self.codegen_expr(field_val_node)
+                            if expected_val.type == self.f64_ty: field_val = self.builder.fptosi(field_val, self.i64_ty, name="f_to_i")
+                            is_eq = self.builder.icmp_signed("==", field_val, expected_val, name="field_eq")
+                            all_match = self.builder.and_(all_match, is_eq, name="and_match")
+                            
+                    then_bb = self.builder.append_basic_block(name="match_struct.then")
+                    self.builder.cbranch(all_match, then_bb, next_bb)
+                    
+                    self.builder.position_at_end(then_bb)
+                    res_val = self.codegen_expr(res_node)
+                    if phi_ty is None: phi_ty = res_val.type
+                    if not self.builder.block.is_terminated:
+                        self.builder.branch(end_bb)
+                        incoming.append((res_val, self.builder.block))
+                        
+                    self.builder.position_at_end(next_bb)
+                
+                # Default
+                if node.default:
+                    default_val = self.codegen_expr(node.default)
+                    if phi_ty is None: phi_ty = default_val.type
+                    if not self.builder.block.is_terminated:
+                        self.builder.branch(end_bb)
+                        incoming.append((default_val, self.builder.block))
+                else:
+                    if not self.builder.block.is_terminated:
+                        self.builder.branch(end_bb)
+                        incoming.append((ir.Constant(self.i64_ty, 0), self.builder.block))
+                        
+                self.builder.position_at_end(end_bb)
+                if phi_ty is None: phi_ty = self.i64_ty
+                phi = self.builder.phi(phi_ty, name="match_struct_res")
+                for val, blk in incoming: phi.add_incoming(val, blk)
+                return phi
+                
+            else:
+                raise Exception("Match não suportado para este tipo.")
             
         # NOVO: Geração de código para LambdaExpr
         elif isinstance(node, LambdaExpr):
@@ -329,6 +402,14 @@ class ExpressionCodegen:
             elif base_op == '/': return self.builder.sdiv(left, right, name="div_assign")
 
     def codegen_user_call(self, node):
+        # NOVO: Se a função não existir, mas estivermos dentro de um método de struct, 
+        # tenta encontrar o método com o prefixo da struct (ex: name -> English_name)
+        if node.name not in self.functions_table:
+            if hasattr(self, 'current_struct_name') and self.current_struct_name:
+                expected_name = f"{self.current_struct_name}_{node.name}"
+                if expected_name in self.functions_table:
+                    node.name = expected_name
+                    
         if node.name in self.functions_table:
             func, func_type = self.functions_table[node.name]
             args = []

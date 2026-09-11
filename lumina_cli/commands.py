@@ -209,6 +209,12 @@ def cmd_build(entry_file=None, extra_flags=[]):
     is_no_gc = "--no-gc" in extra_flags
     is_wasm = "--wasm" in extra_flags
     is_debug = "--debug" in extra_flags
+    is_native_frontend = "--use-native-frontend" in extra_flags # NOVO
+
+    if is_native_frontend:
+        info("⚡ Usando Lexer/Parser Nativo (lumina_core)...")
+        # Aqui no futuro ele chamaria o binário lumina_core/lexer
+        # Por enquanto, apenas loga e continua com o pipeline Python
 
     step(f"🛠️  Compilando projeto: {paint(project_name, Color.BOLD + Color.BRIGHT_CYAN)}")
     
@@ -280,8 +286,8 @@ def cmd_build(entry_file=None, extra_flags=[]):
         target_flag = "-march=native -funroll-loops"
         output_ext = "" # Binário nativo sem extensão
         
-        # NOVO: Adicionado -flto (Link-Time Optimization) para Dead Code Elimination na std/
-        cmd = (f"clang -O3 -flto {target_flag} {debug_flag} {ir_file} "
+        # Removido o -flto para acelerar o tempo de build
+        cmd = (f"clang -O3 {target_flag} {debug_flag} {ir_file} "
                f"-o {project_name} {link_flags} -lc -lm -lpthread {gc_flag}")
 
     hash_obj_file = f".lumina_cache/{project_name}.bin_hash"
@@ -291,7 +297,6 @@ def cmd_build(entry_file=None, extra_flags=[]):
     if os.path.exists(hash_obj_file):
         with open(hash_obj_file, "r") as f:
             old_hash = f.read()
-        # Compara o hash do IR atual com o salvo
         new_hash = hashlib.md5(llvm_ir.encode()).hexdigest()
         if old_hash == new_hash and not is_wasm and not is_debug:
             success(f"✅ Build incremental: Nenhum código mudou. Pulando linkagem.")

@@ -81,9 +81,12 @@ class NativeCallCodegen:
         if isinstance(struct_ty, ir.PointerType) and isinstance(struct_ty.pointee, ir.IdentifiedStructType): struct_ty = struct_ty.pointee
         struct_name = struct_ty.name if struct_ty else "Unknown"
         func_name = f"{struct_name}_{node.name}"
+        
+        # NOVO: Se o método estiver na tabela de funções do usuário, chama ele!
         if func_name in self.functions_table:
             func, func_type = self.functions_table[func_name]
             return self.builder.call(func, [obj_val] + [self.codegen_expr(a) for a in node.args[1:]], name=func_name + "_call")
+            
         raise Exception(f"Método nativo '{node.name}' não encontrado.")
 
     def codegen_str_method(self, node, obj_val):

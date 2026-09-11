@@ -69,7 +69,8 @@ class ExpressionAnalyzer:
                     struct_name = obj_type.split('<')[0] if obj_type else "Unknown"
                     real_method_name = f"{struct_name}_{node.name}"
                     if real_method_name not in self.functions:
-                        raise LuminaError(f"Método '{node.name}' não declarado na struct '{struct_name}'.", self.filename, 0, 0, self.source_code)
+                        # NOVO: Se não achar, não levanta erro aqui! Pode ser um método padrão de Trait que o Codegen vai injetar.
+                        pass 
             elif node.name not in ("print", "input", "atoi", "len", "alloc", "alloc_bytes", "free", "read_file", "write_file", "int", "float", "str", "argv", "chr", "http_response") and node.name not in self.functions:
                 # NOVO: Sugere funções parecidas
                 suggestion = get_suggestion(node.name, list(self.functions))
@@ -118,7 +119,16 @@ class ExpressionAnalyzer:
         elif isinstance(node, MatchExpr):
             self.analyze_expr(node.condition)
             for val, res in node.cases:
-                self.analyze_expr(val)
+                # NOVO: Se for um Struct Literal, as variáveis nos campos são bindings (novas variáveis)
+                if isinstance(val, StructLiteralExpr):
+                    for field_name, field_expr in val.fields:
+                        if isinstance(field_expr, VariableExpr):
+                            # Declara a variável local para o Codegen saber que ela existe
+                            self.declare_var(field_expr.name, "int", True)
+                        else:
+                            self.analyze_expr(field_expr)
+                else:
+                    self.analyze_expr(val)
                 self.analyze_expr(res)
             if node.default:
                 self.analyze_expr(node.default)

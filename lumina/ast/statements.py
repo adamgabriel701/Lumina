@@ -114,3 +114,9 @@ class DestructureStmt:
     names: List[str]
     value: any
     is_mutable: bool = False
+
+@dataclass
+class ErrorNode:
+    message: str
+    line: int
+    col: int

@@ -1,5 +1,5 @@
 from llvmlite import ir
-from ..ast import VarDecl, AssignStmt, ReturnStmt, IfStmt, WhileStmt, ForStmt, MatchStmt, MemberExpr, ArrayExpr, DerefExpr, IndexExpr, VariableExpr, CallExpr, ContinueStmt, DeferStmt, BreakStmt, AssertStmt, BenchStmt, DestructureStmt, NumberExpr
+from ..ast import VarDecl, AssignStmt, ReturnStmt, IfStmt, WhileStmt, ForStmt, MatchStmt, MemberExpr, ArrayExpr, DerefExpr, IndexExpr, VariableExpr, CallExpr, ContinueStmt, DeferStmt, BreakStmt, AssertStmt, BenchStmt, DestructureStmt, NumberExpr, ErrorNode
 from .control_flow import ControlFlowCodegen
 
 class StatementCodegen(ControlFlowCodegen):
@@ -13,6 +13,8 @@ class StatementCodegen(ControlFlowCodegen):
             })
             self.builder.debug_loc = loc
 
+        if isinstance(node, ErrorNode): return
+        
         if isinstance(node, VarDecl): self.codegen_var_decl(node)
         elif isinstance(node, DestructureStmt): self.codegen_destructure(node)
         elif isinstance(node, AssignStmt): self.codegen_assign(node)

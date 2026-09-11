@@ -92,7 +92,11 @@ def parse_module(filename, current_stack=None):
 
 def compile_lumina(filename, output_file="output.ll", use_cache=True, is_wasm=False, is_debug=False):
     cache_dir = ".lumina_cache"
-    cache_file = os.path.join(cache_dir, get_cache_hash(filename) + ".ll") if use_cache else None
+    # O hash agora considera se é WASM ou Debug, pois o IR gerado é diferente!
+    raw_hash = get_cache_hash(filename)
+    if is_wasm: raw_hash += "_wasm"
+    if is_debug: raw_hash += "_debug"
+    cache_file = os.path.join(cache_dir, raw_hash + ".ll") if use_cache else None
 
     if use_cache and os.path.exists(cache_file):
         info("⚡ Usando cache de compilação (.lumina_cache)...")
@@ -123,7 +127,7 @@ def compile_lumina(filename, output_file="output.ll", use_cache=True, is_wasm=Fa
     codegen = LLVMCodegen()
     codegen.escapes = analyzer.escapes
     codegen.is_wasm = is_wasm
-    codegen.is_debug = is_debug # Agora a variável existe!
+    codegen.is_debug = is_debug
     llvm_ir = codegen.generate_module(ast)
 
     with open(output_file, "w") as f:

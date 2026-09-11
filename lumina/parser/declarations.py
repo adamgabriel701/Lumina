@@ -214,7 +214,7 @@ class DeclarationsParser:
         return ExternDecl(name, params, return_type, is_wasm)
 
     def parse_trait(self):
-        self.consume()
+        self.consume() # 'trait'
         name = self.consume(TokenType.IDENT).value
         self.consume(TokenType.OP); self.consume(TokenType.NEWLINE); self.consume(TokenType.INDENT)
         methods = []
@@ -226,14 +226,25 @@ class DeclarationsParser:
                 if self.current_token().type != TokenType.OP or self.current_token().value != ')':
                     while True:
                         p_name = self.consume(TokenType.IDENT).value; self.consume(TokenType.OP)
-                        p_type = self.consume(TokenType.IDENT).value; params.append((p_name, p_type))
+                        p_type = self.parse_type(); params.append((p_name, p_type))
                         if self.current_token().type == TokenType.OP and self.current_token().value == ',': self.consume()
                         else: break
                 self.consume(TokenType.OP)
                 return_type = "void"
                 if self.current_token().type == TokenType.OP and self.current_token().value == '->':
-                    self.consume(); return_type = self.consume(TokenType.IDENT).value
-                self.consume(TokenType.NEWLINE)
-                methods.append(Function(m_name, params, return_type, []))
+                    self.consume(); return_type = self.parse_type()
+                
+                # NOVO: Verifica se tem corpo (método padrão) ou apenas assinatura
+                body = []
+                if self.current_token().type == TokenType.OP and self.current_token().value == ':':
+                    self.consume(); self.consume(TokenType.NEWLINE); self.consume(TokenType.INDENT)
+                    while self.current_token() and self.current_token().type != TokenType.DEDENT:
+                        if self.current_token().type == TokenType.NEWLINE: self.consume(); continue
+                        body.append(self.parse_statement())
+                    self.consume(TokenType.DEDENT)
+                else:
+                    self.consume(TokenType.NEWLINE)
+                    
+                methods.append(Function(m_name, params, return_type, body))
         self.consume(TokenType.DEDENT)
         return TraitDecl(name, methods)

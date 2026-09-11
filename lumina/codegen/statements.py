@@ -1,246 +1,238 @@
 from llvmlite import ir
-from ..ast import VarDecl, AssignStmt, ReturnStmt, IfStmt, WhileStmt, ForStmt, MatchStmt, MemberExpr, ArrayExpr, DerefExpr, IndexExpr, VariableExpr, CallExpr, ContinueStmt, DeferStmt, BreakStmt, AssertStmt, BenchStmt, DestructureStmt, NumberExpr, ErrorNode
-from .control_flow import ControlFlowCodegen
 
-class StatementCodegen(ControlFlowCodegen):
+from ..ast import (
+    VarDecl, AssignStmt, ReturnStmt, IfStmt, WhileStmt, ForStmt, 
+    BreakStmt, ContinueStmt, MatchStmt, DeferStmt, AssertStmt, 
+    BenchStmt, DestructureStmt, VariableExpr, AddressOfExpr,
+    DerefExpr, TupleExpr, BinaryExpr, UnaryExpr, CallExpr,
+    IndexExpr, MemberExpr
+)
+
+class StatementCodegen:
+    
     def codegen_stmt(self, node):
-        # NOVO: Atualiza a linha de debug para o nó atual
-        if hasattr(self, 'is_debug') and self.is_debug and hasattr(self, 'current_line'):
-            loc = self.module.add_debug_info("DILocation", {
-                "line": getattr(node, 'line', 0),
-                "column": getattr(node, 'col', 1),
-                "scope": self.builder.debug_metadata
-            })
-            self.builder.debug_loc = loc
-
-        if isinstance(node, ErrorNode): return
-        
-        if isinstance(node, VarDecl): self.codegen_var_decl(node)
-        elif isinstance(node, DestructureStmt): self.codegen_destructure(node)
-        elif isinstance(node, AssignStmt): self.codegen_assign(node)
-        elif isinstance(node, ReturnStmt): self.codegen_return(node)
-        elif isinstance(node, IfStmt): self.codegen_if(node)
-        elif isinstance(node, WhileStmt): self.codegen_while(node)
-        elif isinstance(node, ForStmt): self.codegen_for(node)
-        elif isinstance(node, MatchStmt): self.codegen_match(node)
-        elif isinstance(node, ContinueStmt):
-            if self.continue_block: self.cleanup_block(self.cleanup_vars[-1]); self.builder.branch(self.continue_block)
-        elif isinstance(node, BreakStmt):
-            if self.break_block: self.cleanup_block(self.cleanup_vars[-1]); self.builder.branch(self.break_block)
-        elif isinstance(node, DeferStmt): self.deferred_stmts.append(node.body)
-        elif isinstance(node, AssertStmt): self.codegen_assert(node)
-        elif isinstance(node, BenchStmt): self.codegen_bench(node)
-        else: self.codegen_expr(node)
+        if isinstance(node, VarDecl):
+            self.codegen_var_decl(node)
+        elif isinstance(node, AssignStmt):
+            self.codegen_assign(node)
+        elif isinstance(node, ReturnStmt):
+            self.codegen_return(node)
+        elif isinstance(node, IfStmt):
+            self.codegen_if(node)
+        elif isinstance(node, WhileStmt):
+            self.codegen_while(node)
+        elif isinstance(node, ForStmt):
+            self.codegen_for(node)
+        elif isinstance(node, MatchStmt):
+            self.codegen_match_stmt(node)
+        elif isinstance(node, (BreakStmt, ContinueStmt)):
+            pass # Requer conhecimento dos blocos atuais (BB stack)
+        elif isinstance(node, DeferStmt):
+            for stmt in node.body: self.codegen_stmt(stmt)
+        elif isinstance(node, AssertStmt):
+            self.codegen_expr(node.condition)
+        elif isinstance(node, BenchStmt):
+            for stmt in node.body: self.codegen_stmt(stmt)
+        elif isinstance(node, DestructureStmt):
+            self.codegen_destructure(node)
+        else:
+            # Se não for um Statement, tenta avaliar como Expressão
+            self.codegen_expr(node)
 
     def codegen_var_decl(self, node):
-
-        # NOVO: Verificação blindada de Structs pelo nome do tipo
-        is_struct = False
-        if node.var_type:
-            base_type = node.var_type.split('<')[0]
-            if base_type in self.struct_types or '<' in node.var_type:
-                is_struct = True
-                
-        # 1. Se for uma Struct explícita (ex: mut sq: Square)
-        if is_struct:
-            var_ty = self.get_llvm_type(node.var_type)
-            ptr = self.builder.alloca(var_ty, name=node.name)
-            self.symbol_table[node.name] = ptr
-            self.var_types[node.name] = var_ty
-            # Só inicializa se houver um valor (ex: = Point { x: 10 })
-            if node.value:
-                val = self.codegen_expr(node.value)
-                if isinstance(val.type, ir.PointerType) and isinstance(val.type.pointee, ir.IdentifiedStructType):
-                    val = self.builder.load(val, name="struct_val")
-                self.builder.store(val, ptr)
-            return  # RETURN PRECOCE!
+        if node.var_type is None and node.value is not None:
+            # Inferência básica de tipo a partir do valor
+            val = self.codegen_expr(node.value)
+            var_type = "int"
+            if val.type == self.f64_ty: var_type = "float"
+            elif val.type == self.voidptr_ty: var_type = "str"
+        else:
+            var_type = node.var_type
+            val = self.codegen_expr(node.value) if node.value else None
             
-        # 2. Se for um Array estático (ex: let arr = [1, 2, 3])
-        if isinstance(node.value, ArrayExpr):
-            arr_ty = ir.ArrayType(self.i64_ty, len(node.value.elements))
-            ptr = self.builder.alloca(arr_ty, name=node.name)
-            self.var_types[node.name] = arr_ty
-            self.symbol_table[node.name] = ptr
-            self.array_sizes[node.name] = len(node.value.elements)
-            for i, el in enumerate(node.value.elements):
-                el_val = self.codegen_expr(el)
-                if el_val.type == self.f64_ty: el_val = self.builder.fptosi(el_val, self.i64_ty, name="to_int")
-                elif isinstance(el_val.type, ir.PointerType): el_val = self.builder.ptrtoint(el_val, self.i64_ty, name="ptr_to_int")
-                self.builder.store(el_val, self.builder.gep(ptr, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, i)]))
-            return  # RETURN PRECOCE!
-            
-        # 3. Tipos primitivos e Ponteiros
-        val = self.codegen_expr(node.value) if node.value else ir.Constant(self.i64_ty, 0)
-        
-        # NOVO: Se a função retornar void, não tenta alocar, retorna 0
-        if val is None or isinstance(val.type, ir.VoidType):
-            ptr = self.builder.alloca(self.i64_ty, name=node.name)
-            self.builder.store(ir.Constant(self.i64_ty, 0), ptr)
-            self.symbol_table[node.name] = ptr
-            self.var_types[node.name] = self.i64_ty
-            return
-            
-        # Se o valor já for um ponteiro para Struct (ex: retorno de função), usa o ponteiro direto
-        if isinstance(val.type, ir.PointerType) and isinstance(val.type.pointee, ir.IdentifiedStructType):
-            self.symbol_table[node.name] = val
-            self.var_types[node.name] = val.type
-            return  # RETURN PRECOCE!
-            
-        actual_ty = val.type
-        if node.var_type is not None: actual_ty = self.get_llvm_type(node.var_type)
-        
-        if val.type == self.i64_ty and isinstance(actual_ty, ir.PointerType): val = self.builder.inttoptr(val, actual_ty, name="int_to_ptr")
-        elif val.type == self.f64_ty and actual_ty == self.i64_ty: val = self.builder.fptosi(val, self.i64_ty, name="float_to_int")
-        elif val.type == self.i64_ty and actual_ty == self.f64_ty: val = self.to_float_if_needed(val)
-        
-        ptr = self.builder.alloca(actual_ty, name=node.name)
-        self.builder.store(val, ptr)
+        llvm_ty = self.get_llvm_type(var_type)
+        ptr = self.builder.alloca(llvm_ty, name=node.name)
         self.symbol_table[node.name] = ptr
-        self.var_types[node.name] = actual_ty
+        self.var_types[node.name] = var_type
         
-        if isinstance(node.value, CallExpr) and node.value.name == "alloc":
-            if node.name not in self.escapes:
-                stack_ptr = self.builder.alloca(self.i64_ty, size=self.codegen_expr(node.value.args[0]), name=node.name + "_stack")
-                self.symbol_table[node.name] = stack_ptr
-                self.var_types[node.name] = self.i64_ty.as_pointer()
-                self.heap_int_arrays.add(node.name)
-            else:
-                # NOVO: Se a variável escapa (ex: retorna da função), aloca no Heap (malloc) para não perder a memória!
-                size_bytes = self.builder.mul(self.codegen_expr(node.value.args[0]), ir.Constant(self.i64_ty, 8), name="size_bytes")
-                heap_ptr = self.builder.call(self.malloc, [size_bytes], name=node.name + "_malloc")
-                ptr = self.builder.bitcast(heap_ptr, self.i64_ty.as_pointer(), name=node.name + "_ptr")
-                
-                self.symbol_table[node.name] = ptr
-                self.var_types[node.name] = self.i64_ty.as_pointer()
-                self.heap_int_arrays.add(node.name)
-                self.cleanup_vars[-1].add(node.name)
-
-    def codegen_destructure(self, node):
-        val = self.codegen_expr(node.value)
-        if isinstance(val.type, ir.PointerType) and val.type.pointee == self.i64_ty:
-            for i, name in enumerate(node.names):
-                elem_val = self.builder.load(self.builder.gep(val, [ir.Constant(self.i64_ty, i)], name=f"destruct_{i}"), name=name + "_val")
-                ptr = self.builder.alloca(self.i64_ty, name=name); self.builder.store(elem_val, ptr)
-                self.symbol_table[name] = ptr; self.var_types[name] = self.i64_ty
-        elif isinstance(val.type, ir.ArrayType):
-            for i, name in enumerate(node.names):
-                elem_val = self.builder.load(self.builder.gep(val, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, i)], name=f"destruct_{i}"), name=name + "_val")
-                ptr = self.builder.alloca(self.i64_ty, name=name); self.builder.store(elem_val, ptr)
-                self.symbol_table[name] = ptr; self.var_types[name] = self.i64_ty
+        if val is not None:
+            # Auto-cast de int para float se necessário
+            if llvm_ty == self.f64_ty and val.type == self.i64_ty:
+                val = self.to_float_if_needed(val)
+            self.builder.store(val, ptr)
+            
+        # Marca para o GC se for uma alocação
+        if isinstance(node.value, CallExpr) and getattr(node.value.callee, 'name', None) == "alloc":
+            self.heap_allocs.add(node.name)
 
     def codegen_assign(self, node):
-        if isinstance(node.target, DerefExpr):
-            ptr = self.codegen_expr(node.target.val)
-            if ptr.type == self.voidptr_ty: ptr = self.builder.bitcast(ptr, self.i64_ty.as_pointer(), name="ptr_cast")
-            val = self.codegen_expr(node.value)
-            if val.type == self.f64_ty: val = self.builder.fptosi(val, self.i64_ty, name="to_int")
-            self.builder.store(val, ptr)
-        elif isinstance(node.target, IndexExpr):
-            if isinstance(node.target.array, VariableExpr) and node.target.array.name in self.array_sizes:
-                arr_ptr = self.symbol_table.get(node.target.array.name); idx_val = self.codegen_expr(node.target.index)
-                if idx_val.type == self.f64_ty: idx_val = self.builder.fptosi(idx_val, self.i64_ty, name="idx_int")
-                elem_ptr = self.builder.gep(arr_ptr, [ir.Constant(self.i32_ty, 0), idx_val], name="assign_elem_ptr")
-                val = self.codegen_expr(node.value)
-                if val.type == self.f64_ty: val = self.builder.fptosi(val, self.i64_ty, name="to_int")
-                # NOVO: Se for um ponteiro sendo armazenado em um array de inteiros (i64)
-                elif isinstance(val.type, ir.PointerType) and arr_ptr.type.pointee == self.i64_ty: 
-                    val = self.builder.ptrtoint(val, self.i64_ty, name="ptr_to_int_arr")
-                self.builder.store(val, elem_ptr)
-            else:
-                ptr = self.codegen_expr(node.target.array); idx_val = self.codegen_expr(node.target.index)
-                if idx_val.type == self.f64_ty: idx_val = self.builder.fptosi(idx_val, self.i64_ty, name="idx_int")
-                elif isinstance(idx_val.type, ir.PointerType): idx_val = self.builder.ptrtoint(idx_val, self.i64_ty, name="ptr_to_int")
-                val = self.codegen_expr(node.value)
-                
-                if isinstance(ptr.type, ir.PointerType) and ptr.type.pointee == self.i64_ty: 
-                    elem_ptr = self.builder.gep(ptr, [idx_val], name="heap_assign_ptr")
-                    # NOVO: Se for um ponteiro sendo armazenado em um array de inteiros (i64)
-                    if isinstance(val.type, ir.PointerType):
-                        val = self.builder.ptrtoint(val, self.i64_ty, name="ptr_to_int_heap")
-                elif ptr.type == self.voidptr_ty:
-                    if val.type == self.i64_ty: val = self.builder.trunc(val, self.i8_ty, name="byte_trunc")
-                    elem_ptr = self.builder.gep(ptr, [idx_val], name="heap_assign_ptr")
-                else: 
-                    elem_ptr = self.builder.gep(ptr, [idx_val], name="heap_assign_ptr")
-                self.builder.store(val, elem_ptr)
-        elif isinstance(node.target, MemberExpr):
-            obj_ptr = self.resolve_member_ptr(node.target); val = self.codegen_expr(node.value)
-            # NOVO: Se o campo for um ponteiro (ptr) e o valor for um inteiro (ex: 0), converte int para ptr
-            if isinstance(obj_ptr.type.pointee, ir.PointerType) and val.type == self.i64_ty:
-                val = self.builder.inttoptr(val, obj_ptr.type.pointee, name="int_to_ptr_field")
-            elif isinstance(val.type, ir.PointerType) and isinstance(obj_ptr.type.pointee, ir.PointerType): 
-                val = self.builder.bitcast(val, obj_ptr.type.pointee, name="ptr_cast")
-            self.builder.store(val, obj_ptr)
-        else:
+        val = self.codegen_expr(node.value)
+        
+        if isinstance(node.target, VariableExpr):
             ptr = self.symbol_table.get(node.target.name)
-            if not ptr: raise Exception(f"Variável '{node.target.name}' não declarada.")
-            val = self.codegen_expr(node.value); var_ty = self.var_types[node.target.name]
-            if val.type == self.i64_ty and isinstance(var_ty, ir.PointerType): val = self.builder.inttoptr(val, var_ty, name="assign_int_to_ptr")
-            elif val.type == self.f64_ty and var_ty == self.i64_ty: val = self.builder.fptosi(val, self.i64_ty, name="assign_float_to_int")
-            elif val.type == self.i64_ty and var_ty == self.f64_ty: val = self.to_float_if_needed(val)
-            self.builder.store(val, ptr)
+            if ptr:
+                if val.type == self.f64_ty and ptr.type.pointee == self.i64_ty:
+                    val = self.builder.fptosi(val, self.i64_ty, name="float_to_int_assign")
+                elif val.type == self.i64_ty and ptr.type.pointee == self.f64_ty:
+                    val = self.builder.sitofp(val, self.f64_ty, name="int_to_float_assign")
+                self.builder.store(val, ptr)
+                
+        elif isinstance(node.target, MemberExpr):
+            obj_val = self.codegen_expr(node.target.obj)
+            if isinstance(obj_val.type, ir.PointerType) and isinstance(obj_val.type.pointee, ir.IdentifiedStructType):
+                struct_name = obj_val.type.pointee.name
+                field_idx = self.struct_fields[struct_name].get(node.target.member)
+                if field_idx is not None:
+                    elem_ptr = self.builder.gep(obj_val, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, field_idx)])
+                    self.builder.store(val, elem_ptr)
+                    
+        elif isinstance(node.target, IndexExpr):
+            arr_val = self.codegen_expr(node.target.array)
+            idx_val = self.codegen_expr(node.target.index)
+            if isinstance(arr_val.type, ir.PointerType) and isinstance(arr_val.type.pointee, ir.ArrayType):
+                elem_ptr = self.builder.gep(arr_val, [ir.Constant(self.i32_ty, 0), idx_val])
+                self.builder.store(val, elem_ptr)
 
     def codegen_return(self, node):
-        for body in reversed(self.deferred_stmts):
-            for stmt in body: self.codegen_stmt(stmt)
-        self.deferred_stmts.clear()
+        if not node.values:
+            self.builder.ret_void()
+            return
+            
+        val = self.codegen_expr(node.values[0])
+        ret_ty = self.functions_table[self.current_func_name][1].return_type
         
-        if hasattr(self, 'current_ret_ty') and self.current_ret_ty == ir.VoidType():
-            if len(node.values) == 1 and isinstance(node.values[0], NumberExpr) and node.values[0].value == "0":
-                for scope in self.cleanup_vars: self.cleanup_block(scope)
-                self.builder.ret_void(); return
-        self.is_tail_return = True; val = self.codegen_expr(node.values[0]); self.is_tail_return = False
-        
-        if isinstance(val.type, ir.PointerType) and isinstance(val.type.pointee, ir.IdentifiedStructType): 
-            val = self.builder.load(val, name="ret_val")
-            
-        if hasattr(self, 'current_ret_ty') and isinstance(self.current_ret_ty, ir.PointerType) and val.type == self.i64_ty: 
-            val = ir.Constant(self.current_ret_ty, None)
-            
-        if hasattr(self, 'current_ret_ty') and isinstance(self.current_ret_ty, ir.IntType) and isinstance(val.type, ir.IntType):
-            if val.type.width != self.current_ret_ty.width:
-                val = self.builder.trunc(val, self.current_ret_ty, name="ret_trunc")
-        elif hasattr(self, 'current_ret_ty') and isinstance(self.current_ret_ty, ir.IntType) and isinstance(val.type, ir.PointerType):
-            val = self.builder.ptrtoint(val, self.current_ret_ty, name="ret_ptr_to_int")
-            
-        for scope in self.cleanup_vars: self.cleanup_block(scope)
+        if val.type != ret_ty:
+            if ret_ty == self.f64_ty and val.type == self.i64_ty:
+                val = self.builder.sitofp(val, self.f64_ty, name="ret_cast")
+            elif ret_ty == self.i64_ty and val.type == self.f64_ty:
+                val = self.builder.fptosi(val, self.i64_ty, name="ret_cast")
+                
         self.builder.ret(val)
 
-    def codegen_assert(self, node):
+    def codegen_if(self, node):
         cond_val = self.codegen_expr(node.condition)
-        if cond_val.type != ir.IntType(1): cond_val = self.builder.icmp_signed("!=", cond_val, ir.Constant(self.i64_ty, 0), name="assert_cond")
-        then_bb, fail_bb, end_bb = self.builder.append_basic_block(name="assert.pass"), self.builder.append_basic_block(name="assert.fail"), self.builder.append_basic_block(name="assert.end")
-        self.builder.cbranch(cond_val, then_bb, fail_bb)
-        
-        # Se a condição for FALSA (assert falhou)
-        self.builder.position_at_end(fail_bb)
-        self.builder.call(self.printf, [self.create_global_string("Assertion Failed!\n")])
-        
-        # NOVO: Pega a função exit da tabela, ou cria e registra se não existir
-        exit_func = None
-        if "exit" in self.functions_table:
-            exit_func = self.functions_table["exit"][0]
-        else:
-            exit_ty = ir.FunctionType(ir.VoidType(), [ir.IntType(32)])
-            exit_func = ir.Function(self.module, exit_ty, name="exit")
-            self.functions_table["exit"] = (exit_func, exit_ty)
+        if cond_val.type != ir.IntType(1):
+            cond_val = self.builder.icmp_signed("!=", cond_val, ir.Constant(cond_val.type, 0), name="if_cond")
             
-        self.builder.call(exit_func, [ir.Constant(ir.IntType(32), 1)])
-        self.builder.unreachable()
+        then_bb = self.builder.append_basic_block(name="if.then")
+        else_bb = self.builder.append_basic_block(name="if.else")
+        end_bb = self.builder.append_basic_block(name="if.end")
         
-        # Se a condição for VERDADEIRA (assert passou)
+        self.builder.cbranch(cond_val, then_bb, else_bb)
+        
+        # Then block
         self.builder.position_at_end(then_bb)
-        self.builder.branch(end_bb)
+        for stmt in node.then_body:
+            self.codegen_stmt(stmt)
+        if not self.builder.block.is_terminated:
+            self.builder.branch(end_bb)
+            
+        # Else block
+        self.builder.position_at_end(else_bb)
+        if node.else_body:
+            for stmt in node.else_body:
+                self.codegen_stmt(stmt)
+        if not self.builder.block.is_terminated:
+            self.builder.branch(end_bb)
+            
         self.builder.position_at_end(end_bb)
 
-    def codegen_bench(self, node):
-        clock_fn = self.functions_table.get("clock")
-        if not clock_fn: clock_fn = (ir.Function(self.module, ir.FunctionType(self.i64_ty, []), name="clock"), None)
-        start_time = self.builder.call(clock_fn[0], [], name="bench_start")
-        for stmt in node.body: self.codegen_stmt(stmt)
-        end_time = self.builder.call(clock_fn[0], [], name="bench_end")
-        diff = self.builder.sub(end_time, start_time, name="bench_diff")
-        diff_f = self.builder.sitofp(diff, self.f64_ty, name="bench_diff_f")
-        sec = self.builder.fdiv(diff_f, ir.Constant(self.f64_ty, 1000000.0), name="bench_sec")
-        self.builder.call(self.printf, [self.create_global_string("Benchmark '" + node.name + "': ")])
-        self.builder.call(self.printf, [self.create_global_string("%f segundos\n"), sec])
+    def codegen_while(self, node):
+        cond_bb = self.builder.append_basic_block(name="while.cond")
+        body_bb = self.builder.append_basic_block(name="while.body")
+        end_bb = self.builder.append_basic_block(name="while.end")
+        
+        self.builder.branch(cond_bb)
+        
+        # Condition block
+        self.builder.position_at_end(cond_bb)
+        cond_val = self.codegen_expr(node.condition)
+        if cond_val.type != ir.IntType(1):
+            cond_val = self.builder.icmp_signed("!=", cond_val, ir.Constant(cond_val.type, 0), name="while_cond")
+        self.builder.cbranch(cond_val, body_bb, end_bb)
+        
+        # Body block
+        self.builder.position_at_end(body_bb)
+        for stmt in node.body:
+            self.codegen_stmt(stmt)
+        if not self.builder.block.is_terminated:
+            self.builder.branch(cond_bb)
+            
+        self.builder.position_at_end(end_bb)
+
+    def codegen_for(self, node):
+        # Lowering simples para: for i in 0..10
+        start_val = self.codegen_expr(node.start)
+        end_val = self.codegen_expr(node.end)
+        
+        var_ptr = self.builder.alloca(self.i64_ty, name=node.var_name)
+        self.symbol_table[node.var_name] = var_ptr
+        self.var_types[node.var_name] = "int"
+        
+        self.builder.store(start_val, var_ptr)
+        
+        cond_bb = self.builder.append_basic_block(name="for.cond")
+        body_bb = self.builder.append_basic_block(name="for.body")
+        end_bb = self.builder.append_basic_block(name="for.end")
+        
+        self.builder.branch(cond_bb)
+        self.builder.position_at_end(cond_bb)
+        
+        current_val = self.builder.load(var_ptr, name="for_curr")
+        cond = self.builder.icmp_signed("<", current_val, end_val, name="for_cond")
+        self.builder.cbranch(cond, body_bb, end_bb)
+        
+        self.builder.position_at_end(body_bb)
+        for stmt in node.body:
+            self.codegen_stmt(stmt)
+            
+        if not self.builder.block.is_terminated:
+            next_val = self.builder.add(current_val, ir.Constant(self.i64_ty, 1), name="for_next")
+            self.builder.store(next_val, var_ptr)
+            self.builder.branch(cond_bb)
+            
+        self.builder.position_at_end(end_bb)
+
+    def codegen_destructure(self, node):
+        # Lida com: let (x, y) = point
+        val = self.codegen_expr(node.value)
+        if isinstance(val.type, ir.PointerType) and isinstance(val.type.pointee, ir.IdentifiedStructType):
+            struct_name = val.type.pointee.name
+            for i, name in enumerate(node.names):
+                elem_ptr = self.builder.gep(val, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, i)])
+                field_val = self.builder.load(elem_ptr, name=name)
+                var_ptr = self.builder.alloca(field_val.type, name=name)
+                self.builder.store(field_val, var_ptr)
+                self.symbol_table[name] = var_ptr
+
+    def codegen_match_stmt(self, node):
+        # Lowering básico para switch statement em inteiros
+        cond_val = self.codegen_expr(node.condition)
+        if cond_val.type == self.i64_ty:
+            end_bb = self.builder.append_basic_block(name="match.end")
+            default_bb = self.builder.append_basic_block(name="match.default")
+            sw = self.builder.switch(cond_val, default_bb)
+            
+            for val_node, var_name, body in node.cases:
+                case_bb = self.builder.append_basic_block(name="match.case")
+                val = self.codegen_expr(val_node)
+                sw.add_case(val, case_bb)
+                self.builder.position_at_end(case_bb)
+                
+                if var_name:
+                    var_ptr = self.builder.alloca(self.i64_ty, name=var_name)
+                    self.symbol_table[var_name] = var_ptr
+                    
+                for stmt in body:
+                    self.codegen_stmt(stmt)
+                if not self.builder.block.is_terminated:
+                    self.builder.branch(end_bb)
+                    
+            self.builder.position_at_end(default_bb)
+            if node.default:
+                for stmt in node.default:
+                    self.codegen_stmt(stmt)
+            if not self.builder.block.is_terminated:
+                self.builder.branch(end_bb)
+                
+            self.builder.position_at_end(end_bb)

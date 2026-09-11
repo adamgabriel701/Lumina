@@ -8,9 +8,10 @@ class TokenType(Enum):
     STRING = auto()
     IDENT = auto()
     
-    # Palavras-Chave (Keywords)
+    # Palavras-Chave
     LET = auto()
     CONST = auto()
+    MUT = auto()
     FN = auto()
     RETURN = auto()
     IF = auto()
@@ -22,7 +23,11 @@ class TokenType(Enum):
     BREAK = auto()
     CONTINUE = auto()
     DEFER = auto()
+    ERRDEFER = auto()  # <--- ADICIONADO
     MATCH = auto()
+    CASE = auto()      # <--- ADICIONADO
+    DEFAULT = auto()   # <--- ADICIONADO
+    SWITCH = auto()    # <--- ADICIONADO
     STRUCT = auto()
     IMPL = auto()
     TRAIT = auto()
@@ -31,68 +36,72 @@ class TokenType(Enum):
     EXTERN = auto()
     ASSERT = auto()
     BENCH = auto()
+    TEST = auto()
     COMPTIME = auto()
+    EXPORT = auto()
+    AS = auto()
     TRUE = auto()
     FALSE = auto()
     NONE = auto()
+    NOT = auto()       # <--- ADICIONADO (operador lógico/not)
     
     # Operadores Aritméticos e Lógicos
-    PLUS = auto()        # +
-    MINUS = auto()       # -
-    STAR = auto()        # *
-    SLASH = auto()       # /
-    PERCENT = auto()     # %
-    BANG = auto()        # !
+    PLUS = auto()
+    MINUS = auto()
+    STAR = auto()
+    SLASH = auto()
+    PERCENT = auto()
+    BANG = auto()
     
     # Operadores Bitwise
-    AMP = auto()         # &
-    PIPE = auto()        # |
-    CARET = auto()       # ^
-    TILDE = auto()       # ~
-    SHL = auto()         # <<
-    SHR = auto()         # >>
+    AMP = auto()
+    PIPE = auto()
+    CARET = auto()
+    TILDE = auto()
+    SHL = auto()
+    SHR = auto()
     
     # Operadores de Atribuição
-    ASSIGN = auto()      # =
-    PLUS_ASSIGN = auto() # +=
-    MINUS_ASSIGN = auto() # -=
-    STAR_ASSIGN = auto() # *=
-    SLASH_ASSIGN = auto() # /=
+    ASSIGN = auto()
+    PLUS_ASSIGN = auto()
+    MINUS_ASSIGN = auto()
+    STAR_ASSIGN = auto()
+    SLASH_ASSIGN = auto()
     
     # Operadores de Comparação
-    EQ = auto()          # ==
-    NEQ = auto()         # !=
-    LT = auto()          # <
-    GT = auto()          # >
-    LTE = auto()         # <=
-    GTE = auto()         # >=
-    AND = auto()         # and
-    OR = auto()          # or
+    EQ = auto()
+    NEQ = auto()
+    LT = auto()
+    GT = auto()
+    LTE = auto()
+    GTE = auto()
+    AND = auto()
+    OR = auto()
     
     # Pontuação e Delimitadores
-    LPAREN = auto()     # (
-    RPAREN = auto()     # )
-    LBRACE = auto()     # {
-    RBRACE = auto()     # }
-    LBRACKET = auto()   # [
-    RBRACKET = auto()   # ]
-    COMMA = auto()      # ,
-    DOT = auto()        # .
-    COLON = auto()      # :
-    DOUBLE_COLON = auto() # ::
-    SEMICOLON = auto()  # ;
-    ARROW = auto()      # ->
-    FAT_ARROW = auto()  # =>
-    QUESTION = auto()   # ?
+    LPAREN = auto()
+    RPAREN = auto()
+    LBRACE = auto()
+    RBRACE = auto()
+    LBRACKET = auto()
+    RBRACKET = auto()
+    COMMA = auto()
+    DOT = auto()
+    COLON = auto()
+    DOUBLE_COLON = auto()
+    SEMICOLON = auto()
+    ARROW = auto()
+    FAT_ARROW = auto()
+    QUESTION = auto()
+    AT = auto()
     
-    # Controle de Escopo Pythonico
+    # Controle de Escopo
     NEWLINE = auto()
     INDENT = auto()
     DEDENT = auto()
     EOF = auto()
 
 class Token:
-    # __slots__ reduz o uso de memória (bom para compiladores que geram milhares de tokens)
     __slots__ = ('type', 'value', 'line', 'col', 'offset')
 
     def __init__(self, type: TokenType, value: str, line: int = 0, col: int = 0, offset: int = 0):
@@ -100,15 +109,15 @@ class Token:
         self.value = value
         self.line = line
         self.col = col
-        self.offset = offset  # Posição absoluta no arquivo (excelente para LSP e erros precisos)
+        self.offset = offset
 
     def __repr__(self):
         return f"Token({self.type.name}, '{self.value}', L:{self.line}, C:{self.col})"
 
-# Mapeamento para o Lexer converter IDENT em KEYWORD automaticamente
 KEYWORDS: Dict[str, TokenType] = {
     "let": TokenType.LET,
     "const": TokenType.CONST,
+    "mut": TokenType.MUT,
     "fn": TokenType.FN,
     "return": TokenType.RETURN,
     "if": TokenType.IF,
@@ -120,7 +129,11 @@ KEYWORDS: Dict[str, TokenType] = {
     "break": TokenType.BREAK,
     "continue": TokenType.CONTINUE,
     "defer": TokenType.DEFER,
+    "errdefer": TokenType.ERRDEFER, # <--- ADICIONADO
     "match": TokenType.MATCH,
+    "case": TokenType.CASE,         # <--- ADICIONADO
+    "default": TokenType.DEFAULT,   # <--- ADICIONADO
+    "switch": TokenType.SWITCH,     # <--- ADICIONADO
     "struct": TokenType.STRUCT,
     "impl": TokenType.IMPL,
     "trait": TokenType.TRAIT,
@@ -129,10 +142,14 @@ KEYWORDS: Dict[str, TokenType] = {
     "extern": TokenType.EXTERN,
     "assert": TokenType.ASSERT,
     "bench": TokenType.BENCH,
+    "test": TokenType.TEST,
     "comptime": TokenType.COMPTIME,
+    "export": TokenType.EXPORT,
+    "as": TokenType.AS,
     "true": TokenType.TRUE,
     "false": TokenType.FALSE,
     "none": TokenType.NONE,
     "and": TokenType.AND,
     "or": TokenType.OR,
+    "not": TokenType.NOT,           # <--- ADICIONADO
 }

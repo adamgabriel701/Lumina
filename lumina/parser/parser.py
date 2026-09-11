@@ -1,10 +1,8 @@
 from ..lexer.tokens import TokenType
-from .expressions import ExpressionParser
-from .statements import StatementParser
-from ..ast import StructDecl, ImplBlock, ImportStmt, ExternDecl, EnumDecl, TraitDecl, VarDecl, Function
+from .mixins import LuminaParserMixin
 from ..errors import LuminaError
 
-class Parser(ExpressionParser, StatementParser):
+class Parser(LuminaParserMixin):
     def __init__(self, tokens, filename="program.lm", source_code=""):
         self.tokens = tokens
         self.pos = 0
@@ -27,34 +25,36 @@ class Parser(ExpressionParser, StatementParser):
         if token:
             raise LuminaError(
                 f"Esperado {expected_type}, mas encontrei {token.type} ('{token.value}')", 
-                filename=self.filename, line=token.line, col=token.col, code=self.source_code
+                filename=self.filename, line=token.line, col=token.col, source_code=self.source_code
             )
-        raise LuminaError("Fim inesperado do código", filename=self.filename, line=0, col=0, code=self.source_code)
+        raise LuminaError("Fim inesperado do código", filename=self.filename, line=0, col=0, source_code=self.source_code)
 
     def parse(self):
         declarations = []
         while self.current_token() and not self.check(TokenType.EOF):
-            if self.check(TokenType.KEYWORD, 'fn') or self.check(TokenType.KEYWORD, 'export'):
+            if self.check(TokenType.NEWLINE):
+                self.consume()
+                continue
+                
+            if self.check(TokenType.FN) or self.check(TokenType.EXPORT):
                 declarations.append(self.parse_function())
-            elif self.check(TokenType.KEYWORD, 'struct'):
+            elif self.check(TokenType.STRUCT):
                 declarations.append(self.parse_struct())
-            elif self.check(TokenType.KEYWORD, 'enum'):
+            elif self.check(TokenType.ENUM):
                 declarations.append(self.parse_enum())
-            elif self.check(TokenType.KEYWORD, 'impl'):
+            elif self.check(TokenType.IMPL):
                 declarations.append(self.parse_impl())
-            elif self.check(TokenType.KEYWORD, 'trait'):
+            elif self.check(TokenType.TRAIT):
                 declarations.append(self.parse_trait())
-            elif self.check(TokenType.KEYWORD, 'let') or self.check(TokenType.KEYWORD, 'mut') or \
-                 self.check(TokenType.KEYWORD, 'test') or self.check(TokenType.KEYWORD, 'bench') or \
-                 self.check(TokenType.KEYWORD, 'import') or self.check(TokenType.KEYWORD, 'extern'):
+            elif self.check(TokenType.LET) or self.check(TokenType.MUT) or \
+                 self.check(TokenType.TEST) or self.check(TokenType.BENCH) or \
+                 self.check(TokenType.IMPORT) or self.check(TokenType.EXTERN):
                 declarations.append(self.parse_statement())
             else:
-                # CORREÇÃO: Antes o parser engolia tokens inválidos silenciosamente.
-                # Agora ele acusa o erro de sintaxe explicitamente.
                 t = self.current_token()
                 raise LuminaError(
                     f"Declaração de nível superior inválida: {t.type.name} ('{t.value}')", 
-                    filename=self.filename, line=t.line, col=t.col, code=self.source_code
+                    filename=self.filename, line=t.line, col=t.col, source_code=self.source_code
                 )
                 
         return declarations

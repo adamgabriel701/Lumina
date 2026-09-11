@@ -346,9 +346,11 @@ def format_node(node, indent_level=0):
         return f"{node.op}{val}"
         
     elif isinstance(node, CallExpr):
+        # CORRIGIDO: Usa node.callee em vez de node.name
+        callee_str = format_node(node.callee, 0)
         args = ", ".join([format_node(a, 0) for a in node.args])
-        if indent_level > 0: return f"{indent}{node.name}({args})\n"
-        return f"{node.name}({args})"
+        if indent_level > 0: return f"{indent}{callee_str}({args})\n"
+        return f"{callee_str}({args})"
         
     elif isinstance(node, MemberExpr):
         obj = format_node(node.obj, 0)

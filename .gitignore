@@ -1,96 +1,89 @@
+# ============================================
 # Python
+# ============================================
 __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
 .pytest_cache/
 
+# ============================================
 # Lumina Build Artifacts
+# ============================================
 *.ll
 *.wasm
 *.o
 .lumina_cache/
 output.ll
 
-# Binários nativos gerados (sem extensão)
+# ============================================
+# Binários nativos gerados
+# Padrão geral: ignora tudo em examples/ e tests/
+# que não seja código fonte (.lm) ou doc (.md)
+# ============================================
+/examples/*
+!/examples/*.lm
+!/examples/*.md
+!/examples/MeuBanco/
+
+/tests/*
+!/tests/*.lm
+!/tests/*.py
+!/tests/*.md
+
+# Binários específicos da raiz
 /main
-/examples/api
-/examples/app
-/examples/async_file_test
-/examples/async_server
-/examples/bench_test
-/examples/bootstrap_lexer
-/examples/break_test
-/examples/cast_test
-/examples/comptime_test
-/examples/coroutines
-/examples/database
-/examples/defaults_test
-/examples/destructure_test
-/examples/engine
-/examples/ergonomia
-/examples/error_handling
-/examples/escape_test
-/examples/features
-/examples/ffi_test
-/examples/gc_test
-/examples/generics_test
-/examples/http_framework
-/examples/iterator_test
-/examples/json_parser
-/examples/json_test
-/examples/lambda_test
-/examples/lexer
-/examples/linked_list_demo
-/examples/lumina_db
-/examples/map_test
-/examples/match_expr_test
-/examples/match_struct_test
-/examples/monomorph_test
-/examples/native_db
-/examples/overload_test
-/examples/parser
-/examples/prelude_test
-/examples/program
-/examples/proxy
-/examples/quicksort
-/examples/safe_nav
-/examples/search_engine
-/examples/serve
-/examples/server
-/examples/sql_engine
-/examples/string_methods_test
-/examples/struct_lit_test
-/examples/tco_test
-/examples/test_runner
-/examples/threads
-/examples/trait_default_test
-/examples/trait_test
-/examples/util
-/examples/vector_test
-/examples/vm
-/examples/wasm_js_interop
-/examples/wasm_math
-/examples/wasm_memory
-/lumina_core/lexer
-/lumina_core/parser
-/benchmarks/bench_runtime
-/benchmarks/fib
-/benchmarks/loop
-/benchmarks/matrix
-/benchmarks/primes
-/benchmarks/test_runner
 /tests_lumina
 
-# Arquivos de dados temporários de testes
+# ============================================
+# Benchmarks (binários compilados + runtime)
+# ============================================
+/benchmarks/*
+!/benchmarks/*.lm
+!/benchmarks/*.c
+!/benchmarks/*.cpp
+!/benchmarks/*.rs
+!/benchmarks/*.go
+!/benchmarks/*.js
+!/benchmarks/*.py
+!/benchmarks/*.md
+
+# ============================================
+# lumina_core (bootstrapping) - ignora binários
+# ============================================
+/lumina_core/*
+!/lumina_core/*.lm
+
+# ============================================
+# Dados de teste temporários
+# ============================================
 lumina_db.txt
 teste_async.txt
+log.txt
+*.txt
+!requirements-dev.txt
 
+# ============================================
 # Dependências baixadas
+# ============================================
 lumina_modules/
 
+# ============================================
 # Extensão VS Code
+# ============================================
 lumina-vscode/node_modules/
+lumina-vscode/*.vsix
 
-# Configurações locais
+# ============================================
+# Configurações locais / IDE
+# ============================================
 .vscode/
+.idea/
+*.swp
+*~
+
+# ============================================
+# Cache de outros compiladores
+# ============================================
+*.gcda
+*.gcno

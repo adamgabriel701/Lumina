@@ -16,7 +16,6 @@ from lumina.errors import LuminaError
 from .utils import Color, paint, info, success, warn, error, step, LUMINA_ROOT
 
 
-# Inicializa o motor JIT nativo uma única vez
 llvm.initialize_native_target()
 llvm.initialize_native_asmprinter()
 lib_c_path = ctypes.util.find_library('c')
@@ -90,7 +89,6 @@ class PlaygroundHandler(http.server.BaseHTTPRequestHandler):
                     ctypes.c_int64, ctypes.c_int32, ctypes.POINTER(ctypes.c_char_p)
                 )(func_ptr)
 
-                # Intercepta o stdout do C nativo
                 read_fd, write_fd = os.pipe()
                 old_stdout = os.dup(1)
                 os.dup2(write_fd, 1)

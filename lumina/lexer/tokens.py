@@ -1,13 +1,14 @@
 from enum import Enum, auto
 from typing import Dict
 
+
 class TokenType(Enum):
     # Literais e Identificadores
     NUMBER = auto()
     FLOAT = auto()
     STRING = auto()
     IDENT = auto()
-    
+
     # Palavras-Chave
     LET = auto()
     CONST = auto()
@@ -44,7 +45,7 @@ class TokenType(Enum):
     FALSE = auto()
     NONE = auto()
     NOT = auto()
-    
+
     # Operadores Aritméticos e Lógicos
     PLUS = auto()
     MINUS = auto()
@@ -52,7 +53,7 @@ class TokenType(Enum):
     SLASH = auto()
     PERCENT = auto()
     BANG = auto()
-    
+
     # Operadores Bitwise
     AMP = auto()
     PIPE = auto()
@@ -60,7 +61,7 @@ class TokenType(Enum):
     TILDE = auto()
     SHL = auto()
     SHR = auto()
-    
+
     # Operadores de Atribuição
     ASSIGN = auto()
     PLUS_ASSIGN = auto()
@@ -70,7 +71,7 @@ class TokenType(Enum):
     AMP_ASSIGN = auto()
     PIPE_ASSIGN = auto()
     CARET_ASSIGN = auto()
-    
+
     # Operadores de Comparação
     EQ = auto()
     NEQ = auto()
@@ -80,7 +81,7 @@ class TokenType(Enum):
     GTE = auto()
     AND = auto()
     OR = auto()
-    
+
     # Pontuação e Delimitadores
     LPAREN = auto()
     RPAREN = auto()
@@ -92,6 +93,7 @@ class TokenType(Enum):
     DOT = auto()
     DOT_DOT = auto()
     COLON = auto()
+    COLON_ASSIGN = auto()
     DOUBLE_COLON = auto()
     SEMICOLON = auto()
     ARROW = auto()
@@ -99,12 +101,13 @@ class TokenType(Enum):
     QUESTION = auto()
     AT = auto()
     DOLLAR = auto()
-    
+
     # Controle de Escopo
     NEWLINE = auto()
     INDENT = auto()
     DEDENT = auto()
     EOF = auto()
+
 
 class Token:
     __slots__ = ('type', 'value', 'line', 'col', 'offset')
@@ -118,6 +121,7 @@ class Token:
 
     def __repr__(self):
         return f"Token({self.type.name}, '{self.value}', L:{self.line}, C:{self.col})"
+
 
 KEYWORDS: Dict[str, TokenType] = {
     "let": TokenType.LET,

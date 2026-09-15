@@ -1,5 +1,6 @@
 from .tokens import Token, TokenType, KEYWORDS
 
+
 class Lexer:
     def __init__(self, source: str, filename: str = "<string>"):
         self.source = source.replace('\r\n', '\n').replace('\r', '\n')
@@ -37,13 +38,19 @@ class Lexer:
     def tokenize(self):
         while self.pos < len(self.source):
             if self.paren_depth > 0:
-                self._skip_whitespace()
-                while self.peek() == '\n':
-                    self.advance()
+                while True:
+                    self._skip_whitespace()
+                    if self.peek() == '\n':
+                        self.advance()
+                        continue
+                    break
             else:
                 if self.at_line_start:
                     self._handle_indent()
-                    if self.peek() == '\0': break
+                    if self.peek() == '\0':
+                        break
+                    if self.at_line_start:
+                        continue
                 else:
                     self._skip_whitespace()
                     if self.peek() == '\n':
@@ -91,11 +98,11 @@ class Lexer:
 
         if self.tokens and self.tokens[-1].type != TokenType.NEWLINE:
             self.add_token(TokenType.NEWLINE, "\n")
-            
+
         while len(self.indent_stack) > 1:
             self.indent_stack.pop()
             self.add_token(TokenType.DEDENT, "")
-            
+
         self.add_token(TokenType.EOF, "")
         return self.tokens
 
@@ -105,17 +112,17 @@ class Lexer:
 
     def _handle_indent(self):
         self._skip_whitespace()
-        
+
         if self.peek() == '\n':
             self.advance()
             self.add_token(TokenType.NEWLINE, "\n")
             self.at_line_start = True
             return
-            
+
         if self.peek() == '\0':
             self.at_line_start = False
             return
-            
+
         indent = self.col - 1
         if indent > self.indent_stack[-1]:
             self.indent_stack.append(indent)
@@ -124,7 +131,7 @@ class Lexer:
             while indent < self.indent_stack[-1]:
                 self.indent_stack.pop()
                 self.add_token(TokenType.DEDENT, "")
-                
+
         self.at_line_start = False
 
     def _number(self):
@@ -167,22 +174,26 @@ class Lexer:
             while self.peek() != '"' and self.peek() != '\0':
                 if self.peek() == '\\':
                     val += self.advance()
-                    if self.peek() != '\0': val += self.advance()
+                    if self.peek() != '\0':
+                        val += self.advance()
                 else:
                     val += self.advance()
-            if self.peek() == '\0': self.error("String não terminada")
+            if self.peek() == '\0':
+                self.error("String não terminada")
             self.advance()
             self.add_token(TokenType.STRING, "f" + '"' + val + '"')
         else:
             while self.peek() != '"' and self.peek() != '\0':
                 if self.peek() == '\\':
                     val += self.advance()
-                    if self.peek() != '\0': val += self.advance()
+                    if self.peek() != '\0':
+                        val += self.advance()
                 elif self.peek() == '\n':
                     self.error("String não terminada")
                 else:
                     val += self.advance()
-            if self.peek() == '\0': self.error("String não terminada")
+            if self.peek() == '\0':
+                self.error("String não terminada")
             self.advance()
             self.add_token(TokenType.STRING, val)
 
@@ -201,75 +212,181 @@ class Lexer:
         c2 = self.peek(1)
 
         if c == '(':
-            self.paren_depth += 1; self.advance(); self.add_token(TokenType.LPAREN, "(")
+            self.paren_depth += 1
+            self.advance()
+            self.add_token(TokenType.LPAREN, "(")
         elif c == ')':
-            self.paren_depth -= 1; self.advance(); self.add_token(TokenType.RPAREN, ")")
+            self.paren_depth -= 1
+            self.advance()
+            self.add_token(TokenType.RPAREN, ")")
         elif c == '[':
-            self.paren_depth += 1; self.advance(); self.add_token(TokenType.LBRACKET, "[")
+            self.paren_depth += 1
+            self.advance()
+            self.add_token(TokenType.LBRACKET, "[")
         elif c == ']':
-            self.paren_depth -= 1; self.advance(); self.add_token(TokenType.RBRACKET, "]")
+            self.paren_depth -= 1
+            self.advance()
+            self.add_token(TokenType.RBRACKET, "]")
         elif c == '{':
-            self.paren_depth += 1; self.advance(); self.add_token(TokenType.LBRACE, "{")
+            self.paren_depth += 1
+            self.advance()
+            self.add_token(TokenType.LBRACE, "{")
         elif c == '}':
-            self.paren_depth -= 1; self.advance(); self.add_token(TokenType.RBRACE, "}")
+            self.paren_depth -= 1
+            self.advance()
+            self.add_token(TokenType.RBRACE, "}")
         elif c == ',':
-            self.advance(); self.add_token(TokenType.COMMA, ",")
+            self.advance()
+            self.add_token(TokenType.COMMA, ",")
         elif c == ':':
-            if c2 == ':': self.advance(); self.advance(); self.add_token(TokenType.DOUBLE_COLON, "::")
-            else: self.advance(); self.add_token(TokenType.COLON, ":")
+            if c2 == '=':
+                self.advance()
+                self.advance()
+                self.add_token(TokenType.COLON_ASSIGN, ":=")
+            elif c2 == ':':
+                self.advance()
+                self.advance()
+                self.add_token(TokenType.DOUBLE_COLON, "::")
+            else:
+                self.advance()
+                self.add_token(TokenType.COLON, ":")
         elif c == ';':
-            self.advance(); self.add_token(TokenType.SEMICOLON, ";")
+            self.advance()
+            self.add_token(TokenType.SEMICOLON, ";")
         elif c == '@':
-            self.advance(); self.add_token(TokenType.AT, "@")
+            self.advance()
+            self.add_token(TokenType.AT, "@")
         elif c == '$':
-            self.advance(); self.add_token(TokenType.DOLLAR, "$")
+            self.advance()
+            self.add_token(TokenType.DOLLAR, "$")
         elif c == '?':
-            self.advance(); self.add_token(TokenType.QUESTION, "?")
+            self.advance()
+            self.add_token(TokenType.QUESTION, "?")
         elif c == '.':
-            if c2 == '.': self.advance(); self.advance(); self.add_token(TokenType.DOT_DOT, "..")
-            else: self.advance(); self.add_token(TokenType.DOT, ".")
+            if c2 == '.':
+                self.advance()
+                self.advance()
+                self.add_token(TokenType.DOT_DOT, "..")
+            else:
+                self.advance()
+                self.add_token(TokenType.DOT, ".")
         elif c == '+':
-            if c2 == '=': self.advance(); self.advance(); self.add_token(TokenType.PLUS_ASSIGN, "+=")
-            else: self.advance(); self.add_token(TokenType.PLUS, "+")
+            if c2 == '=':
+                self.advance()
+                self.advance()
+                self.add_token(TokenType.PLUS_ASSIGN, "+=")
+            else:
+                self.advance()
+                self.add_token(TokenType.PLUS, "+")
         elif c == '-':
-            if c2 == '=': self.advance(); self.advance(); self.add_token(TokenType.MINUS_ASSIGN, "-=")
-            elif c2 == '>': self.advance(); self.advance(); self.add_token(TokenType.ARROW, "->")
-            else: self.advance(); self.add_token(TokenType.MINUS, "-")
+            if c2 == '=':
+                self.advance()
+                self.advance()
+                self.add_token(TokenType.MINUS_ASSIGN, "-=")
+            elif c2 == '>':
+                self.advance()
+                self.advance()
+                self.add_token(TokenType.ARROW, "->")
+            else:
+                self.advance()
+                self.add_token(TokenType.MINUS, "-")
         elif c == '*':
-            if c2 == '=': self.advance(); self.advance(); self.add_token(TokenType.STAR_ASSIGN, "*=")
-            else: self.advance(); self.add_token(TokenType.STAR, "*")
+            if c2 == '=':
+                self.advance()
+                self.advance()
+                self.add_token(TokenType.STAR_ASSIGN, "*=")
+            else:
+                self.advance()
+                self.add_token(TokenType.STAR, "*")
         elif c == '/':
-            if c2 == '=': self.advance(); self.advance(); self.add_token(TokenType.SLASH_ASSIGN, "/=")
-            else: self.advance(); self.add_token(TokenType.SLASH, "/")
+            if c2 == '=':
+                self.advance()
+                self.advance()
+                self.add_token(TokenType.SLASH_ASSIGN, "/=")
+            else:
+                self.advance()
+                self.add_token(TokenType.SLASH, "/")
         elif c == '%':
-            self.advance(); self.add_token(TokenType.PERCENT, "%")
+            self.advance()
+            self.add_token(TokenType.PERCENT, "%")
         elif c == '=':
-            if c2 == '=': self.advance(); self.advance(); self.add_token(TokenType.EQ, "==")
-            elif c2 == '>': self.advance(); self.advance(); self.add_token(TokenType.FAT_ARROW, "=>")
-            else: self.advance(); self.add_token(TokenType.ASSIGN, "=")
+            if c2 == '=':
+                self.advance()
+                self.advance()
+                self.add_token(TokenType.EQ, "==")
+            elif c2 == '>':
+                self.advance()
+                self.advance()
+                self.add_token(TokenType.FAT_ARROW, "=>")
+            else:
+                self.advance()
+                self.add_token(TokenType.ASSIGN, "=")
         elif c == '!':
-            if c2 == '=': self.advance(); self.advance(); self.add_token(TokenType.NEQ, "!=")
-            else: self.advance(); self.add_token(TokenType.BANG, "!")
+            if c2 == '=':
+                self.advance()
+                self.advance()
+                self.add_token(TokenType.NEQ, "!=")
+            else:
+                self.advance()
+                self.add_token(TokenType.BANG, "!")
         elif c == '<':
-            if c2 == '=': self.advance(); self.advance(); self.add_token(TokenType.LTE, "<=")
-            elif c2 == '<': self.advance(); self.advance(); self.add_token(TokenType.SHL, "<<")
-            else: self.advance(); self.add_token(TokenType.LT, "<")
+            if c2 == '=':
+                self.advance()
+                self.advance()
+                self.add_token(TokenType.LTE, "<=")
+            elif c2 == '<':
+                self.advance()
+                self.advance()
+                self.add_token(TokenType.SHL, "<<")
+            else:
+                self.advance()
+                self.add_token(TokenType.LT, "<")
         elif c == '>':
-            if c2 == '=': self.advance(); self.advance(); self.add_token(TokenType.GTE, ">=")
-            elif c2 == '>': self.advance(); self.advance(); self.add_token(TokenType.SHR, ">>")
-            else: self.advance(); self.add_token(TokenType.GT, ">")
+            if c2 == '=':
+                self.advance()
+                self.advance()
+                self.add_token(TokenType.GTE, ">=")
+            elif c2 == '>':
+                self.advance()
+                self.advance()
+                self.add_token(TokenType.SHR, ">>")
+            else:
+                self.advance()
+                self.add_token(TokenType.GT, ">")
         elif c == '&':
-            if c2 == '=': self.advance(); self.advance(); self.add_token(TokenType.AMP_ASSIGN, "&=")
-            elif c2 == '&': self.advance(); self.advance(); self.add_token(TokenType.AND, "&&")
-            else: self.advance(); self.add_token(TokenType.AMP, "&")
+            if c2 == '=':
+                self.advance()
+                self.advance()
+                self.add_token(TokenType.AMP_ASSIGN, "&=")
+            elif c2 == '&':
+                self.advance()
+                self.advance()
+                self.add_token(TokenType.AND, "&&")
+            else:
+                self.advance()
+                self.add_token(TokenType.AMP, "&")
         elif c == '|':
-            if c2 == '=': self.advance(); self.advance(); self.add_token(TokenType.PIPE_ASSIGN, "|=")
-            elif c2 == '|': self.advance(); self.advance(); self.add_token(TokenType.OR, "||")
-            else: self.advance(); self.add_token(TokenType.PIPE, "|")
+            if c2 == '=':
+                self.advance()
+                self.advance()
+                self.add_token(TokenType.PIPE_ASSIGN, "|=")
+            elif c2 == '|':
+                self.advance()
+                self.advance()
+                self.add_token(TokenType.OR, "||")
+            else:
+                self.advance()
+                self.add_token(TokenType.PIPE, "|")
         elif c == '^':
-            if c2 == '=': self.advance(); self.advance(); self.add_token(TokenType.CARET_ASSIGN, "^=")
-            else: self.advance(); self.add_token(TokenType.CARET, "^")
+            if c2 == '=':
+                self.advance()
+                self.advance()
+                self.add_token(TokenType.CARET_ASSIGN, "^=")
+            else:
+                self.advance()
+                self.add_token(TokenType.CARET, "^")
         elif c == '~':
-            self.advance(); self.add_token(TokenType.TILDE, "~")
+            self.advance()
+            self.add_token(TokenType.TILDE, "~")
         else:
             self.error(f"Caractere inesperado: '{c}'")

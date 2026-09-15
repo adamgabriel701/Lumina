@@ -11,7 +11,7 @@ from lumina.ast import (
     MemberExpr, IndexExpr, ImportStmt, StructDecl, EnumDecl,
     TraitDecl, ImplBlock, ExternDecl, DestructureStmt, AddressOfExpr, DerefExpr,
     UnaryExpr, CastExpr, StructLiteralExpr, MatchExpr, LambdaExpr,
-    DeferStmt, AssertStmt, BenchStmt, BreakStmt, ContinueStmt
+    DeferStmt, AssertStmt, BenchStmt, BreakStmt, ContinueStmt,
 )
 
 from lumina.ast.expressions import ArrayExpr, BoolExpr, PropagateExpr
@@ -24,8 +24,9 @@ from lumina.errors import LuminaError
 
 from .utils import (
     Color, paint, cprint, info, success, warn, error, step, header, arrow,
-    STD_DIR, get_cache_hash
+    STD_DIR, get_cache_hash,
 )
+
 
 def parse_module(filename):
     """Parses o módulo e resolve todos os imports de forma iterativa."""
@@ -34,7 +35,6 @@ def parse_module(filename):
     visited = set()
     resolved_ast = []
 
-    # Injeta o Prelude automaticamente
     prelude_path = os.path.join(STD_DIR, "prelude.lm")
     if os.path.exists(prelude_path):
         queue.appendleft(prelude_path)
@@ -58,20 +58,24 @@ def parse_module(filename):
 
         for node in ast:
             if isinstance(node, ImportStmt):
-                # Resolução de caminho
                 if node.filename.startswith("std/"):
                     clean_name = node.filename.replace("std/", "")
-                    if clean_name.endswith(".lm"): clean_name = clean_name[:-3]
+                    if clean_name.endswith(".lm"):
+                        clean_name = clean_name[:-3]
                     dep_path = os.path.join(STD_DIR, clean_name + ".lm")
                 elif os.path.exists(node.filename if node.filename.endswith(".lm") else node.filename + ".lm"):
                     dep_path = node.filename if node.filename.endswith(".lm") else node.filename + ".lm"
                 else:
                     mod_path = os.path.join("lumina_modules", node.filename)
-                    if not mod_path.endswith(".lm"): mod_path += ".lm"
+                    if not mod_path.endswith(".lm"):
+                        mod_path += ".lm"
                     if not os.path.exists(mod_path):
-                        raise LuminaError(f"Módulo '{node.filename}' não encontrado.", current_file, 0, 0, code)
+                        raise LuminaError(
+                            f"Módulo '{node.filename}' não encontrado.",
+                            current_file, 0, 0, code,
+                        )
                     dep_path = mod_path
-                
+
                 arrow(f"--> Importando módulo: {paint(node.filename, Color.BOLD)}")
                 queue.append(os.path.abspath(dep_path))
             else:
@@ -79,11 +83,14 @@ def parse_module(filename):
 
     return resolved_ast
 
+
 def compile_lumina(filename, output_file="output.ll", use_cache=True, is_wasm=False, is_debug=False):
     cache_dir = ".lumina_cache"
     raw_hash = get_cache_hash(filename)
-    if is_wasm: raw_hash += "_wasm"
-    if is_debug: raw_hash += "_debug"
+    if is_wasm:
+        raw_hash += "_wasm"
+    if is_debug:
+        raw_hash += "_debug"
     cache_file = os.path.join(cache_dir, raw_hash + ".ll") if use_cache else None
 
     if use_cache and os.path.exists(cache_file):
@@ -128,6 +135,7 @@ def compile_lumina(filename, output_file="output.ll", use_cache=True, is_wasm=Fa
 
     return llvm_ir
 
+
 def run_jit(llvm_ir, cli_args):
     header("Execução JIT (Just-In-Time)")
     try:
@@ -149,7 +157,6 @@ def run_jit(llvm_ir, cli_args):
     engine.run_static_constructors()
 
     func_ptr = engine.get_function_address("main")
-    # NOVO: Padronizado para c_int (32 bits)
     cfunc = ctypes.CFUNCTYPE(
         ctypes.c_int, ctypes.c_int32, ctypes.POINTER(ctypes.c_char_p)
     )(func_ptr)
@@ -164,12 +171,30 @@ def run_jit(llvm_ir, cli_args):
     print()
     info(f"[JIT] Programa finalizado com exit code: {paint(str(ret), Color.BOLD + Color.SUCCESS)}")
 
-# --- Auto-Formatter (AST printer usado por `lumina fmt`) ---
+
+# ============================================================
+# Auto-Formatter (AST printer usado por `lumina fmt`)
+# ============================================================
+def _fmt_params(params):
+    """Aceita tanto Param (dataclass) quanto tuplas (nome, tipo).
+
+    Param -> .name / .type_ann
+    tuple -> (name, type)
+    """
+    out = []
+    for p in params:
+        if hasattr(p, 'name'):
+            out.append(f"{p.name}: {p.type_ann}")
+        else:
+            out.append(f"{p[0]}: {p[1]}")
+    return ", ".join(out)
+
+
 def format_node(node, indent_level=0):
     indent = "    " * indent_level
-    
+
     if isinstance(node, Function):
-        params = ", ".join([f"{p[0]}: {p[1]}" for p in node.params])
+        params = _fmt_params(node.params)
         ret = f" -> {node.return_type}" if node.return_type != "void" else ""
         prefix = "export " if getattr(node, 'is_exported', False) else ""
         prefix_newline = "\n" if indent_level == 0 else ""
@@ -177,7 +202,7 @@ def format_node(node, indent_level=0):
         for stmt in node.body:
             s += format_node(stmt, indent_level + 1)
         return s
-        
+
     elif isinstance(node, StructDecl):
         prefix_newline = "\n" if indent_level == 0 else ""
         s = f"{prefix_newline}{indent}struct {node.name}"
@@ -187,13 +212,19 @@ def format_node(node, indent_level=0):
         for fname, ftype in node.fields.items():
             s += f"{indent}    {fname}: {ftype}\n"
         return s
-        
+
     elif isinstance(node, EnumDecl):
         prefix_newline = "\n" if indent_level == 0 else ""
         s = f"{prefix_newline}{indent}enum {node.name}:\n"
-        for vname, ptype in node.variants:
-            if ptype:
-                s += f"{indent}    {vname}({ptype})\n"
+        for vname, payloads in node.variants:
+            if isinstance(payloads, list):
+                if payloads:
+                    s += f"{indent}    {vname}({', '.join(payloads)})\n"
+                else:
+                    s += f"{indent}    {vname}\n"
+            elif payloads:
+                # legado: string única
+                s += f"{indent}    {vname}({payloads})\n"
             else:
                 s += f"{indent}    {vname}\n"
         return s
@@ -202,11 +233,11 @@ def format_node(node, indent_level=0):
         prefix_newline = "\n" if indent_level == 0 else ""
         s = f"{prefix_newline}{indent}trait {node.name}:\n"
         for method in node.methods:
-            params = ", ".join([f"{p[0]}: {p[1]}" for p in method.params])
+            params = _fmt_params(method.params)
             ret = f" -> {method.return_type}" if method.return_type != "void" else ""
             s += f"{indent}    fn {method.name}({params}){ret}\n"
         return s
-        
+
     elif isinstance(node, ImplBlock):
         prefix_newline = "\n" if indent_level == 0 else ""
         s = f"{prefix_newline}{indent}impl "
@@ -217,39 +248,39 @@ def format_node(node, indent_level=0):
         for method in node.methods:
             s += format_node(method, indent_level + 1)
         return s
-        
+
     elif isinstance(node, ImportStmt):
         prefix_newline = "\n" if indent_level == 0 else ""
         return f'{prefix_newline}{indent}import "{node.filename}"\n'
-        
+
     elif isinstance(node, ExternDecl):
         prefix_newline = "\n" if indent_level == 0 else ""
         prefix = '"wasm" ' if getattr(node, 'is_wasm', False) else ''
-        params = ", ".join([f"{p[0]}: {p[1]}" for p in node.params])
+        params = _fmt_params(node.params)
         ret = f" -> {node.return_type}" if node.return_type != "void" else ""
         return f"{prefix_newline}{indent}extern {prefix}fn {node.name}({params}){ret}\n"
-        
+
     elif isinstance(node, VarDecl):
         mut = "mut " if node.is_mutable else "let "
         typ = f": {node.var_type}" if node.var_type else ""
         val = f" = {format_node(node.value, 0)}" if node.value else ""
         return f"{indent}{mut}{node.name}{typ}{val}\n"
-        
+
     elif isinstance(node, DestructureStmt):
         mut = "mut " if node.is_mutable else "let "
         names = ", ".join(node.names)
         val = format_node(node.value, 0)
         return f"{indent}{mut}({names}) = {val}\n"
-        
+
     elif isinstance(node, AssignStmt):
         target = format_node(node.target, 0)
         val = format_node(node.value, 0)
         return f"{indent}{target} = {val}\n"
-        
+
     elif isinstance(node, ReturnStmt):
         vals = ", ".join([format_node(v, 0) for v in node.values])
         return f"{indent}return {vals}\n"
-        
+
     elif isinstance(node, IfStmt):
         cond = format_node(node.condition, 0)
         prefix_newline = "\n" if indent_level > 0 else ""
@@ -261,7 +292,7 @@ def format_node(node, indent_level=0):
             for stmt in node.else_body:
                 s += format_node(stmt, indent_level + 1)
         return s
-        
+
     elif isinstance(node, WhileStmt):
         cond = format_node(node.condition, 0)
         prefix_newline = "\n" if indent_level > 0 else ""
@@ -269,7 +300,7 @@ def format_node(node, indent_level=0):
         for stmt in node.body:
             s += format_node(stmt, indent_level + 1)
         return s
-        
+
     elif isinstance(node, ForStmt):
         if node.iterable:
             iter_val = format_node(node.iterable, 0)
@@ -281,13 +312,20 @@ def format_node(node, indent_level=0):
         for stmt in node.body:
             s += format_node(stmt, indent_level + 1)
         return s
-        
+
     elif isinstance(node, MatchStmt):
         cond = format_node(node.condition, 0)
         s = f"{indent}match {cond}:\n"
-        for variant_name, var_name, body in node.cases:
+        for case in node.cases:
+            # Compatível com 3-tuple (legado) e 4-tuple (variant, binding, guard, body)
+            if len(case) == 4:
+                variant_name, var_name, guard, body = case
+            else:
+                variant_name, var_name, body = case
+                guard = None
             bind = f"({var_name})" if var_name else ""
-            s += f"{indent}    case {variant_name}{bind}:\n"
+            guard_str = f" if {format_node(guard, 0)}" if guard else ""
+            s += f"{indent}    case {variant_name}{bind}{guard_str}:\n"
             for stmt in body:
                 s += format_node(stmt, indent_level + 2)
         if node.default:
@@ -295,7 +333,7 @@ def format_node(node, indent_level=0):
             for stmt in node.default:
                 s += format_node(stmt, indent_level + 2)
         return s
-        
+
     elif isinstance(node, DeferStmt):
         if len(node.body) == 1 and not isinstance(node.body[0], (IfStmt, WhileStmt, ForStmt, MatchStmt)):
             return f"{indent}defer {format_node(node.body[0], 0)}\n"
@@ -303,83 +341,90 @@ def format_node(node, indent_level=0):
         for stmt in node.body:
             s += format_node(stmt, indent_level + 1)
         return s
-        
+
     elif isinstance(node, AssertStmt):
         cond = format_node(node.condition, 0)
         return f"{indent}assert({cond})\n"
-        
+
     elif isinstance(node, BenchStmt):
         s = f'{indent}bench "{node.name}":\n'
         for stmt in node.body:
             s += format_node(stmt, indent_level + 1)
         return s
-        
+
     elif isinstance(node, (BreakStmt, ContinueStmt)):
-        return f"{indent}{node.__class__.__name__.lower().replace('stmt','')}\n"
+        return f"{indent}{node.__class__.__name__.lower().replace('stmt', '')}\n"
 
     elif isinstance(node, NumberExpr):
-        if indent_level > 0: return f"{indent}{node.value}\n"
+        if indent_level > 0:
+            return f"{indent}{node.value}\n"
         return node.value
-        
+
     elif isinstance(node, BoolExpr):
-        if indent_level > 0: return f"{indent}{'true' if node.value else 'false'}\n"
+        if indent_level > 0:
+            return f"{indent}{'true' if node.value else 'false'}\n"
         return 'true' if node.value else 'false'
-        
+
     elif isinstance(node, StringExpr):
-        if indent_level > 0: return f"{indent}\"{node.value}\"\n"
-        return f"\"{node.value}\""
-        
+        if indent_level > 0:
+            return f'{indent}"{node.value}"\n'
+        return f'"{node.value}"'
+
     elif isinstance(node, VariableExpr):
-        if indent_level > 0: return f"{indent}{node.name}\n"
+        if indent_level > 0:
+            return f"{indent}{node.name}\n"
         return node.name
-        
+
     elif isinstance(node, BinaryExpr):
         left = format_node(node.left, 0)
         right = format_node(node.right, 0)
-        if indent_level > 0: return f"{indent}{left} {node.op} {right}\n"
+        if indent_level > 0:
+            return f"{indent}{left} {node.op} {right}\n"
         return f"{left} {node.op} {right}"
-        
+
     elif isinstance(node, UnaryExpr):
         val = format_node(node.val, 0)
         if node.op == 'not':
             return f"not {val}"
         return f"{node.op}{val}"
-        
+
     elif isinstance(node, CallExpr):
-        # CORRIGIDO: Usa node.callee em vez de node.name
         callee_str = format_node(node.callee, 0)
         args = ", ".join([format_node(a, 0) for a in node.args])
-        if indent_level > 0: return f"{indent}{callee_str}({args})\n"
+        if indent_level > 0:
+            return f"{indent}{callee_str}({args})\n"
         return f"{callee_str}({args})"
-        
+
     elif isinstance(node, MemberExpr):
         obj = format_node(node.obj, 0)
         op = "?." if node.is_safe else "."
-        if indent_level > 0: return f"{indent}{obj}{op}{node.member}\n"
+        if indent_level > 0:
+            return f"{indent}{obj}{op}{node.member}\n"
         return f"{obj}{op}{node.member}"
-        
+
     elif isinstance(node, IndexExpr):
         arr = format_node(node.array, 0)
         idx = format_node(node.index, 0)
-        if indent_level > 0: return f"{indent}{arr}[{idx}]\n"
+        if indent_level > 0:
+            return f"{indent}{arr}[{idx}]\n"
         return f"{arr}[{idx}]"
-        
+
     elif isinstance(node, AddressOfExpr):
         return f"&{format_node(node.val, 0)}"
-        
+
     elif isinstance(node, DerefExpr):
         return f"*{format_node(node.val, 0)}"
-        
+
     elif isinstance(node, PropagateExpr):
         return f"{format_node(node.val, 0)}?"
-        
+
     elif isinstance(node, CastExpr):
         return f"{format_node(node.expr, 0)} as {node.target_type}"
-        
+
     elif isinstance(node, StructLiteralExpr):
-        fields = ", ".join([f"{f}: {format_node(v, 0)}" for f, v in node.fields])
+        fields = ", ".join([f"{f.name}: {format_node(f.value, 0)}" for f in node.fields])
         return f"{node.struct_name} {{ {fields} }}"
-        
+
     elif isinstance(node, MatchExpr):
         cond = format_node(node.condition, 0)
         s = f"match {cond} {{\n"
@@ -389,9 +434,9 @@ def format_node(node, indent_level=0):
             s += f"{indent}    else => {format_node(node.default, 0)},\n"
         s += f"{indent}}}"
         return s
-        
+
     elif isinstance(node, LambdaExpr):
-        params = ", ".join([f"{p[0]}: {p[1]}" for p in node.params])
+        params = _fmt_params(node.params)
         ret = f" -> {node.return_type}" if node.return_type != "void" else ""
         if len(node.body) == 1:
             return f"fn({params}){ret}: {format_node(node.body[0], 0)}"
@@ -399,7 +444,7 @@ def format_node(node, indent_level=0):
         for stmt in node.body:
             s += format_node(stmt, indent_level + 1)
         return s
-        
+
     elif isinstance(node, ArrayExpr):
         elements = ", ".join([format_node(el, 0) for el in node.elements])
         return f"[{elements}]"

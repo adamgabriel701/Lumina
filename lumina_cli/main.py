@@ -14,9 +14,10 @@ from .commands import (
 )
 from .playground import run_server as run_playground
 
+
 def usage():
     header("🌟 Lumina CLI")
-    info("Uso: lumina <comando> [argumentos]") # Ajustado para refletir um alias potencial
+    info("Uso: lumina <comando> [argumentos]")
     print()
     step("Comandos disponíveis:")
     commands = [
@@ -37,6 +38,7 @@ def usage():
         print(f"  {paint(cmd, Color.BOLD + Color.BRIGHT_CYAN)}  {paint(desc, Color.MUTED)}")
     print()
     info(f"Exemplo: {paint('lumina new meu_projeto', Color.MUTED)}")
+
 
 def main():
     if len(sys.argv) < 2:
@@ -109,6 +111,8 @@ def main():
         error(f"Comando desconhecido: {paint(command, Color.BOLD)}")
         print()
         usage()
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

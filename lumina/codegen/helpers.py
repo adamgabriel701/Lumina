@@ -1,10 +1,12 @@
 from llvmlite import ir
 
+
 class HelpersCodegen:
     def create_global_string(self, text):
         # Evita erros se chamado antes do setup
-        if not hasattr(self, 'string_counter'): self.string_counter = 0
-        
+        if not hasattr(self, 'string_counter'):
+            self.string_counter = 0
+
         name = f"str_{self.string_counter}"
         self.string_counter += 1
         b = bytearray(text, 'utf-8') + b"\0"
@@ -12,7 +14,8 @@ class HelpersCodegen:
         gv = ir.GlobalVariable(self.module, ty, name=name)
         gv.global_constant = True
         gv.initializer = ir.Constant(ty, b)
-        if self.builder is None: return gv
+        if self.builder is None:
+            return gv
         return self.builder.bitcast(gv, self.voidptr_ty)
 
     def to_float_if_needed(self, val):

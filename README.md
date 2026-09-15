@@ -5,6 +5,7 @@
 [![Python Version](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![Status](https://img.shields.io/badge/Status-Alpha%20%2F%20Active-green.svg)](#)
 [![Language](https://img.shields.io/badge/Language-Lumina-6A0DAD.svg)](#)
+[![Examples](https://img.shields.io/badge/examples-70%2F70-success.svg)](#)
 
 **Lumina** é uma linguagem de programação de sistemas de propósito geral, focada em alta performance, ergonomia moderna, concorrência e segurança de memória. Ela combina a sintaxe limpa e expressiva baseada em indentação (estilo Python/Nim) com o poder de baixo nível e otimização industrial do backend **LLVM**.
 
@@ -19,7 +20,7 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
 * **Tipagem Estática com Inferência:** O compilador deduz os tipos automaticamente, incluindo retornos de métodos e Lambdas.
 * **Generics com Monomorphization:** Suporte a tipos genéricos `<T>` que geram cópias especializadas em tempo de compilação, garantindo zero overhead de runtime.
 * **Tipos Algébricos (ADTs) & Pattern Matching:** `enum`s com payloads e extração via `match` ou `switch`. O compilador checa a exaustividade dos casos.
-* **Pattern Matching em Structs:** Destructuring direto no `match` para extrair campos de structs literais de forma elegente.
+* **Pattern Matching em Structs:** Destructuring direto no `match` para extrair campos de structs literais de forma elegante.
 * **Closures (Lambdas):** Funções anônimas inline (`fn(x: int) -> int: x * 2`).
 * **Ergonomia Moderna:**
   * **Sintaxe Curta (`:=`):** Declare variáveis mutáveis rapidamente: `x := 10`.
@@ -33,7 +34,6 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
   * **Switch Statements:** Sintaxe limpa de salto (jump table nativa do LLVM) para inteiros e enums.
   * **Defer & Assert:** Garantia de limpeza de escopo e testes nativos.
   * **Auto-Formatter:** `lumina fmt` formata o código automaticamente (100% da AST).
-  * **Error Recovery:** O Parser se recupera de erros de sintaxe e continua analisando o resto do arquivo, permitindo que o LSP destaque múltiplos erros de uma vez.
 * **Mensagens Inteligentes:** Erros léxicos e semânticos sugerem correções ("Did you mean?").
 * **Concorrência e I/O Assíncrono:**
   * **Canais (CSP):** Comunicação segura entre threads estilo Go usando `pthread_mutex` e `pthread_cond`.

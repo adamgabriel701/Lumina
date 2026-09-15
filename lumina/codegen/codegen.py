@@ -5,180 +5,361 @@ from .statements import StatementCodegen
 from .helpers import HelpersCodegen
 from .types import TypesCodegen
 
+from ..ast import Function as AstFunction
+
+
 class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCodegen):
     def __init__(self):
-        # Contexto e Módulo LLVM
         self.module = ir.Module(name="lumina_module")
-        
-        # Tipos básicos
+
+        # Consistência com o triple do host — evita o warning
+        # "overriding the module target triple" do clang.
+        try:
+            from llvmlite.binding import get_default_triple
+            self.module.triple = get_default_triple()
+        except Exception:
+            pass
+
         self.i64_ty = ir.IntType(64)
         self.i32_ty = ir.IntType(32)
         self.f64_ty = ir.DoubleType()
         self.i8_ty = ir.IntType(8)
         self.voidptr_ty = self.i8_ty.as_pointer()
         self.void_ty = ir.VoidType()
-        
-        # Estado do Builder e Tabelas de Símbolos
+
         self.builder = None
-        self.functions_table = {}      # Nome -> (ir.Function, ir.FunctionType)
-        self.function_defs = {}       # Nome -> AST Function node
-        self.struct_types = {}        # Nome -> ir.IdentifiedStructType
-        self.struct_fields = {}       # Nome -> {field_name: index}
-        self.struct_defs = {}         # Nome -> AST StructDecl node
-        self.symbol_table = {}        # Variável -> ir.AllocaInstr
-        self.var_types = {}           # Variável -> Tipo (str)
-        
-        # Contadores e Helpers
+        self.functions_table = {}
+        self.function_defs = {}
+        self.struct_types = {}
+        self.struct_fields = {}
+        self.struct_defs = {}
+        self.symbol_table = {}
+        self.var_types = {}
+
         self.string_counter = 0
         self.lambda_counter = 0
         self.heap_allocs = set()
-        
-        # Registra as funções padrão da libc (printf, malloc, etc.)
+
+        # Espelha a lista do semantic — usada pra não confundir chamada de lambda
+        # com builtin (se alguém fizer shadowing de `print`, por exemplo).
+        self.builtin_functions = {
+            "print", "input", "atoi", "len", "alloc", "alloc_bytes", "free",
+            "read_file", "write_file", "int", "float", "str", "argv", "chr",
+            "http_response",
+        }
+
         self.setup_libc_functions()
-        
+
     def setup_libc_functions(self):
-        # printf(format, ...) -> int
         printf_ty = ir.FunctionType(ir.IntType(32), [self.i8_ty.as_pointer()], var_arg=True)
         self.printf = ir.Function(self.module, printf_ty, name="printf")
-        
-        # malloc(size) -> void*
+
         malloc_ty = ir.FunctionType(self.i8_ty.as_pointer(), [ir.IntType(64)])
         self.malloc = ir.Function(self.module, malloc_ty, name="malloc")
-        
-        # free(void*) -> void
+
         free_ty = ir.FunctionType(ir.VoidType(), [self.i8_ty.as_pointer()])
         self.free = ir.Function(self.module, free_ty, name="free")
-        
-        # strcpy(dest, src) -> char*
+
         strcpy_ty = ir.FunctionType(self.i8_ty.as_pointer(), [self.i8_ty.as_pointer(), self.i8_ty.as_pointer()])
         self.strcpy = ir.Function(self.module, strcpy_ty, name="strcpy")
-        
-        # strcat(dest, src) -> char*
+
         strcat_ty = ir.FunctionType(self.i8_ty.as_pointer(), [self.i8_ty.as_pointer(), self.i8_ty.as_pointer()])
         self.strcat = ir.Function(self.module, strcat_ty, name="strcat")
-        
-        # strlen(str) -> size_t
+
         strlen_ty = ir.FunctionType(ir.IntType(64), [self.i8_ty.as_pointer()])
         self.strlen = ir.Function(self.module, strlen_ty, name="strlen")
-        
-        # snprintf(buf, size, format, ...) -> int
-        snprintf_ty = ir.FunctionType(ir.IntType(32), [self.i8_ty.as_pointer(), ir.IntType(64), self.i8_ty.as_pointer()], var_arg=True)
+
+        snprintf_ty = ir.FunctionType(
+            ir.IntType(32),
+            [self.i8_ty.as_pointer(), ir.IntType(64), self.i8_ty.as_pointer()],
+            var_arg=True,
+        )
         self.snprintf = ir.Function(self.module, snprintf_ty, name="snprintf")
-        
-        # NOVO: strstr(str, substr) -> char* (usado no método contains)
+
         strstr_ty = ir.FunctionType(self.i8_ty.as_pointer(), [self.i8_ty.as_pointer(), self.i8_ty.as_pointer()])
         self.strstr = ir.Function(self.module, strstr_ty, name="strstr")
-        
-        # NOVO: strncmp(str1, str2, n) -> int (usado no método starts_with)
-        strncmp_ty = ir.FunctionType(ir.IntType(32), [self.i8_ty.as_pointer(), self.i8_ty.as_pointer(), ir.IntType(64)])
+
+        strncmp_ty = ir.FunctionType(
+            ir.IntType(32),
+            [self.i8_ty.as_pointer(), self.i8_ty.as_pointer(), ir.IntType(64)],
+        )
         self.strncmp = ir.Function(self.module, strncmp_ty, name="strncmp")
 
-        # NOVO: atoi(str) -> int (Converte string para inteiro)
         atoi_ty = ir.FunctionType(ir.IntType(64), [self.i8_ty.as_pointer()])
         self.atoi = ir.Function(self.module, atoi_ty, name="atoi")
+
+        strncpy_ty = ir.FunctionType(
+            self.i8_ty.as_pointer(),
+            [self.i8_ty.as_pointer(), self.i8_ty.as_pointer(), ir.IntType(64)],
+        )
+        self.strncpy = ir.Function(self.module, strncpy_ty, name="strncpy")
+
+    def _resolve_trait_defaults(self, ast):
+        """Copia métodos default do trait para o ImplBlock que não os sobrescreve.
+
+        Roda ANTES de registrar funções, tanto no semantic quanto no codegen,
+        pra que `Struct_metodo` exista nos dois lados.
+        """
+        traits_by_name = {}
+        for decl in ast:
+            if hasattr(decl, 'methods') and not hasattr(decl, 'struct_name'):
+                traits_by_name[decl.name] = decl
+
+        for decl in ast:
+            if not (hasattr(decl, 'methods') and hasattr(decl, 'struct_name')):
+                continue
+            trait_name = getattr(decl, 'trait_name', None)
+            if not trait_name or trait_name not in traits_by_name:
+                continue
+
+            trait_def = traits_by_name[trait_name]
+            explicit_names = {m.name for m in decl.methods}
+
+            for trait_method in trait_def.methods:
+                full_name = f"{decl.struct_name}_{trait_method.name}"
+                if full_name in explicit_names:
+                    continue
+                if not trait_method.body:
+                    continue
+
+                default_method = AstFunction(
+                    full_name,
+                    list(trait_method.params),
+                    trait_method.return_type,
+                    list(trait_method.body),
+                )
+                decl.methods.append(default_method)
 
     def generate_module(self, ast):
         # 1. Pré-registra todas as structs e enums
         for decl in ast:
             if hasattr(decl, 'name') and decl.name in self.struct_defs:
                 continue
-            if hasattr(decl, 'fields') and not hasattr(decl, 'variants'): # É um StructDecl
+            if hasattr(decl, 'fields') and not hasattr(decl, 'variants'):
                 self.register_struct(decl)
-            elif hasattr(decl, 'variants'): # É um EnumDecl
+            elif hasattr(decl, 'variants'):
                 self.register_enum(decl)
-                
-        # 2. Pré-registra todas as funções e métodos de traits/impls
+
+        # 1.5. Resolve métodos default de traits
+        self._resolve_trait_defaults(ast)
+
+        # 2. Pré-registra todas as funções, métodos de impls e traits
         for decl in ast:
-            if hasattr(decl, 'params') and hasattr(decl, 'return_type'): # É uma Function ou ExternDecl
+            if hasattr(decl, 'params') and hasattr(decl, 'return_type'):
                 self.register_function(decl)
-                
-        # 3. Gera o corpo das funções
+            elif hasattr(decl, 'methods'):
+                for method in decl.methods:
+                    self.register_function(method)
+
+        # 3. Gera o corpo das funções e métodos de impls
         for decl in ast:
-            if hasattr(decl, 'body') and decl.body is not None: # É uma Function
+            if hasattr(decl, 'body') and decl.body is not None:
+                # Pula funções genéricas (são geradas on-demand)
+                if getattr(decl, 'type_params', None):
+                    continue
                 self.generate_function_body(decl)
-                
+            elif hasattr(decl, 'methods'):
+                for method in decl.methods:
+                    if hasattr(method, 'body') and method.body is not None:
+                        if getattr(method, 'type_params', None):
+                            continue
+                        self.generate_function_body(method)
+
         return str(self.module)
 
     def register_struct(self, node):
-        if node.name in self.struct_types: return
+        if node.name in self.struct_types:
+            return
         struct_ty = self.module.context.get_identified_type(node.name)
         self.struct_types[node.name] = struct_ty
         self.struct_defs[node.name] = node
-        
-        field_tys = [self.get_llvm_type(ft) for ft in node.fields.values()]
+
+        field_tys = []
+        for ft in node.fields.values():
+            if ft in self.struct_types:
+                field_tys.append(self.struct_types[ft].as_pointer())
+            else:
+                field_tys.append(self.get_llvm_type(ft))
+
         struct_ty.set_body(*field_tys)
         self.struct_fields[node.name] = {name: i for i, name in enumerate(node.fields.keys())}
 
+    def _enum_max_payloads(self, node):
+        """Descobre o número máximo de payloads entre as variantes de um enum."""
+        max_p = 0
+        for variant in node.variants:
+            if len(variant) < 2:
+                continue
+            v_payloads = variant[1]
+            if isinstance(v_payloads, list):
+                max_p = max(max_p, len(v_payloads))
+            elif v_payloads is not None:
+                max_p = max(max_p, 1)
+        return max_p
+
     def register_enum(self, node):
-        if node.name in self.struct_types: return
-        # Enums são representados como uma struct contendo um tag (i32) e um union (i64)
+        if node.name in self.struct_types:
+            return
+        # Layout: { i32 tag, i64 payload_0, i64 payload_1, ..., i64 payload_{N-1} }
+        # N = max payloads entre todas as variantes. Para enums de 1 payload
+        # (Result, Option), o layout é idêntico ao antigo {i32, i64}.
         struct_ty = self.module.context.get_identified_type(node.name)
         self.struct_types[node.name] = struct_ty
         self.struct_defs[node.name] = node
-        struct_ty.set_body(ir.IntType(32), ir.IntType(64))
-        self.struct_fields[node.name] = {"tag": 0, "payload": 1}
+
+        max_p = self._enum_max_payloads(node)
+        fields = [ir.IntType(32)] + [ir.IntType(64)] * max_p
+        struct_ty.set_body(*fields)
+
+        fields_map = {"tag": 0}
+        for i in range(max_p):
+            fields_map[f"payload_{i}"] = i + 1
+        if max_p >= 1:
+            fields_map["payload"] = 1  # alias retrocompatível
+        self.struct_fields[node.name] = fields_map
 
     def register_function(self, node):
-        # NOVO: Prefixa o nome da função com o módulo para evitar colisão (Namespaces)
-        # Se a função não tiver módulo (ex: main), usa o nome original
+        # Funções genéricas NÃO são registradas — materializadas on-demand
+        if getattr(node, 'type_params', None):
+            self.function_defs[node.name] = node
+            return
+
         func_name = getattr(node, 'module_prefix', '') + node.name if hasattr(node, 'module_prefix') else node.name
-        
-        if func_name in self.functions_table: return
-        
-        ret_ty = self.get_llvm_type(node.return_type)
+
+        if func_name in self.functions_table:
+            return
+
+        ret_ty = self.get_llvm_param_type(node.return_type)
         param_types = []
-        for p_name, p_type, p_default in node.params:
+        for p in node.params:
+            p_name, p_type, p_default = p.name, p.type_ann, p.default
             p_ty = self.get_llvm_param_type(p_type)
             param_types.append(p_ty)
-            
+
         func_type = ir.FunctionType(ret_ty, param_types)
         func = ir.Function(self.module, func_type, name=func_name)
         self.functions_table[func_name] = (func, func_type)
-        # Mapeia o nome original também para facilitar a busca no Codegen
         self.functions_table[node.name] = (func, func_type)
         self.function_defs[node.name] = node
 
-    def generate_function_body(self, node):
-        func, func_type = self.functions_table[node.name]
-        
-        # NOVO: Define o nome da função atual para o ReturnStmt saber o tipo de retorno
-        self.current_func_name = node.name
-        
-        # Salva o escopo anterior
+    def _llvm_ty_to_str(self, t):
+        if t == self.i64_ty:
+            return "int"
+        if t == self.f64_ty:
+            return "float"
+        if t == self.voidptr_ty:
+            return "str"
+        if isinstance(t, ir.IntType) and t.width == 1:
+            return "bool"
+        if isinstance(t, ir.PointerType):
+            return "ptr"
+        return "unknown"
+
+    def materialize_generic(self, gen_def, arg_types):
+        """Gera (uma vez) uma cópia especializada da função genérica
+        para os tipos concretos em `arg_types`. Retorna o nome mangled.
+        """
+        mangled = gen_def.name + "__" + "_".join(self._llvm_ty_to_str(t) for t in arg_types)
+
+        if mangled in self.functions_table:
+            return mangled
+
+        type_params = getattr(gen_def, 'type_params', None) or []
+        type_map = {}
+        for p, t in zip(gen_def.params, arg_types):
+            if p.type_ann in type_params:
+                type_map[p.type_ann] = t
+
+        def resolve_ty(name):
+            if name in type_map:
+                return type_map[name]
+            return self.get_llvm_param_type(name)
+
+        ret_ty = resolve_ty(gen_def.return_type)
+        param_tys = [resolve_ty(p.type_ann) for p in gen_def.params]
+
+        func_type = ir.FunctionType(ret_ty, param_tys)
+        func = ir.Function(self.module, func_type, name=mangled)
+        self.functions_table[mangled] = (func, func_type)
+        self.function_defs[mangled] = gen_def
+
+        old_builder = self.builder
         old_symtab = self.symbol_table
         old_var_types = self.var_types
-        
+        old_current = getattr(self, 'current_func_name', None)
+
+        block = func.append_basic_block(name=f"{mangled}.entry")
+        self.builder = ir.IRBuilder(block)
+        self.symbol_table = {}
+        self.var_types = {}
+        self.current_func_name = mangled
+
+        for i, p in enumerate(gen_def.params):
+            p_name = p.name
+            p_ty = func_type.args[i]
+            ptr = self.builder.alloca(p_ty, name=p_name)
+            self.builder.store(func.args[i], ptr)
+            self.symbol_table[p_name] = ptr
+            self.var_types[p_name] = self._llvm_ty_to_str(p_ty)
+
+        for stmt in gen_def.body:
+            self.visit(stmt)
+
+        if not self.builder.block.is_terminated:
+            if func_type.return_type == self.void_ty:
+                self.builder.ret_void()
+            elif isinstance(func_type.return_type, ir.PointerType):
+                self.builder.ret(ir.Constant(func_type.return_type, None))
+            else:
+                self.builder.ret(ir.Constant(func_type.return_type, 0))
+
+        self.builder = old_builder
+        self.symbol_table = old_symtab
+        self.var_types = old_var_types
+        self.current_func_name = old_current
+
+        return mangled
+
+    def generate_function_body(self, node):
+        func, func_type = self.functions_table[node.name]
+
+        self.current_func_name = node.name
+
+        old_symtab = self.symbol_table
+        old_var_types = self.var_types
+
         block = func.append_basic_block(name=f"{node.name}.entry")
         self.builder = ir.IRBuilder(block)
         self.symbol_table = {}
         self.var_types = {}
-        
-        # Aloca e armazena os parâmetros na memória local
-        for i, (p_name, p_type, _) in enumerate(node.params):
+
+        for i, p in enumerate(node.params):
+            p_name, p_type = p.name, p.type_ann
             p_ty = self.get_llvm_param_type(p_type)
             ptr = self.builder.alloca(p_ty, name=p_name)
             self.builder.store(func.args[i], ptr)
             self.symbol_table[p_name] = ptr
             self.var_types[p_name] = p_type
-            
-        # Gera os statements da função
+
         for stmt in node.body:
             self.visit(stmt)
-            
-        # Adiciona um return vazio/0 se a função não terminar explicitamente
+
         if not self.builder.block.is_terminated:
             if func_type.return_type == self.void_ty:
                 self.builder.ret_void()
+            elif isinstance(func_type.return_type, ir.IdentifiedStructType):
+                zero_fields = [ir.Constant(ft, 0) for ft in func_type.return_type.elements]
+                self.builder.ret(ir.Constant(func_type.return_type, zero_fields))
+            elif isinstance(func_type.return_type, ir.PointerType):
+                self.builder.ret(ir.Constant(func_type.return_type, None))
             else:
                 self.builder.ret(ir.Constant(func_type.return_type, 0))
-                
-        # Restaura o escopo
+
         self.symbol_table = old_symtab
         self.var_types = old_var_types
 
-    # NOVO: codegen_stmt e codegen_expr agora são apenas aliases para o Visitor
     def codegen_stmt(self, node):
         return self.visit(node)
-        
+
     def codegen_expr(self, node):
         return self.visit(node)

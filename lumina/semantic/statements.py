@@ -1,24 +1,65 @@
-from ..ast import VarDecl, DestructureStmt, AssignStmt, ReturnStmt, IfStmt, WhileStmt, ForStmt, MatchStmt, ContinueStmt, DeferStmt, BreakStmt, AssertStmt, BenchStmt, CallExpr, MemberExpr, DerefExpr, IndexExpr, VariableExpr, StringExpr, NumberExpr, BoolExpr, BinaryExpr, StructLiteralExpr, ErrorNode
+from ..ast import (
+    VarDecl, DestructureStmt, AssignStmt, ReturnStmt, IfStmt, WhileStmt,
+    ForStmt, MatchStmt, ContinueStmt, DeferStmt, BreakStmt, AssertStmt,
+    BenchStmt, CallExpr, MemberExpr, DerefExpr, IndexExpr, VariableExpr,
+    StringExpr, NumberExpr, BoolExpr, BinaryExpr, StructLiteralExpr,
+    ArrayExpr, AddressOfExpr, PropagateExpr, LambdaExpr, ErrorNode,
+)
 from ..errors import LuminaError
 
+
 class StatementAnalyzer:
+    """Análise semântica de statements.
+
+    Notas de decisão:
+      * `ArrayExpr` → var_type = "ptr" (codegen trata como i64*)
+      * `AddressOfExpr` → var_type = "ptr"
+      * `DerefExpr` → var_type = "int" (não dá pra saber o tipo sem análise do alloca)
+      * `PropagateExpr` → var_type = "int" (payload de Result é sempre i64 hoje)
+      * `LambdaExpr` → var_type = "fn" (function pointer representado como voidptr no codegen)
+      * Funções genéricas: se o return_type é um type_param (T), infere pelos args
+    """
+
     def analyze_stmt(self, node):
-        if isinstance(node, ErrorNode): return
+        if isinstance(node, ErrorNode):
+            return
+
         if isinstance(node, VarDecl):
             if node.var_type is not None:
                 base_type = node.var_type.split('<')[0]
-                if base_type not in ("int", "float", "bool", "str", "ptr") and base_type not in self.structs:
-                    raise LuminaError(f"Tipo '{node.var_type}' não declarado.", self.filename, 0, 0, self.source_code)
-                    
-            # Inferência de tipos se o tipo for None
+                if base_type not in ("int", "float", "bool", "str", "ptr", "fn") and base_type not in self.structs:
+                    raise LuminaError(
+                        f"Tipo '{node.var_type}' não declarado.",
+                        self.filename, 0, 0, self.source_code,
+                    )
+
             if node.var_type is None and node.value is not None:
-                if isinstance(node.value, StringExpr): node.var_type = "str"
-                elif isinstance(node.value, NumberExpr): node.var_type = "float" if node.value.is_float else "int"
-                elif isinstance(node.value, BoolExpr): node.var_type = "bool"
-                elif isinstance(node.value, StructLiteralExpr): node.var_type = node.value.struct_name
+                if isinstance(node.value, StringExpr):
+                    node.var_type = "str"
+                elif isinstance(node.value, NumberExpr):
+                    node.var_type = "float" if node.value.is_float else "int"
+                elif isinstance(node.value, BoolExpr):
+                    node.var_type = "bool"
+                elif isinstance(node.value, StructLiteralExpr):
+                    node.var_type = node.value.struct_name
+                elif isinstance(node.value, LambdaExpr):
+                    node.var_type = "fn"
+                elif isinstance(node.value, ArrayExpr):
+                    node.var_type = "ptr"
+                elif isinstance(node.value, AddressOfExpr):
+                    node.var_type = "ptr"
+                elif isinstance(node.value, DerefExpr):
+                    node.var_type = "int"
+                elif isinstance(node.value, PropagateExpr):
+                    node.var_type = "int"
+                elif isinstance(node.value, IndexExpr):
+                    if isinstance(node.value.index, BinaryExpr) and node.value.index.op == '..':
+                        node.var_type = "ptr"
+                    else:
+                        node.var_type = "int"
                 elif isinstance(node.value, CallExpr):
                     func_name = getattr(node.value.callee, 'name', None) if hasattr(node.value, 'callee') else getattr(node.value, 'name', None)
-                    
+
                     if node.value.is_method:
                         obj_node = node.value.args[0]
                         if isinstance(obj_node, VariableExpr):
@@ -29,76 +70,163 @@ class StatementAnalyzer:
                                 if real_method_name in self.function_defs:
                                     node.var_type = self.function_defs[real_method_name].return_type
                                 else:
-                                    # Se não achou o def do método, assume o tipo do objeto (comum para builtins como len() que retorna int)
-                                    node.var_type = "int" 
+                                    node.var_type = "int"
                     else:
-                        if func_name in self.function_defs: 
-                            node.var_type = self.function_defs[func_name].return_type
-                        # Se for um builtin como print, não retorna nada útil, deixa como int
-                        else: node.var_type = "int"
-                            
-            if isinstance(node.value, CallExpr) and getattr(node.value.callee, 'name', None) == "alloc": 
+                        if func_name in self.function_defs:
+                            fn_def = self.function_defs[func_name]
+                            ret_t = fn_def.return_type
+                            type_params = getattr(fn_def, 'type_params', None) or []
+                            # Se o retorno é um type param genérico (T), infere pelos args
+                            if ret_t in type_params:
+                                inferred = "int"
+                                for arg_node, param in zip(node.value.args, fn_def.params):
+                                    if param.type_ann == ret_t:
+                                        at = self.visit(arg_node)
+                                        if at:
+                                            inferred = at
+                                        break
+                                node.var_type = inferred
+                            else:
+                                node.var_type = ret_t
+                        else:
+                            node.var_type = "int"
+
+            if isinstance(node.value, CallExpr) and getattr(node.value.callee, 'name', None) == "alloc":
                 self.heap_allocs.add(node.name)
-                
-            if node.value: self.visit(node.value)
+
+            if node.value:
+                self.visit(node.value)
             self.declare_var(node.name, node.var_type, node.is_mutable)
+
         elif isinstance(node, DestructureStmt):
             self.visit(node)
-            for name in node.names: self.declare_var(name, "int", node.is_mutable)
+            for name in node.names:
+                self.declare_var(name, "int", node.is_mutable)
+
         elif isinstance(node, AssignStmt):
             if isinstance(node.target, MemberExpr):
                 self.check_escape(node.target.obj)
-                info = self.get_var_info(node.target.obj.name)
-                if not info: raise LuminaError(f"Variável '{node.target.obj.name}' não declarada.", self.filename, 0, 0, self.source_code)
-                if not info['mutable']: raise LuminaError(f"Não pode modificar variável imutável '{node.target.obj.name}'.", self.filename, 0, 0, self.source_code)
-                base_type = info['type'].split('<')[0] if info['type'] else "Unknown"
-                if base_type not in self.struct_defs: raise LuminaError(f"Variável '{node.target.obj.name}' não é uma Struct.", self.filename, 0, 0, self.source_code)
-                struct_def = self.struct_defs[base_type]
-                if node.target.member not in struct_def.fields: raise LuminaError(f"Campo '{node.target.member}' não existe na Struct '{info['type']}'.", self.filename, 0, 0, self.source_code)
-            elif isinstance(node.target, DerefExpr): pass 
-            elif isinstance(node.target, IndexExpr): self.check_escape(node.target.array)
+                if isinstance(node.target.obj, VariableExpr):
+                    info = self.get_var_info(node.target.obj.name)
+                    if not info:
+                        raise LuminaError(
+                            f"Variável '{node.target.obj.name}' não declarada.",
+                            self.filename, 0, 0, self.source_code,
+                        )
+                    if not info['mutable']:
+                        raise LuminaError(
+                            f"Não pode modificar variável imutável '{node.target.obj.name}'.",
+                            self.filename, 0, 0, self.source_code,
+                        )
+                    base_type = info['type'].split('<')[0] if info['type'] else "Unknown"
+                    if base_type not in self.struct_defs:
+                        raise LuminaError(
+                            f"Variável '{node.target.obj.name}' não é uma Struct.",
+                            self.filename, 0, 0, self.source_code,
+                        )
+                    struct_def = self.struct_defs[base_type]
+                    if node.target.member not in struct_def.fields:
+                        raise LuminaError(
+                            f"Campo '{node.target.member}' não existe na Struct '{info['type']}'.",
+                            self.filename, 0, 0, self.source_code,
+                        )
+                else:
+                    self.visit(node.target.obj)
+            elif isinstance(node.target, DerefExpr):
+                pass
+            elif isinstance(node.target, IndexExpr):
+                self.check_escape(node.target.array)
             else:
                 self.check_escape(node.value)
                 info = self.get_var_info(node.target.name)
-                if not info: raise LuminaError(f"Variável '{node.target.name}' não declarada.", self.filename, 0, 0, self.source_code)
-                if not info['mutable']: raise LuminaError(f"Não pode reatribuir à variável imutável '{node.target.name}'.", self.filename, 0, 0, self.source_code)
-            self.check_escape(node.value); self.visit(node.value)
+                if not info:
+                    raise LuminaError(
+                        f"Variável '{node.target.name}' não declarada.",
+                        self.filename, 0, 0, self.source_code,
+                    )
+                if not info['mutable']:
+                    raise LuminaError(
+                        f"Não pode reatribuir à variável imutável '{node.target.name}'.",
+                        self.filename, 0, 0, self.source_code,
+                    )
+            self.check_escape(node.value)
+            self.visit(node.value)
+
         elif isinstance(node, ReturnStmt):
-            for val in node.values: self.check_escape(val); self.visit(val)
+            for val in node.values:
+                self.check_escape(val)
+                self.visit(val)
+
         elif isinstance(node, IfStmt):
-            self.visit(node.condition); self.push_scope()
-            for stmt in node.then_body: self.visit(stmt)
+            self.visit(node.condition)
+            self.push_scope()
+            for stmt in node.then_body:
+                self.visit(stmt)
             self.pop_scope()
             if node.else_body:
                 self.push_scope()
-                for stmt in node.else_body: self.visit(stmt)
+                for stmt in node.else_body:
+                    self.visit(stmt)
                 self.pop_scope()
+
         elif isinstance(node, WhileStmt):
-            self.visit(node.condition); self.push_scope()
-            for stmt in node.body: self.visit(stmt)
+            self.visit(node.condition)
+            self.push_scope()
+            for stmt in node.body:
+                self.visit(stmt)
             self.pop_scope()
+
         elif isinstance(node, ForStmt):
-            if node.iterable is not None: self.visit(node.iterable)
-            else: self.visit(node.start); self.visit(node.end)
-            self.push_scope(); self.declare_var(node.var_name, "int", False)
-            for stmt in node.body: self.visit(stmt)
+            if node.iterable is not None:
+                self.visit(node.iterable)
+            else:
+                self.visit(node.start)
+                self.visit(node.end)
+            self.push_scope()
+            self.declare_var(node.var_name, "int", False)
+            for stmt in node.body:
+                self.visit(stmt)
             self.pop_scope()
+
         elif isinstance(node, MatchStmt):
             self.visit(node.condition)
-            for variant_name, var_name, body in node.cases:
+            for case in node.cases:
+                variant_name, var_name, guard, body = case
                 self.push_scope()
-                if var_name: self.declare_var(var_name, "int", False)
-                for stmt in body: self.visit(stmt)
+                if var_name:
+                    # Suporta binding único (str) ou múltiplo (list)
+                    if isinstance(var_name, list):
+                        for name in var_name:
+                            self.declare_var(name, "int", False)
+                    else:
+                        self.declare_var(var_name, "int", False)
+                if guard:
+                    self.visit(guard)
+                for stmt in body:
+                    self.visit(stmt)
                 self.pop_scope()
             if node.default:
                 self.push_scope()
-                for stmt in node.default: self.visit(stmt)
+                for stmt in node.default:
+                    self.visit(stmt)
                 self.pop_scope()
-        elif isinstance(node, ContinueStmt): pass
-        elif isinstance(node, BreakStmt): pass
+
+        elif isinstance(node, ContinueStmt):
+            pass
+
+        elif isinstance(node, BreakStmt):
+            pass
+
         elif isinstance(node, DeferStmt):
-            for stmt in node.body: self.visit(stmt)
-        elif isinstance(node, AssertStmt): self.visit(node.condition)
+            for stmt in node.body:
+                self.visit(stmt)
+
+        elif isinstance(node, AssertStmt):
+            self.visit(node.condition)
+
         elif isinstance(node, BenchStmt):
-            for stmt in node.body: self.visit(stmt)
-        else: self.visit(node)
+            for stmt in node.body:
+                self.visit(stmt)
+
+        else:
+            self.visit(node)

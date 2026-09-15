@@ -1,3 +1,4 @@
+from ..builtins import BUILTIN_FUNCTIONS
 from lumina.ast.statements import ErrorNode
 from ..ast import (
     Function, ExternDecl, StructDecl, EnumDecl, ImplBlock,
@@ -21,11 +22,7 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
         self.escapes = set()
         self.definition_locations = {}
 
-        self.builtin_functions = {
-            "print", "input", "atoi", "len", "alloc", "alloc_bytes", "free",
-            "read_file", "write_file", "int", "float", "str", "argv", "chr",
-            "http_response",
-        }
+        self.builtin_functions = BUILTIN_FUNCTIONS
 
     def _resolve_trait_defaults(self, declarations):
         traits_by_name = {}

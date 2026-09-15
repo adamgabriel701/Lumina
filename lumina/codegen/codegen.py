@@ -1,3 +1,4 @@
+from ..builtins import BUILTIN_FUNCTIONS
 from llvmlite import ir
 
 from .expressions import ExpressionCodegen
@@ -40,13 +41,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         self.lambda_counter = 0
         self.heap_allocs = set()
 
-        # Espelha a lista do semantic — usada pra não confundir chamada de lambda
-        # com builtin (se alguém fizer shadowing de `print`, por exemplo).
-        self.builtin_functions = {
-            "print", "input", "atoi", "len", "alloc", "alloc_bytes", "free",
-            "read_file", "write_file", "int", "float", "str", "argv", "chr",
-            "http_response",
-        }
+        self.builtin_functions = BUILTIN_FUNCTIONS
 
         self.setup_libc_functions()
 

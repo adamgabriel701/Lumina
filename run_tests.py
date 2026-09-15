@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 """
-Suíte standalone para tests/uncertain_features.lm.
+Suíte standalone para tests/features/uncertain_features.lm.
+
+Compila, roda, e valida cada linha esperada. ~5 segundos.
+Não depende do pytest — útil pra pre-commit ou uso rápido.
 
 Uso:
     python3 run_tests.py
-    python3 run_tests.py tests/meu_teste.lm
+    python3 run_tests.py tests/features/outro.lm
 """
 import subprocess
 import sys
 import os
 
 
+# Duplicado do conftest.py de propósito — run_tests.py é standalone.
+# Se quiser manter DRY, mantenha os dois em sincronia.
 EXPECTED_LINES = [
     "1. Slicing: ell",
     "2. Array indexing:",
@@ -48,7 +53,7 @@ def run(cmd):
 
 
 def main():
-    target = sys.argv[1] if len(sys.argv) > 1 else "tests/uncertain_features.lm"
+    target = sys.argv[1] if len(sys.argv) > 1 else "tests/features/uncertain_features.lm"
 
     if not os.path.exists(target):
         print(f"❌ Arquivo '{target}' não encontrado.")

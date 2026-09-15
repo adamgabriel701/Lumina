@@ -1,35 +1,17 @@
+from .declarations import DeclarationParser
 from ..lexer.tokens import TokenType
-from .mixins import LuminaParserMixin
 from ..errors import LuminaError
 
 
-class Parser(LuminaParserMixin):
-    def __init__(self, tokens, filename="program.lm", source_code=""):
-        self.tokens = tokens
-        self.pos = 0
-        self.filename = filename
-        self.source_code = source_code
-        self.no_struct_literal = False
+class Parser(DeclarationParser):
+    """Orquestrador — combina todos os mixins via MRO.
 
-    def current_token(self):
-        return self.tokens[self.pos] if self.pos < len(self.tokens) else None
+    A cadeia de herança é:
+      DeclarationParser → StatementParser → PatternParser → ExpressionParser → ParserBase
 
-    def peek(self, offset=1):
-        if self.pos + offset < len(self.tokens):
-            return self.tokens[self.pos + offset]
-        return None
-
-    def consume(self, expected_type=None):
-        token = self.current_token()
-        if token and (expected_type is None or token.type == expected_type):
-            self.pos += 1
-            return token
-        if token:
-            raise LuminaError(
-                f"Esperado {expected_type.name if expected_type else 'token'}, mas encontrei {token.type.name} ('{token.value}')",
-                filename=self.filename, line=token.line, col=token.col, source_code=self.source_code
-            )
-        raise LuminaError("Fim inesperado do código", filename=self.filename, line=0, col=0, source_code=self.source_code)
+    Cada camada só depende da anterior (e é chamada de cima pra baixo), então
+    não há dependência circular.
+    """
 
     def parse(self):
         declarations = []
@@ -63,7 +45,7 @@ class Parser(LuminaParserMixin):
                 t = self.current_token()
                 raise LuminaError(
                     f"Declaração de nível superior inválida: {t.type.name} ('{t.value}')",
-                    filename=self.filename, line=t.line, col=t.col, source_code=self.source_code
+                    filename=self.filename, line=t.line, col=t.col, source_code=self.source_code,
                 )
 
             if is_export and hasattr(decl, 'is_exported'):

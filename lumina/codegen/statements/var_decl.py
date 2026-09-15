@@ -1,0 +1,148 @@
+from llvmlite import ir
+from ...ast import CallExpr
+
+
+class VarDeclMixin:
+
+    def _zero_and_store_struct(self, ptr, struct_ty, name):
+        """Aloca storage pra uma struct sem valor inicial e zera todos os campos."""
+        zero_fields = []
+        for ft in struct_ty.elements:
+            if isinstance(ft, ir.PointerType):
+                zero_fields.append(ir.Constant(ft, None))
+            elif isinstance(ft, ir.DoubleType):
+                zero_fields.append(ir.Constant(ft, 0.0))
+            elif isinstance(ft, ir.IntType):
+                zero_fields.append(ir.Constant(ft, 0))
+            else:
+                zero_fields.append(ir.Constant(ft, None))
+        try:
+            zero_val = ir.Constant(struct_ty, zero_fields)
+        except Exception:
+            zero_val = None
+
+        ptr_pointee = ptr.type.pointee
+
+        # ptr já guarda a struct por valor
+        if ptr_pointee == struct_ty:
+            if zero_val is not None:
+                self.builder.store(zero_val, ptr)
+            return
+
+        # Caminho normal: aloca storage no stack e aponta ptr pra ele
+        storage = self.builder.alloca(struct_ty, name=name + "_storage")
+        if zero_val is not None:
+            try:
+                self.builder.store(zero_val, storage)
+            except Exception:
+                pass
+
+        if storage.type != ptr_pointee:
+            if isinstance(ptr_pointee, ir.PointerType):
+                storage = self.builder.bitcast(storage, ptr_pointee, name=name + "_cast")
+            else:
+                storage_int = self.builder.ptrtoint(storage, self.i64_ty, name=name + "_int")
+                storage = self.builder.inttoptr(storage_int, ptr_pointee, name=name + "_cast")
+        self.builder.store(storage, ptr)
+
+    def visit_VarDecl(self, node):
+        val = self.visit(node.value) if node.value else None
+        var_type = node.var_type if node.var_type else "int"
+
+        is_alloc_call = (
+            isinstance(node.value, CallExpr)
+            and getattr(node.value.callee, 'name', None) in ("alloc", "alloc_bytes")
+        )
+
+        is_struct_like = (
+            (var_type in self.struct_types and not var_type.endswith("*"))
+            or ("<" in var_type and var_type.split("<")[0] in self.struct_defs)
+        )
+
+        if is_alloc_call:
+            llvm_ty = self.i64_ty.as_pointer()
+        elif is_struct_like:
+            struct_ty = self.get_llvm_type(var_type)
+            llvm_ty = struct_ty.as_pointer()
+        else:
+            llvm_ty = self.get_llvm_type(var_type)
+
+        if val is not None and isinstance(val.type, ir.PointerType) and isinstance(val.type.pointee, ir.IdentifiedStructType):
+            struct_name = val.type.pointee.name
+            if var_type == struct_name or var_type == "int" or var_type == "ptr":
+                llvm_ty = val.type
+
+        elif val is not None and isinstance(val.type, ir.IdentifiedStructType):
+            llvm_ty = val.type
+
+        ptr = self.builder.alloca(llvm_ty, name=node.name)
+        self.symbol_table[node.name] = ptr
+        self.var_types[node.name] = var_type
+
+        if val is not None:
+            if is_alloc_call:
+                val = self.builder.bitcast(val, self.i64_ty.as_pointer(), name="alloc_bitcast")
+                self.builder.store(val, ptr)
+            elif isinstance(val.type, ir.PointerType) and isinstance(ptr.type.pointee, ir.PointerType):
+                val = self.builder.bitcast(val, ptr.type.pointee, name="ptr_cast")
+                self.builder.store(val, ptr)
+            elif val.type == ptr.type.pointee:
+                self.builder.store(val, ptr)
+            elif isinstance(val.type, ir.IdentifiedStructType) and ptr.type.pointee == val.type.as_pointer():
+                tmp = self.builder.alloca(val.type, name="struct_tmp")
+                self.builder.store(val, tmp)
+                self.builder.store(tmp, ptr)
+            elif ptr.type.pointee == self.i64_ty and val.type == self.voidptr_ty:
+                res = self.builder.call(self.atoi, [val], name="str_to_int_call")
+                self.builder.store(res, ptr)
+            elif ptr.type.pointee == self.voidptr_ty and val.type == self.i64_ty:
+                int_buf = self.builder.alloca(ir.ArrayType(self.i8_ty, 32), name="int_to_str_buf")
+                int_buf_ptr = self.builder.bitcast(int_buf, self.voidptr_ty, name="int_str_ptr")
+                fmt_str = self.create_global_string("%ld")
+                self.builder.call(self.snprintf, [int_buf_ptr, ir.Constant(self.i64_ty, 32), fmt_str, val], name="int_to_str_call")
+                self.builder.store(int_buf_ptr, ptr)
+            elif ptr.type.pointee == self.i64_ty and val.type == self.f64_ty:
+                val = self.builder.fptosi(val, self.i64_ty, name="float_to_int_store")
+                self.builder.store(val, ptr)
+            elif ptr.type.pointee == self.f64_ty and val.type == self.i64_ty:
+                val = self.builder.sitofp(val, self.f64_ty, name="int_to_float_store")
+                self.builder.store(val, ptr)
+            else:
+                target_ty = ptr.type.pointee
+                if isinstance(val.type, ir.IntType) and isinstance(target_ty, ir.IntType):
+                    if val.type.width < target_ty.width:
+                        val = self.builder.sext(val, target_ty, name="sext_cast")
+                    else:
+                        val = self.builder.trunc(val, target_ty, name="trunc_cast")
+                elif isinstance(val.type, ir.PointerType) and isinstance(target_ty, ir.IntType):
+                    val = self.builder.ptrtoint(val, target_ty, name="ptrtoint_cast")
+                elif isinstance(val.type, ir.IntType) and isinstance(target_ty, ir.PointerType):
+                    val = self.builder.inttoptr(val, target_ty, name="inttoptr_cast")
+                elif isinstance(val.type, ir.PointerType) and isinstance(target_ty, ir.PointerType):
+                    val = self.builder.bitcast(val, target_ty, name="ptr_bitcast")
+                else:
+                    try:
+                        val = self.builder.bitcast(val, target_ty, name="final_cast")
+                    except Exception:
+                        pass
+                self.builder.store(val, ptr)
+
+        elif is_struct_like:
+            struct_ty = self.get_llvm_type(var_type)
+            self._zero_and_store_struct(ptr, struct_ty, node.name)
+
+        else:
+            # Sem valor: zera o slot
+            try:
+                if isinstance(ptr.type.pointee, ir.PointerType):
+                    zero = ir.Constant(ptr.type.pointee, None)
+                elif isinstance(ptr.type.pointee, ir.DoubleType):
+                    zero = ir.Constant(ptr.type.pointee, 0.0)
+                else:
+                    zero = ir.Constant(ptr.type.pointee, 0)
+                self.builder.store(zero, ptr)
+            except Exception:
+                pass
+
+        if is_alloc_call:
+            self.heap_allocs.add(node.name)

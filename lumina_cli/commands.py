@@ -248,7 +248,7 @@ def cmd_build(entry_file=None, extra_flags=[]):
         if is_no_gc:
             warn("⚠️ Modo Bare-Metal (--no-gc): Garbage Collector desativado.")
 
-        cmd_args = ["clang", "-O0", debug_flag, ir_file, "-o", project_name, "-lc", "-lm", "-lpthread"]
+        cmd_args = ["clang", "-O0", "-Wno-override-module", debug_flag, ir_file, "-o", project_name, "-lc", "-lm", "-lpthread"]
         if gc_flag:
             cmd_args.append(gc_flag)
         for lib in libs:

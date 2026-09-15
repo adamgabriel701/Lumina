@@ -7,6 +7,68 @@ from ...ast import (
 
 class OperatorsMixin:
 
+    # ------------------------------------------------------------------
+    # Helpers de normalização
+    # ------------------------------------------------------------------
+    def _normalize_ints(self, left, right):
+        """Se um lado é i64 e o outro é iN (N<64), estende o menor.
+
+        Cobre i1 (bool), i8 (char), i32, etc. Também converte ponteiros
+        em i64 quando o outro lado é int (permitido por design).
+        """
+        # ptr ↔ int
+        if isinstance(left.type, ir.PointerType) and right.type == self.i64_ty:
+            left = self.builder.ptrtoint(left, self.i64_ty, name="bin_ptrtoint_l")
+        elif left.type == self.i64_ty and isinstance(right.type, ir.PointerType):
+            right = self.builder.ptrtoint(right, self.i64_ty, name="bin_ptrtoint_r")
+
+        # int de larguras diferentes
+        if (isinstance(left.type, ir.IntType) and isinstance(right.type, ir.IntType)
+                and left.type != right.type):
+            target = self.i64_ty
+            if left.type.width < 64:
+                if left.type.width == 1:
+                    left = self.builder.zext(left, target, name="bin_zext_l")
+                else:
+                    left = self.builder.sext(left, target, name="bin_sext_l")
+            if right.type.width < 64:
+                if right.type.width == 1:
+                    right = self.builder.zext(right, target, name="bin_zext_r")
+                else:
+                    right = self.builder.sext(right, target, name="bin_sext_r")
+
+        return left, right
+
+    def _try_struct_operator(self, node, left, right):
+        """Se ambos são ponteiros para o mesmo struct, procura
+        Struct___op__ e chama. Retorna o valor ou None.
+        """
+        if not (isinstance(left.type, ir.PointerType)
+                and isinstance(left.type.pointee, ir.IdentifiedStructType)):
+            return None
+        if left.type != right.type:
+            return None
+
+        struct_name = left.type.pointee.name
+        op_map = {
+            '+': '__add__', '-': '__sub__', '*': '__mul__', '/': '__div__',
+            '==': '__eq__', '!=': '__ne__', '<': '__lt__', '>': '__gt__',
+            '<=': '__le__', '>=': '__ge__',
+        }
+        method_name = op_map.get(node.op)
+        if not method_name:
+            return None
+
+        real_name = f"{struct_name}_{method_name}"
+        if real_name not in self.functions_table:
+            return None
+
+        func = self.functions_table[real_name][0]
+        return self.builder.call(func, [left, right], name=f"op_{real_name}")
+
+    # ------------------------------------------------------------------
+    # Binários
+    # ------------------------------------------------------------------
     def visit_BinaryExpr(self, node):
         left = self.visit(node.left)
         right = self.visit(node.right)
@@ -24,6 +86,11 @@ class OperatorsMixin:
             self.builder.call(self.strcpy, [buf, left], name="sconcat_cpy")
             self.builder.call(self.strcat, [buf, right], name="sconcat_cat")
             return buf
+
+        # Overload de operador em struct (NOVO)
+        struct_result = self._try_struct_operator(node, left, right)
+        if struct_result is not None:
+            return struct_result
 
         # Coerção: se um lado é string, converte o número
         if left.type == self.voidptr_ty and right.type in (self.i64_ty, self.f64_ty):
@@ -49,6 +116,10 @@ class OperatorsMixin:
         if node.op in ('+', '-', '*', '/', '%'):
             if left.type == self.voidptr_ty or right.type == self.voidptr_ty:
                 return ir.Constant(self.i64_ty, 0)
+
+            # NOVO: normaliza ints e ponteiros antes de operar
+            left, right = self._normalize_ints(left, right)
+
             if left.type == self.f64_ty or right.type == self.f64_ty:
                 left = self.to_float_if_needed(left)
                 right = self.to_float_if_needed(right)
@@ -74,6 +145,16 @@ class OperatorsMixin:
 
         # Comparações
         if node.op in ('==', '!=', '<', '>', '<=', '>='):
+            # NOVO: normaliza antes de comparar
+            if left.type != right.type:
+                left, right = self._normalize_ints(left, right)
+            if left.type != right.type:
+                # Última tentativa: ptrtoint se um é ponteiro e o outro é int
+                if isinstance(left.type, ir.PointerType) and right.type == self.i64_ty:
+                    left = self.builder.ptrtoint(left, self.i64_ty, name="cmp_ptrtoint_l")
+                elif left.type == self.i64_ty and isinstance(right.type, ir.PointerType):
+                    right = self.builder.ptrtoint(right, self.i64_ty, name="cmp_ptrtoint_r")
+
             if left.type == self.f64_ty or right.type == self.f64_ty:
                 left = self.to_float_if_needed(left)
                 right = self.to_float_if_needed(right)
@@ -105,10 +186,16 @@ class OperatorsMixin:
             return self.builder.ptrtoint(val, self.i64_ty, name="ptr_to_int")
         elif val.type == self.i64_ty and isinstance(target_ty, ir.PointerType):
             return self.builder.inttoptr(val, target_ty, name="int_to_ptr")
+        # NOVO: casts entre ints de larguras diferentes
+        elif isinstance(val.type, ir.IntType) and isinstance(target_ty, ir.IntType):
+            if val.type.width < target_ty.width:
+                if val.type.width == 1:
+                    return self.builder.zext(val, target_ty, name="cast_zext")
+                return self.builder.sext(val, target_ty, name="cast_sext")
+            return self.builder.trunc(val, target_ty, name="cast_trunc")
         return val
 
     def visit_AddressOfExpr(self, node):
-        # &x retorna o alloca da variável
         if isinstance(node.val, VariableExpr):
             ptr = self.symbol_table.get(node.val.name)
             if ptr:
@@ -122,11 +209,6 @@ class OperatorsMixin:
         return self.builder.load(ptr, name="deref_load")
 
     def visit_PropagateExpr(self, node):
-        """`expr?` — unwrap de Result.
-
-        Se for Ok, retorna o payload (i64). Se for Err, faz `ret` da função atual
-        com o próprio Result.
-        """
         result_ptr = self.visit(node.val)
 
         if not (isinstance(result_ptr.type, ir.PointerType)
@@ -148,12 +230,11 @@ class OperatorsMixin:
             "!=", tag_val, ir.Constant(self.i32_ty, 0), name="prop_iserr",
         )
 
-        err_bb = self.builder.append_basic_block(name="prop.err")
-        ok_bb = self.builder.append_basic_block(name="prop.ok")
+        err_bb = self.builder.append_basic_block(name="prop_err")
+        ok_bb = self.builder.append_basic_block(name="prop_ok")
 
         self.builder.cbranch(is_err, err_bb, ok_bb)
 
-        # Ramo Err: ret da função atual com o Result
         self.builder.position_at_end(err_bb)
         func_ret_ty = self.functions_table[self.current_func_name][1].return_type
         if result_ptr.type != func_ret_ty:
@@ -165,7 +246,6 @@ class OperatorsMixin:
             ret_val = result_ptr
         self.builder.ret(ret_val)
 
-        # Ramo Ok: payload (i64)
         self.builder.position_at_end(ok_bb)
         payload_ptr = self.builder.gep(
             result_ptr,

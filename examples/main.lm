@@ -1,4 +1,4 @@
 fn main() -> int:
     let x = 10
-    let y = z + 5
+    let y = x + 5
     return 0

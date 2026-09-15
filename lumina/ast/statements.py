@@ -114,6 +114,8 @@ class AssignStmt(Stmt):
 @dataclass
 class ReturnStmt(Stmt):
     values: List[Expr]
+    line: int = 0
+    col: int = 0
 
 
 @dataclass

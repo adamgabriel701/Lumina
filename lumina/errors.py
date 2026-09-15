@@ -1,23 +1,7 @@
-import os
-import sys
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-
-def _supports_color():
-    return hasattr(sys.stdout, 'isatty') and sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
-
-
-HAS_COLOR = _supports_color()
-
-
-class Colors:
-    RED = '\033[91m' if HAS_COLOR else ''
-    BOLD = '\033[1m' if HAS_COLOR else ''
-    CYAN = '\033[96m' if HAS_COLOR else ''
-    YELLOW = '\033[93m' if HAS_COLOR else ''
-    BLUE = '\033[94m' if HAS_COLOR else ''
-    RESET = '\033[0m' if HAS_COLOR else ''
+from .common.colors import Color as Colors  # reaproveita a paleta única
 
 
 @dataclass
@@ -27,72 +11,62 @@ class LuminaError(Exception):
     line: int = 0
     col: int = 0
     source_code: str = ""
-    end_col: Optional[int] = None  # Para sublinhar intervalos maiores que 1 caractere
-    notes: List[str] = field(default_factory=list)  # Para dicas extras
-    context_lines: int = 1  # Quantas linhas antes do erro mostrar
+    end_col: Optional[int] = None
+    notes: List[str] = field(default_factory=list)
+    context_lines: int = 1
 
     def __post_init__(self):
-        super().__init__(self.format_error())
+        Exception.__init__(self, self.format_error())
 
     def add_note(self, note_msg: str):
-        """Adiciona uma nota de ajuda ao erro (estilo Rust)"""
         self.notes.append(note_msg)
+        # Re-formata para refletir notas adicionadas depois
+        Exception.__init__(self, self.format_error())
 
     def format_error(self) -> str:
-        if self.line == 0 or not self.source_code:
-            error_str = f"\n{Colors.BOLD}erro:{Colors.RESET} {self.message}\n"
-            if self.filename:
-                error_str += f"  {Colors.CYAN}-->{Colors.RESET} {self.filename}\n"
-            for note in self.notes:
-                error_str += f"  {Colors.BLUE}nota:{Colors.RESET} {note}\n"
-            return error_str
+        C = Colors
 
-        lines = self.source_code.split('\n')
+        if self.line == 0 or not self.source_code:
+            s = f"\n{C.BOLD}erro:{C.RESET} {self.message}\n"
+            if self.filename:
+                s += f"  {C.CYAN}-->{C.RESET} {self.filename}\n"
+            for note in self.notes:
+                s += f"  {C.BLUE}nota:{C.RESET} {note}\n"
+            return s
+
+        lines = self.source_code.split("\n")
         line_idx = self.line - 1
 
-        if line_idx >= len(lines):
-            return f"\n{Colors.BOLD}erro:{Colors.RESET} {self.message} (Linha fora do alcance)\n"
+        if line_idx < 0 or line_idx >= len(lines):
+            return f"\n{C.BOLD}erro:{C.RESET} {self.message} (Linha fora do alcance)\n"
 
-        line_str = lines[line_idx]
+        # expandtabs(4) alinha com o lexer
+        line_str = lines[line_idx].expandtabs(4)
 
-        # Determina o tamanho da seta / sublinhado
         start_col = max(1, self.col)
-        end_col = self.end_col if self.end_col else start_col + 1
+        end_col = max(start_col + 1, self.end_col or start_col + 1)
 
-        underline_len = max(1, end_col - start_col)
-        underline = "^" * underline_len
-
+        underline = "^" * (end_col - start_col)
         padding = " " * len(str(self.line))
         caret_padding = " " * (start_col - 1)
 
-        # Destaca a palavra exata na linha de código (se o sublinhado for na mesma palavra)
-        # Guard contra slices inválidos
-        if end_col - 1 <= start_col - 1:
-            highlighted_line = line_str
-        else:
-            highlighted_line = (
-                line_str[:start_col - 1] +
-                Colors.BOLD + Colors.RED + line_str[start_col - 1:end_col - 1] + Colors.RESET +
-                line_str[end_col - 1:]
-            )
+        highlighted = (
+            line_str[: start_col - 1]
+            + C.BOLD + C.RED + line_str[start_col - 1 : end_col - 1] + C.RESET
+            + line_str[end_col - 1 :]
+        )
 
-        error_str = f"\n{Colors.BOLD}erro:{Colors.RESET} {self.message}\n"
-        error_str += f"  {Colors.CYAN}-->{Colors.RESET} {self.filename}:{self.line}:{start_col}\n"
-        error_str += f"  {padding} |\n"
+        s = f"\n{C.BOLD}erro:{C.RESET} {self.message}\n"
+        s += f"  {C.CYAN}-->{C.RESET} {self.filename}:{self.line}:{start_col}\n"
+        s += f"  {padding} |\n"
 
-        # Linha de contexto anterior (se existir)
         if self.context_lines > 0 and line_idx > 0:
-            prev_line_num = self.line - 1
-            prev_line = lines[line_idx - 1]
-            error_str += f"  {Colors.YELLOW}{prev_line_num}{Colors.RESET} {Colors.YELLOW}|{Colors.RESET} {prev_line}\n"
+            s += f"  {C.YELLOW}{self.line - 1}{C.RESET} {C.YELLOW}|{C.RESET} {lines[line_idx - 1].expandtabs(4)}\n"
 
-        # Linha do erro
-        error_str += f"  {Colors.YELLOW}{self.line}{Colors.RESET} {Colors.YELLOW}|{Colors.RESET} {highlighted_line}\n"
-        # Seta de erro
-        error_str += f"  {padding} {Colors.YELLOW}|{Colors.RESET} {caret_padding}{Colors.BOLD}{Colors.RED}{underline}{Colors.RESET}\n"
+        s += f"  {C.YELLOW}{self.line}{C.RESET} {C.YELLOW}|{C.RESET} {highlighted}\n"
+        s += f"  {padding} {C.YELLOW}|{C.RESET} {caret_padding}{C.BOLD}{C.RED}{underline}{C.RESET}\n"
 
-        # Notas anexas
         for note in self.notes:
-            error_str += f"  {padding} {Colors.YELLOW}={Colors.RESET} {Colors.BLUE}nota:{Colors.RESET} {note}\n"
+            s += f"  {padding} {C.YELLOW}={C.RESET} {C.BLUE}nota:{C.RESET} {note}\n"
 
-        return error_str
+        return s

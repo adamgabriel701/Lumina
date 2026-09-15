@@ -1,4 +1,4 @@
-fn partition(arr: str, low: int, high: int) -> int:
+fn partition(arr: ptr, low: int, high: int) -> int:
     let pivot = arr[high]
     mut i = low - 1
     
@@ -18,7 +18,7 @@ fn partition(arr: str, low: int, high: int) -> int:
     
     return i + 1
 
-fn quicksort(arr: str, low: int, high: int):
+fn quicksort(arr: ptr, low: int, high: int):
     if low < high:
         let pi = partition(arr, low, high)
         quicksort(arr, low, pi - 1)

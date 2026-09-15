@@ -1,12 +1,4 @@
 import sys
-import os
-
-if __package__ in (None, ""):
-    parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    if parent not in sys.path:
-        sys.path.insert(0, parent)
-    __package__ = "lumina_cli"
-
 from .utils import Color, paint, cprint, info, success, warn, error, step, header
 from .commands import (
     cmd_new, cmd_build, cmd_clean, cmd_run, cmd_doc, cmd_install,

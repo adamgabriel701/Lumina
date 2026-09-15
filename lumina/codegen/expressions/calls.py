@@ -16,6 +16,40 @@ class CallsMixin:
         else:
             return self.codegen_user_call(node, func_name)
 
+    def _coerce_arg(self, arg_val, expected_ty, suffix=""):
+        """Coage um arg para o tipo esperado. Usado em chamadas normais
+        e no preenchimento de defaults.
+        """
+        if arg_val.type == expected_ty:
+            return arg_val
+        if isinstance(expected_ty, ir.PointerType) and isinstance(arg_val.type, ir.PointerType):
+            return self.builder.bitcast(arg_val, expected_ty, name=f"arg_ptr_cast{suffix}")
+        if expected_ty == self.i64_ty and isinstance(arg_val.type, ir.PointerType):
+            return self.builder.ptrtoint(arg_val, self.i64_ty, name=f"arg_ptr_to_int{suffix}")
+        if isinstance(expected_ty, ir.PointerType) and arg_val.type == self.i64_ty:
+            return self.builder.inttoptr(arg_val, expected_ty, name=f"arg_int_to_ptr{suffix}")
+        if expected_ty == self.f64_ty and arg_val.type == self.i64_ty:
+            return self.builder.sitofp(arg_val, self.f64_ty, name=f"arg_int_to_float{suffix}")
+        if expected_ty == self.i64_ty and arg_val.type == self.f64_ty:
+            return self.builder.fptosi(arg_val, self.i64_ty, name=f"arg_float_to_int{suffix}")
+        if isinstance(expected_ty, ir.IntType) and isinstance(arg_val.type, ir.IntType):
+            if arg_val.type.width < expected_ty.width:
+                if arg_val.type.width == 1:
+                    return self.builder.zext(arg_val, expected_ty, name=f"arg_zext{suffix}")
+                return self.builder.sext(arg_val, expected_ty, name=f"arg_sext{suffix}")
+            return self.builder.trunc(arg_val, expected_ty, name=f"arg_trunc{suffix}")
+        return arg_val
+
+    def _zero_for_type(self, ty):
+        """Retorna um zero constante do tipo LLVM."""
+        if isinstance(ty, ir.PointerType):
+            return ir.Constant(ty, None)
+        if isinstance(ty, ir.DoubleType):
+            return ir.Constant(ty, 0.0)
+        if isinstance(ty, ir.IntType):
+            return ir.Constant(ty, 0)
+        return ir.Constant(ty, 0)
+
     def codegen_user_call(self, node, func_name):
         # 1. Chamada indireta via variável local (function pointer / lambda)
         if (func_name not in self.functions_table
@@ -214,6 +248,7 @@ class CallsMixin:
             arg_list = node.args
             if node.is_method and len(arg_list) > len(func_type.args):
                 arg_list = arg_list[1:]
+
             for i, arg_node in enumerate(arg_list):
                 arg_val = self.visit(arg_node)
                 if isinstance(arg_val.type, ir.ArrayType):
@@ -222,27 +257,29 @@ class CallsMixin:
                     args.append(arg_val)
                     continue
                 expected_ty = func_type.args[i]
-                if arg_val.type != expected_ty:
-                    if isinstance(expected_ty, ir.PointerType) and isinstance(arg_val.type, ir.PointerType):
-                        arg_val = self.builder.bitcast(arg_val, expected_ty, name="arg_ptr_cast")
-                    elif expected_ty == self.i64_ty and isinstance(arg_val.type, ir.PointerType):
-                        arg_val = self.builder.ptrtoint(arg_val, self.i64_ty, name="arg_ptr_to_int")
-                    elif isinstance(expected_ty, ir.PointerType) and arg_val.type == self.i64_ty:
-                        arg_val = self.builder.inttoptr(arg_val, expected_ty, name="arg_int_to_ptr")
-                    elif expected_ty == self.f64_ty and arg_val.type == self.i64_ty:
-                        arg_val = self.builder.sitofp(arg_val, self.f64_ty, name="arg_int_to_float")
-                    elif expected_ty == self.i64_ty and arg_val.type == self.f64_ty:
-                        arg_val = self.builder.fptosi(arg_val, self.i64_ty, name="arg_float_to_int")
+                arg_val = self._coerce_arg(arg_val, expected_ty)
                 args.append(arg_val)
+
+            # NOVO: preenche args faltantes com defaults (ou zero)
+            fn_def = self.function_defs.get(func_name)
+            if fn_def is not None and len(args) < len(func_type.args):
+                for i in range(len(args), len(func_type.args)):
+                    expected_ty = func_type.args[i]
+                    param = fn_def.params[i] if i < len(fn_def.params) else None
+                    if param is not None and getattr(param, 'default', None) is not None:
+                        default_val = self.visit(param.default)
+                        default_val = self._coerce_arg(default_val, expected_ty, suffix="_def")
+                        args.append(default_val)
+                    else:
+                        # Sem default: preenche com zero do tipo esperado
+                        args.append(self._zero_for_type(expected_ty))
+
             return self.builder.call(func, args, name=func_name + "_call")
 
         # Fallback
         return ir.Constant(self.i64_ty, 0)
 
     def _find_enum_variant(self, variant_name):
-        """Procura `variant_name` em qualquer enum declarado.
-        Retorna (enum_name, variant_idx) ou None.
-        """
         for enum_name, enum_def in self.struct_defs.items():
             if not hasattr(enum_def, 'variants'):
                 continue
@@ -252,7 +289,6 @@ class CallsMixin:
         return None
 
     def _construct_enum(self, enum_name, variant_idx, arg_nodes):
-        """Constrói {i32 tag, i64 p0, ..., i64 pN} no heap."""
         struct_ty = self.struct_types[enum_name]
         struct_def = self.struct_defs[enum_name]
         max_p = self._enum_max_payloads(struct_def)

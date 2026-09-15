@@ -1,3 +1,5 @@
+from lumina.errors import LuminaError
+
 from .statements import StatementParser
 from ..lexer.tokens import TokenType
 from ..ast import (
@@ -137,6 +139,14 @@ class DeclarationParser(StatementParser):
                 else:
                     self.match(TokenType.NEWLINE)
                 methods.append(Function(m_name, params, return_type, body))
+            else:
+                # NOVO: token inesperado dentro do trait — erro, não loop
+                t = self.current_token()
+                raise LuminaError(
+                    f"Token inesperado em 'trait': {t.type.name} ('{t.value}'). "
+                    f"Esperado 'fn' ou 'newline'.",
+                    self.filename, t.line, t.col, self.source_code,
+                )
         self.expect(TokenType.DEDENT)
         return TraitDecl(name, methods)
 
@@ -162,6 +172,14 @@ class DeclarationParser(StatementParser):
                 func = self.parse_function()
                 func.name = f"{struct_name}_{func.name}"
                 methods.append(func)
+            else:
+                # NOVO: token inesperado dentro do impl — erro, não loop
+                t = self.current_token()
+                raise LuminaError(
+                    f"Token inesperado em 'impl': {t.type.name} ('{t.value}'). "
+                    f"Esperado 'fn' ou 'newline'.",
+                    self.filename, t.line, t.col, self.source_code,
+                )
         self.expect(TokenType.DEDENT)
         return ImplBlock(struct_name, methods, trait_name)
 

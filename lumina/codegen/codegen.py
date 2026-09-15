@@ -283,7 +283,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         old_var_types = self.var_types
         old_current = getattr(self, 'current_func_name', None)
 
-        block = func.append_basic_block(name=f"{mangled}.entry")
+        block = func.append_basic_block(name=f"{mangled}_entry")
         self.builder = ir.IRBuilder(block)
         self.symbol_table = {}
         self.var_types = {}
@@ -323,7 +323,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         old_symtab = self.symbol_table
         old_var_types = self.var_types
 
-        block = func.append_basic_block(name=f"{node.name}.entry")
+        block = func.append_basic_block(name=f"{node.name}_entry")
         self.builder = ir.IRBuilder(block)
         self.symbol_table = {}
         self.var_types = {}

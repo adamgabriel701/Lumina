@@ -147,8 +147,15 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
         global_scope = saved_scopes[0] if saved_scopes else {}
         self.scopes = [global_scope.copy()]
 
+        # NOVO: preserva o nome da função anterior (funções aninhadas via lambda
+        # ou match podem reentrar aqui)
+        saved_func_name = getattr(self, 'current_func_name', None)
+        saved_ret_type = getattr(self, 'current_ret_type', None)
+
         try:
             self.current_ret_type = node.return_type
+            self.current_func_name = node.name  # NOVO
+
             for param in node.params:
                 self.declare_var(param.name, param.type_ann, True)
 
@@ -156,6 +163,8 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
                 self.analyze_stmt(stmt)
         finally:
             self.scopes = saved_scopes
+            self.current_func_name = saved_func_name  # NOVO
+            self.current_ret_type = saved_ret_type    # NOVO
 
     def analyze_stmt(self, node):
         if isinstance(node, MatchStmt):

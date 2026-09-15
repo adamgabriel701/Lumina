@@ -6,6 +6,7 @@ from ..ast import (
 )
 from ..ast.visitor import NodeVisitor
 from ..errors import LuminaError
+from .types import is_assignable  # NOVO
 
 
 def get_suggestion(name, possible_names):
@@ -37,15 +38,7 @@ def get_suggestion(name, possible_names):
 
 
 class ExpressionAnalyzer(NodeVisitor):
-    """Análise semântica de expressões.
-
-    Notas:
-      * `visit_CallExpr` valida aridade/tipos contra function_defs.
-        Funções genéricas: pula a validação de tipo quando o parâmetro
-        é um type_param (T).
-      * `visit_PropagateExpr` exige que a função atual retorne Result.
-      * `visit_MatchExpr` usa (val, res) 2-tuple — diferente do MatchStmt.
-    """
+    """Análise semântica de expressões."""
 
     def visit_NumberExpr(self, node):
         return "int" if not node.is_float else "float"
@@ -72,11 +65,15 @@ class ExpressionAnalyzer(NodeVisitor):
         right_type = self.visit(node.right)
 
         if node.op in ('==', '!=', '<', '>', '<=', '>='):
+            # NOVO: usa is_assignable para tolerar ptr/int/str/fn entre si.
+            # Antes era comparação estrita e quebrava `ptr == 0`, `ptr == ""`, etc.
             if left_type and right_type and left_type != right_type:
-                raise LuminaError(
-                    f"Tipos incompatíveis na comparação: '{left_type}' e '{right_type}'",
-                    self.filename, getattr(node, 'line', 0), getattr(node, 'col', 0), self.source_code,
-                )
+                if not (is_assignable(left_type, right_type)
+                        or is_assignable(right_type, left_type)):
+                    raise LuminaError(
+                        f"Tipos incompatíveis na comparação: '{left_type}' e '{right_type}'",
+                        self.filename, getattr(node, 'line', 0), getattr(node, 'col', 0), self.source_code,
+                    )
             return "bool"
 
         if node.op in ('and', 'or'):
@@ -141,19 +138,30 @@ class ExpressionAnalyzer(NodeVisitor):
 
             if func_name in self.function_defs:
                 fn_def = self.function_defs[func_name]
-                if len(node.args) != len(fn_def.params):
-                    raise LuminaError(
-                        f"Função '{func_name}' espera {len(fn_def.params)} args, recebeu {len(node.args)}.",
-                        self.filename, getattr(node, 'line', 0), getattr(node, 'col', 0), self.source_code,
-                    )
+
+                # NOVO: aplica defaults — conta apenas parâmetros obrigatórios
+                required = sum(1 for p in fn_def.params if getattr(p, 'default', None) is None)
+                n_args = len(node.args)
+                if not (required <= n_args <= len(fn_def.params)):
+                    if required == len(fn_def.params):
+                        raise LuminaError(
+                            f"Função '{func_name}' espera {required} args, recebeu {n_args}.",
+                            self.filename, getattr(node, 'line', 0), getattr(node, 'col', 0), self.source_code,
+                        )
+                    else:
+                        raise LuminaError(
+                            f"Função '{func_name}' espera entre {required} e {len(fn_def.params)} args, recebeu {n_args}.",
+                            self.filename, getattr(node, 'line', 0), getattr(node, 'col', 0), self.source_code,
+                        )
+
                 type_params = getattr(fn_def, 'type_params', None) or []
                 for arg_node, param in zip(node.args, fn_def.params):
                     arg_type = self.visit(arg_node)
                     p_name, p_type = param.name, param.type_ann
-                    # Não valida se o parâmetro é um type_param (T)
                     if p_type in type_params:
                         continue
-                    if arg_type and p_type and arg_type != p_type:
+                    # NOVO: usa is_assignable em vez de igualdade estrita
+                    if arg_type and p_type and not is_assignable(p_type, arg_type):
                         raise LuminaError(
                             f"Tipo inválido para parâmetro '{p_name}': esperado '{p_type}', obteve '{arg_type}'.",
                             self.filename, getattr(node, 'line', 0), getattr(node, 'col', 0), self.source_code,

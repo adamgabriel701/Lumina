@@ -9,9 +9,9 @@ class ControlMixin:
         if cond_val.type != ir.IntType(1):
             cond_val = self.builder.icmp_signed("!=", cond_val, ir.Constant(cond_val.type, 0), name="if_cond")
 
-        then_bb = self.builder.append_basic_block(name="if.then")
-        else_bb = self.builder.append_basic_block(name="if.else")
-        end_bb = self.builder.append_basic_block(name="if.end")
+        then_bb = self.builder.append_basic_block(name="if_then")
+        else_bb = self.builder.append_basic_block(name="if_else")
+        end_bb = self.builder.append_basic_block(name="if_end")
 
         self.builder.cbranch(cond_val, then_bb, else_bb)
 
@@ -31,9 +31,9 @@ class ControlMixin:
         self.builder.position_at_end(end_bb)
 
     def visit_WhileStmt(self, node):
-        cond_bb = self.builder.append_basic_block(name="while.cond")
-        body_bb = self.builder.append_basic_block(name="while.body")
-        end_bb = self.builder.append_basic_block(name="while.end")
+        cond_bb = self.builder.append_basic_block(name="while_cond")
+        body_bb = self.builder.append_basic_block(name="while_body")
+        end_bb = self.builder.append_basic_block(name="while_end")
 
         self.builder.branch(cond_bb)
 
@@ -71,9 +71,9 @@ class ControlMixin:
 
         self.builder.store(start_val, var_ptr)
 
-        cond_bb = self.builder.append_basic_block(name="for.cond")
-        body_bb = self.builder.append_basic_block(name="for.body")
-        end_bb = self.builder.append_basic_block(name="for.end")
+        cond_bb = self.builder.append_basic_block(name="for_cond")
+        body_bb = self.builder.append_basic_block(name="for_body")
+        end_bb = self.builder.append_basic_block(name="for_end")
 
         self.builder.branch(cond_bb)
 

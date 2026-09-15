@@ -48,28 +48,37 @@ EXPECTED_LINES = [
 ]
 
 
-def run(cmd):
-    return subprocess.run(cmd, capture_output=True, text=True)
+def run(cmd, timeout=60):
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
 
 def main():
     target = sys.argv[1] if len(sys.argv) > 1 else "tests/features/uncertain_features.lm"
 
     if not os.path.exists(target):
-        print(f"❌ Arquivo '{target}' não encontrado.")
+        print(f"❌ Arquivo '{target}' não encontrado.", flush=True)
         return 1
 
-    print("🧹 Limpando cache...")
-    run(["python3", "-m", "lumina_cli.main", "clean"])
+    print("🧹 Limpando cache...", flush=True)
+    try:
+        run(["python3", "-m", "lumina_cli.main", "clean"], timeout=20)
+    except subprocess.TimeoutExpired:
+        print("❌ 'clean' travou (>20s).", flush=True)
+        return 1
 
-    print(f"🔨 Compilando e rodando {target}...\n")
-    build = run(["python3", "-m", "lumina_cli.main", "run", target])
+    print(f"🔨 Compilando e rodando {target}...\n", flush=True)
+    try:
+        build = run(["python3", "-m", "lumina_cli.main", "run", target], timeout=60)
+    except subprocess.TimeoutExpired as e:
+        print("❌ 'run' travou (>60s).", flush=True)
+        if e.stdout:
+            print(e.stdout, flush=True)
+        return 1
 
     output = build.stdout + build.stderr
-
     if build.returncode != 0:
-        print("❌ Compilação falhou.\n")
-        print(output)
+        print("❌ Compilação falhou.\n", flush=True)
+        print(output, flush=True)
         return 1
 
     passed = []
@@ -80,19 +89,19 @@ def main():
         else:
             failed.append(line)
 
-    print("=" * 62)
-    print(f"📊 Resultado: {len(passed)}/{len(EXPECTED_LINES)} verificações OK")
-    print("=" * 62)
+    print("=" * 62, flush=True)
+    print(f"📊 Resultado: {len(passed)}/{len(EXPECTED_LINES)} verificações OK", flush=True)
+    print("=" * 62, flush=True)
 
     if failed:
-        print("\n❌ Linhas esperadas que NÃO apareceram:\n")
+        print("\n❌ Linhas esperadas que NÃO apareceram:\n", flush=True)
         for f in failed:
-            print(f"  · {f}")
-        print("\n📄 Output completo:\n")
-        print(output)
+            print(f"  · {f}", flush=True)
+        print("\n📄 Output completo:\n", flush=True)
+        print(output, flush=True)
         return 1
 
-    print("\n✅ Todos os testes passaram!\n")
+    print("\n✅ Todos os testes passaram!\n", flush=True)
     return 0
 
 

@@ -3,7 +3,7 @@ from ..lexer.tokens import TokenType
 from ..ast import (
     VarDecl, DestructureStmt, AssignStmt, ReturnStmt, IfStmt, WhileStmt,
     ForStmt, BreakStmt, ContinueStmt, DeferStmt, AssertStmt, BenchStmt,
-    Function,
+    Function, BinaryExpr,
 )
 
 
@@ -60,13 +60,40 @@ class StatementParser(PatternParser):
             return VarDecl(var_token.value, None, value, True, var_token.line, var_token.col)
         else:
             expr = self.parse_expression()
+
             if self.check(TokenType.ASSIGN):
                 self.consume()
                 value = self.parse_expression()
                 self.match(TokenType.NEWLINE)
                 return AssignStmt(expr, value)
+
+            compound = self._parse_compound_assign(expr)
+            if compound is not None:
+                self.match(TokenType.NEWLINE)
+                return compound
+
             self.match(TokenType.NEWLINE)
             return expr
+
+    def _parse_compound_assign(self, target_expr):
+        compound_ops = {
+            TokenType.PLUS_ASSIGN:  "+",
+            TokenType.MINUS_ASSIGN: "-",
+            TokenType.STAR_ASSIGN:  "*",
+            TokenType.SLASH_ASSIGN: "/",
+            TokenType.AMP_ASSIGN:   "&",
+            TokenType.PIPE_ASSIGN:  "|",
+            TokenType.CARET_ASSIGN: "^",
+        }
+        tok = self.current_token()
+        if not tok or tok.type not in compound_ops:
+            return None
+
+        op_token = self.consume()
+        value = self.parse_expression()
+        binary_op = compound_ops[op_token.type]
+        binary = BinaryExpr(binary_op, target_expr, value)
+        return AssignStmt(target_expr, binary)
 
     def parse_let(self):
         if self.check(TokenType.MUT):
@@ -111,8 +138,18 @@ class StatementParser(PatternParser):
         self.match(TokenType.NEWLINE)
         return ReturnStmt(values)
 
+    # ------------------------------------------------------------------
+    # If / Elif / Else — refatorado para `elif` parsear a condição
+    # ------------------------------------------------------------------
     def parse_if(self):
         self.consume(TokenType.IF)
+        return self._parse_if_core()
+
+    def _parse_if_core(self):
+        """Parseia `cond: bloco [elif ...] [else: bloco]`.
+
+        O token IF/ELIF inicial já foi consumido pelo chamador.
+        """
         condition = self.parse_expression()
         self.expect(TokenType.COLON)
         self.expect(TokenType.NEWLINE)
@@ -125,23 +162,29 @@ class StatementParser(PatternParser):
                 continue
             then_body.append(self.parse_statement())
         self.expect(TokenType.DEDENT)
+
         else_body = None
-        if self.check(TokenType.ELSE) or self.check(TokenType.ELIF):
+
+        if self.check(TokenType.ELIF):
             self.consume()
-            if self.check(TokenType.IF):
-                else_body = [self.parse_if()]
-            else:
-                self.expect(TokenType.COLON)
-                self.expect(TokenType.NEWLINE)
-                while self.check(TokenType.NEWLINE):
-                    self.consume()
-                self.expect(TokenType.INDENT)
-                else_body = []
-                while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
-                    if self.match(TokenType.NEWLINE):
-                        continue
-                    else_body.append(self.parse_statement())
-                self.expect(TokenType.DEDENT)
+            # elif: reaproveita _parse_if_core (o token inicial já foi
+            # consumido). Isso é o que estava faltando antes.
+            inner = self._parse_if_core()
+            else_body = [inner]
+        elif self.check(TokenType.ELSE):
+            self.consume()
+            self.expect(TokenType.COLON)
+            self.expect(TokenType.NEWLINE)
+            while self.check(TokenType.NEWLINE):
+                self.consume()
+            self.expect(TokenType.INDENT)
+            else_body = []
+            while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
+                if self.match(TokenType.NEWLINE):
+                    continue
+                else_body.append(self.parse_statement())
+            self.expect(TokenType.DEDENT)
+
         return IfStmt(condition, then_body, else_body)
 
     def parse_while(self):

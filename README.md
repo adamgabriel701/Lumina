@@ -172,6 +172,131 @@ lumina playground               # Inicia o Web Playground JIT (porta 8080)
 
 ---
 
+## 🔗 Configuração de Link (`[link]`)
+
+A seção `[link]` do `lumina.toml` controla como o `cmd_build` invoca o linker.
+Ela permite linkar bibliotecas C/C++, incluir arquivos `.cpp` auxiliares e
+forçar targets específicos (como WASM), sem precisar passar flags pela CLI.
+
+### Sintaxe
+
+```toml
+[link]
+libs = ["m", "raylib"]              # passado como -lm -lraylib
+extra_objects = ["helper.cpp"]      # arquivos C/C++ compilados e linkados
+target = "wasm"                     # força compilação WASM
+extra_flags = ["-DFOO=1"]           # flags extras para o clang
+```
+
+### Onde colocar
+
+O `cmd_build` procura por `[link]` em **dois lugares**, nesta ordem:
+
+1. **Sidecar**: ao lado do `.lm` que está sendo compilado.
+   ```
+   examples/engine.lm       → examples/engine.toml
+   examples/ffi_test.lm     → examples/ffi_test.toml
+   ```
+
+2. **Raiz do projeto**: `./lumina.toml` (usado quando `entry_file` não é dado).
+
+Isso permite que cada exemplo tenha sua própria configuração de link.
+
+### Campos
+
+| Campo | Tipo | Descrição |
+|---|---|---|
+| `libs` | `List[str]` | Bibliotecas para linkar (`-l<nome>`). O linker procura em `/usr/lib`, `/usr/local/lib`, `LD_LIBRARY_PATH`, etc. |
+| `extra_objects` | `List[str]` | Arquivos `.c`, `.cpp`, `.cc`, `.cxx` que serão **compilados** (por `clang`/`clang++`) e linkados. Os `.o` resultantes são gerados ao lado do fonte. |
+| `target` | `str` | Força um target. Valores aceitos: `"wasm"`. Outros targets podem ser adicionados no futuro. |
+| `extra_flags` | `List[str]` | Flags extras que são passadas **diretamente** para o `clang` na fase de linkagem. Útil para `-L`, `-Wl,...`, defines, etc. |
+
+### Exemplos práticos
+
+**FFI com C++:**
+
+```toml
+# examples/ffi_test.toml
+[link]
+extra_objects = ["examples/ffi_helper.cpp"]
+```
+
+```cpp
+// examples/ffi_helper.cpp
+extern "C" void cpp_print_hello() {
+    std::printf("Hello from C++\n");
+}
+```
+
+O `cmd_build` detecta que é `.cpp`, usa `clang++` em vez de `clang`, e
+adiciona `-lstdc++` automaticamente.
+
+**Raylib (biblioteca gráfica):**
+
+```toml
+# examples/engine.toml
+[link]
+libs = ["raylib"]
+```
+
+Requer `libraylib.so` instalada. Em Ubuntu:
+
+```bash
+git clone --depth 1 https://github.com/raysan5/raylib.git /tmp/raylib
+cd /tmp/raylib/src
+make PLATFORM=PLATFORM_DESKTOP RAYLIB_LIBTYPE=SHARED
+sudo make install RAYLIB_LIBTYPE=SHARED
+sudo ldconfig
+```
+
+**WASM com WASI SDK:**
+
+```toml
+# examples/wasm_js_interop.toml
+[link]
+target = "wasm"
+```
+
+Requer `wasi-sdk` em `/opt/wasi-sdk`. O `cmd_build` usa
+`/opt/wasi-sdk/bin/clang` automaticamente quando disponível.
+
+**Biblioteca matemática + flags extras:**
+
+```toml
+[link]
+libs = ["m", "pthread"]
+extra_flags = ["-L/opt/custom/lib", "-Wl,-rpath,/opt/custom/lib"]
+```
+
+### Ordem de montagem do comando
+
+Para builds nativos, o `cmd_build` monta o comando assim:
+
+```
+clang <opt_flag> -Wno-override-module [<debug_flag>] <ir_file> -o <output> \
+    -lc -lm -lpthread -lgc \
+    [<extra_objects .o>] [<-lstdc++ se houver C++>] \
+    [<-l<lib> para cada lib do [link].libs>] \
+    [<extra_flags>] [<flags da CLI>]
+```
+
+Onde `<opt_flag>` é:
+- `-O0` se `--debug`
+- `-O3` se `--release`
+- `-O2` no padrão
+
+### Notas
+
+- **`GC_malloc` → `malloc`:** no target WASM, o `cmd_build` substitui
+  automaticamente `GC_malloc` por `malloc`, já que o Boehm GC não está
+  disponível em WASM.
+- **`export fn`:** funções marcadas com `export fn nome` são detectadas
+  via regex no fonte e exportadas para o JS (`-Wl,--export=nome`).
+- **Cache incremental:** o hash de link inclui a flag de otimização. Trocar
+  `--release` ↔ padrão ↔ `--debug` força relinkagem.
+
+---
+
 ## 🌐 WebAssembly e Interoperabilidade
 
 Compile módulos Lumina para a Web e chame-os diretamente do JavaScript!

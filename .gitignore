@@ -86,4 +86,4 @@ lumina-vscode/*.vsix
 # Cache de outros compiladores
 # ============================================
 *.gcda
-*.gcno
+*.gcnovgcore.*

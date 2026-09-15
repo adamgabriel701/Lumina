@@ -40,6 +40,15 @@ class Lexer:
             if self.paren_depth > 0:
                 while True:
                     self._skip_whitespace()
+                    # Comentários de linha dentro de parênteses
+                    if self.peek() == '#':
+                        while self.peek() not in ('\n', '\0'):
+                            self.advance()
+                        continue
+                    # Comentários de bloco dentro de parênteses
+                    if self.peek() == '/' and self.peek(1) == '*':
+                        self._skip_block_comment()
+                        continue
                     if self.peek() == '\n':
                         self.advance()
                         continue
@@ -66,9 +75,15 @@ class Lexer:
 
             c = self.peek()
 
+            # Comentário de linha
             if c == '#':
                 while self.peek() not in ('\n', '\0'):
                     self.advance()
+                continue
+
+            # Comentário de bloco /* ... */ (NOVO)
+            if c == '/' and self.peek(1) == '*':
+                self._skip_block_comment()
                 continue
 
             if c.isdigit():
@@ -106,6 +121,19 @@ class Lexer:
         self.add_token(TokenType.EOF, "")
         return self.tokens
 
+    def _skip_block_comment(self):
+        """Consome /* ... */ (não aninhado)."""
+        self.advance()  # /
+        self.advance()  # *
+        while True:
+            if self.peek() == '\0':
+                self.error("Comentário /* não terminado")
+            if self.peek() == '*' and self.peek(1) == '/':
+                self.advance()  # *
+                self.advance()  # /
+                return
+            self.advance()
+
     def _skip_whitespace(self):
         while self.peek() in (' ', '\t'):
             self.advance()
@@ -120,6 +148,14 @@ class Lexer:
             return
 
         if self.peek() == '\0':
+            self.at_line_start = False
+            return
+
+        # NOVO: linhas de comentário NÃO afetam a pilha de indentação.
+        # Sem isso, um `# ...` no meio de um bloco (com indentação menor
+        # que o corpo) gera um DEDENT prematuro e o parser perde o `elif`
+        # que vem depois. Bug observado em bootstrap_lexer.lm.
+        if self.peek() == '#':
             self.at_line_start = False
             return
 

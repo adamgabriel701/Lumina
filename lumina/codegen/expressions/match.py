@@ -9,8 +9,8 @@ class MatchExprMixin:
 
         # 1. Match sobre i64 (switch)
         if cond_val.type == self.i64_ty:
-            end_bb = self.builder.append_basic_block(name="match.end")
-            default_bb = self.builder.append_basic_block(name="match.default")
+            end_bb = self.builder.append_basic_block(name="match_end")
+            default_bb = self.builder.append_basic_block(name="match_default")
             sw = self.builder.switch(cond_val, default_bb)
             incoming = []
             phi_ty = None
@@ -22,7 +22,7 @@ class MatchExprMixin:
                     val_node = case.pattern
                     res_node = case.body
 
-                case_bb = self.builder.append_basic_block(name="match.case")
+                case_bb = self.builder.append_basic_block(name="match_case")
                 val = self.visit(val_node)
                 sw.add_case(val, case_bb)
                 self.builder.position_at_end(case_bb)
@@ -68,7 +68,7 @@ class MatchExprMixin:
                 strcmp_ty = ir.FunctionType(ir.IntType(32), [self.voidptr_ty, self.voidptr_ty])
                 strcmp_fn = ir.Function(self.module, strcmp_ty, name="strcmp")
 
-            end_bb = self.builder.append_basic_block(name="match_str.end")
+            end_bb = self.builder.append_basic_block(name="match_str_end")
             incoming = []
             phi_ty = None
 
@@ -83,8 +83,8 @@ class MatchExprMixin:
                 cmp_res = self.builder.call(strcmp_fn, [cond_val, val_str], name="strcmp_call")
                 is_eq = self.builder.icmp_signed("==", cmp_res, ir.Constant(ir.IntType(32), 0), name="str_eq")
 
-                then_bb = self.builder.append_basic_block(name="match_str.case")
-                next_bb = self.builder.append_basic_block(name="match_str.next")
+                then_bb = self.builder.append_basic_block(name="match_str_case")
+                next_bb = self.builder.append_basic_block(name="match_str_next")
                 self.builder.cbranch(is_eq, then_bb, next_bb)
 
                 self.builder.position_at_end(then_bb)
@@ -126,7 +126,7 @@ class MatchExprMixin:
         # 3. Match sobre struct (destructuring)
         elif isinstance(cond_val.type, ir.PointerType) and isinstance(cond_val.type.pointee, ir.IdentifiedStructType):
             struct_name = cond_val.type.pointee.name
-            end_bb = self.builder.append_basic_block(name="match_struct.end")
+            end_bb = self.builder.append_basic_block(name="match_struct_end")
             incoming = []
             phi_ty = None
 
@@ -138,8 +138,8 @@ class MatchExprMixin:
                     res_node = case.body
 
                 if isinstance(val_node, StructLiteralExpr) and val_node.struct_name == struct_name:
-                    then_bb = self.builder.append_basic_block(name="match_struct.case")
-                    next_bb = self.builder.append_basic_block(name="match_struct.next")
+                    then_bb = self.builder.append_basic_block(name="match_struct_case")
+                    next_bb = self.builder.append_basic_block(name="match_struct_next")
 
                     self.builder.branch(then_bb)
                     self.builder.position_at_end(then_bb)

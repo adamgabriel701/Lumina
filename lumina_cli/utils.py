@@ -1,46 +1,10 @@
 import os
 import re
 import hashlib
+from lumina.common.colors import Color, HAS_COLOR
 
 LUMINA_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STD_DIR = os.path.join(LUMINA_ROOT, "std")
-
-
-class Color:
-    RESET       = '\033[0m'
-    BOLD        = '\033[1m'
-    DIM         = '\033[2m'
-    UNDERLINE   = '\033[4m'
-    BLINK       = '\033[5m'
-
-    BLACK       = '\033[30m'
-    RED         = '\033[31m'
-    GREEN       = '\033[32m'
-    YELLOW      = '\033[33m'
-    BLUE        = '\033[34m'
-    MAGENTA     = '\033[35m'
-    CYAN        = '\033[36m'
-    WHITE       = '\033[37m'
-
-    BRIGHT_BLACK   = '\033[90m'
-    BRIGHT_RED     = '\033[91m'
-    BRIGHT_GREEN   = '\033[92m'
-    BRIGHT_YELLOW  = '\033[93m'
-    BRIGHT_BLUE    = '\033[94m'
-    BRIGHT_MAGENTA = '\033[95m'
-    BRIGHT_CYAN    = '\033[96m'
-    BRIGHT_WHITE   = '\033[97m'
-
-    ERROR   = BRIGHT_RED
-    SUCCESS = BRIGHT_GREEN
-    WARN    = BRIGHT_YELLOW
-    INFO    = BRIGHT_CYAN
-    STEP    = BRIGHT_MAGENTA
-    HEADER  = BOLD + BRIGHT_BLUE
-    ARROW   = BRIGHT_CYAN
-    PROMPT  = BOLD + BRIGHT_CYAN
-    MUTED   = BRIGHT_BLACK
-
 
 def paint(text, color):
     return f"{color}{text}{Color.RESET}"

@@ -30,6 +30,82 @@ from .compiler import compile_lumina, run_jit, format_node
 
 
 # ============================================================
+#  Helpers de [link]
+# ============================================================
+def _load_link_config(entry_file=None):
+    """Carrega config de [link] do lumina.toml apropriado.
+
+    Prioridade:
+      1. Se entry_file dado: procura <entry_file sem .lm>.toml (sidecar).
+      2. Senão: procura ./lumina.toml.
+
+    Retorna dict com chaves: libs, extra_objects, target, extra_flags.
+    Retorna {} (vazio) se não encontrar nada.
+    """
+    config_path = None
+    if entry_file:
+        sidecar = re.sub(r'\.lm$', '.toml', entry_file)
+        if os.path.exists(sidecar):
+            config_path = sidecar
+    else:
+        if os.path.exists("lumina.toml"):
+            config_path = "lumina.toml"
+
+    if not config_path:
+        return {}
+
+    if tomllib is None:
+        return {}
+
+    try:
+        with open(config_path, "rb") as f:
+            config = tomllib.load(f)
+    except Exception:
+        return {}
+
+    link = config.get("link", {})
+    return {
+        "libs": list(link.get("libs", [])),
+        "extra_objects": list(link.get("extra_objects", [])),
+        "target": link.get("target"),
+        "extra_flags": list(link.get("extra_flags", [])),
+    }
+
+
+def _compile_extra_objects(extra_objects):
+    """Compila cada extra_object (.c/.cpp/.cc) para .o e retorna a lista.
+
+    Retorna (obj_paths, has_cpp) onde has_cpp indica se algum veio de C++
+    (para adicionar -lstdc++ na linkagem).
+    """
+    obj_paths = []
+    has_cpp = False
+
+    for src in extra_objects:
+        if not os.path.exists(src):
+            warn(f"⚠️  extra_object não encontrado: {paint(src, Color.MUTED)}")
+            continue
+
+        is_cpp = src.endswith(('.cpp', '.cc', '.cxx', '.C'))
+        compiler = "clang++" if is_cpp else "clang"
+        obj_out = os.path.splitext(src)[0] + ".o"
+
+        try:
+            subprocess.run(
+                [compiler, "-O2", "-c", src, "-o", obj_out],
+                check=True, capture_output=True,
+            )
+            obj_paths.append(obj_out)
+            if is_cpp:
+                has_cpp = True
+        except subprocess.CalledProcessError as e:
+            err = (e.stderr or b"").decode("utf-8", errors="replace")[:200]
+            error(f"❌ Falha ao compilar {src}: {err}")
+
+    return obj_paths, has_cpp
+
+
+# ============================================================
 #  new
 # ============================================================
 def cmd_new(project_name):
@@ -40,6 +116,13 @@ version = "0.1.0"
 entry = "main.lm"
 
 [dependencies]
+
+# Configuração de link (opcional)
+# [link]
+# libs = ["m", "raylib"]              # passado como -lm -lraylib
+# extra_objects = ["helper.cpp"]      # arquivos C/C++ compilados e linkados
+# target = "wasm"                     # força compilação WASM
+# extra_flags = ["-DFOO"]             # flags extras para o clang
 """
     with open(os.path.join(project_name, "lumina.toml"), "w") as f:
         f.write(config)
@@ -181,10 +264,16 @@ def cmd_doc():
 #  build
 # ============================================================
 def cmd_build(entry_file=None, extra_flags=[]):
+    # Carrega config de [link]
+    link_cfg = _load_link_config(entry_file)
+    libs = link_cfg.get("libs", [])
+    extra_objs_src = link_cfg.get("extra_objects", [])
+    link_target = link_cfg.get("target")
+    link_extra_flags = link_cfg.get("extra_flags", [])
+
     if entry_file:
         entry = entry_file
         project_name = entry_file.replace('.lm', '')
-        libs = []
     else:
         if not os.path.exists("lumina.toml"):
             error("❌ Erro: Nenhum arquivo 'lumina.toml' encontrado no diretório atual.")
@@ -196,20 +285,46 @@ def cmd_build(entry_file=None, extra_flags=[]):
             config = tomllib.load(f)
         entry = config.get("package", {}).get("entry", "main.lm")
         project_name = config.get("package", {}).get("name", "programa_final")
-        libs = config.get("dependencies", {}).keys()
+
+    # Target do [link] pode forçar --wasm
+    extra_flags = list(extra_flags)  # não mutar a lista do chamador
+    if link_target == "wasm" and "--wasm" not in extra_flags:
+        extra_flags.append("--wasm")
+        info(f"🎯 Target '{link_target}' detectado em [link] — forçando --wasm")
 
     is_no_gc = "--no-gc" in extra_flags
     is_wasm = "--wasm" in extra_flags
     is_debug = "--debug" in extra_flags
+    is_release = "--release" in extra_flags
+
+    # Seleção do nível de otimização do clang:
+    #   --debug    → -O0 (fácil de debugar, preserva variáveis)
+    #   --release  → -O3 (máxima performance)
+    #   padrão     → -O2 (bom equilíbrio)
+    if is_debug:
+        opt_flag = "-O0"
+    elif is_release:
+        opt_flag = "-O3"
+    else:
+        opt_flag = "-O2"
 
     step(f"🛠️  Compilando projeto: {paint(project_name, Color.BOLD + Color.BRIGHT_CYAN)}")
+    info(f"⚙️  Otimização: {paint(opt_flag, Color.BOLD)}")
 
-    llvm_ir = compile_lumina(entry, use_cache=not (is_wasm or is_debug), is_wasm=is_wasm, is_debug=is_debug)
+    # Conteúdo do cache inclui a flag de otimização
+    cache_use = not (is_wasm or is_debug)
+
+    llvm_ir = compile_lumina(entry, use_cache=cache_use, is_wasm=is_wasm, is_debug=is_debug)
     if not llvm_ir:
         return None
 
-    cli_flags = {"--wasm", "--debug", "--no-gc"}
+    # Flags que NÃO vão para o clang (são processadas pelo próprio cmd_build)
+    cli_flags = {"--wasm", "--debug", "--no-gc", "--release"}
     linker_extra_flags = [f for f in extra_flags if f not in cli_flags]
+    linker_extra_flags.extend(link_extra_flags)
+
+    # Compila extra_objects (.c/.cpp → .o)
+    extra_obj_paths, has_cpp = _compile_extra_objects(extra_objs_src)
 
     ir_file = f"{project_name}.ll"
     with open(ir_file, "w") as f:
@@ -233,7 +348,12 @@ def cmd_build(entry_file=None, extra_flags=[]):
 
         clang_bin = "/opt/wasi-sdk/bin/clang" if os.path.exists("/opt/wasi-sdk/bin/clang") else "clang"
 
-        cmd_args = [clang_bin, "-O3", "-nostartfiles", debug_flag, "--target=wasm32-unknown-wasi", "--sysroot=/opt/wasi-sdk/share/wasi-sysroot", ir_file]
+        # WASM sempre usa -O3 (o binário final é otimizado para produção)
+        cmd_args = [clang_bin, "-O3", "-nostartfiles", debug_flag,
+                    "--target=wasm32-unknown-wasi",
+                    "--sysroot=/opt/wasi-sdk/share/wasi-sysroot", ir_file]
+
+        cmd_args.extend(extra_obj_paths)
 
         if export_names:
             success(f"📦 Exportando funções para JS: {', '.join(export_names)}")
@@ -243,28 +363,44 @@ def cmd_build(entry_file=None, extra_flags=[]):
             cmd_args.extend(["-lc", "-Wl,--allow-undefined", "-o", f"{project_name}.wasm"])
         else:
             cmd_args.extend(["-lc", "-Wl,--export=main", "-Wl,--allow-undefined", "-o", f"{project_name}.wasm"])
+
+        for lib in libs:
+            cmd_args.append(f"-l{lib}")
+        cmd_args.extend(linker_extra_flags)
     else:
         gc_flag = "-lgc" if not is_no_gc else ""
         if is_no_gc:
             warn("⚠️ Modo Bare-Metal (--no-gc): Garbage Collector desativado.")
 
-        cmd_args = ["clang", "-O0", "-Wno-override-module", debug_flag, ir_file, "-o", project_name, "-lc", "-lm", "-lpthread"]
+        cmd_args = ["clang", opt_flag, "-Wno-override-module", debug_flag,
+                    ir_file, "-o", project_name, "-lc", "-lm", "-lpthread"]
+
         if gc_flag:
             cmd_args.append(gc_flag)
+
+        cmd_args.extend(extra_obj_paths)
+
+        if has_cpp:
+            cmd_args.append("-lstdc++")
+
         for lib in libs:
             cmd_args.append(f"-l{lib}")
+
         cmd_args.extend(linker_extra_flags)
 
+    # Hash do binário inclui a flag de otimização.
+    # Isso garante que trocar --release ↔ padrão ↔ --debug force relinkagem.
     hash_obj_file = f".lumina_cache/{project_name}.bin_hash"
+    opt_marker = opt_flag  # "-O0" / "-O2" / "-O3"
 
-    ir_changed = True
-    if os.path.exists(hash_obj_file):
+    if os.path.exists(hash_obj_file) and not is_wasm and not is_debug:
         with open(hash_obj_file, "r") as f:
             old_hash = f.read()
-        new_hash = hashlib.md5(llvm_ir.encode()).hexdigest()
-        if old_hash == new_hash and not is_wasm and not is_debug:
+        combined = llvm_ir + "|" + opt_marker
+        new_hash = hashlib.md5(combined.encode()).hexdigest()
+        if old_hash == new_hash:
             success(f"✅ Build incremental: Nenhum código mudou. Pulando linkagem.")
-            return f"{project_name}.wasm" if is_wasm else project_name
+            return project_name
 
     header("4. Linkagem Nativa")
     cmd_str = " ".join(cmd_args)
@@ -280,8 +416,9 @@ def cmd_build(entry_file=None, extra_flags=[]):
         if cache_subdir:
             os.makedirs(cache_subdir, exist_ok=True)
 
+        combined = llvm_ir + "|" + opt_marker
         with open(hash_obj_file, "w") as f:
-            f.write(hashlib.md5(llvm_ir.encode()).hexdigest())
+            f.write(hashlib.md5(combined.encode()).hexdigest())
 
         return output_path
     except subprocess.CalledProcessError:
@@ -326,7 +463,6 @@ def cmd_test(entry_file=None):
 
     new_ast = [decl for decl in ast if not (isinstance(decl, Function) and decl.name == "main")]
 
-    # CORRIGIDO: usa VariableExpr como callee, não string
     test_calls = [CallExpr(VariableExpr(func.name, 0, 0), []) for func in test_funcs]
     new_main = Function("main", [], "int", test_calls + [ReturnStmt([NumberExpr("0")])])
     new_ast.append(new_main)

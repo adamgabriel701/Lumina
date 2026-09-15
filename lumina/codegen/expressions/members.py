@@ -31,9 +31,9 @@ class MembersMixin:
         null_ptr = ir.Constant(obj_val.type, None)
         is_null = self.builder.icmp_signed("==", obj_val, null_ptr, name="safe_nav_isnull")
 
-        null_bb = self.builder.append_basic_block(name="safe_nav.null")
-        ok_bb = self.builder.append_basic_block(name="safe_nav.ok")
-        end_bb = self.builder.append_basic_block(name="safe_nav.end")
+        null_bb = self.builder.append_basic_block(name="safe_nav_null")
+        ok_bb = self.builder.append_basic_block(name="safe_nav_ok")
+        end_bb = self.builder.append_basic_block(name="safe_nav_end")
 
         self.builder.cbranch(is_null, null_bb, ok_bb)
 

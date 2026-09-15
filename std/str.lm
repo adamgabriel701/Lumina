@@ -110,3 +110,23 @@ fn join(arr: ptr, delimiter: str) -> str:
         res = res + (arr[i] as str)
         i += 1
     return res
+
+# Retorna a substring [start, start+length)
+fn substr(s: str, start: int, length: int) -> str:
+    return s[start..start + length]
+
+# Encontra a primeira ocorrência de `alvo` em `texto`.
+# Retorna o índice ou -1 se não encontrar.
+fn find(texto: str, alvo: str) -> int:
+    let n = len(texto)
+    let m = len(alvo)
+    if m == 0:
+        return 0
+    if m > n:
+        return -1
+    mut i = 0
+    while i <= n - m:
+        if texto[i..i + m] == alvo:
+            return i
+        i += 1
+    return -1

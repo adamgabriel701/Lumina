@@ -1,5 +1,5 @@
 from .base import ParserBase
-from ..lexer.tokens import TokenType
+from ..lexer.tokens import TokenType, Token
 from ..ast import (
     NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr,
     ArrayExpr, IndexExpr, MemberExpr, AddressOfExpr, DerefExpr, UnaryExpr,
@@ -10,9 +10,14 @@ from ..errors import LuminaError
 
 
 class ExpressionParser(ParserBase):
-    """Precedência de expressões — do mais baixo ao mais alto:
+    """Precedência (do mais baixo ao mais alto):
 
-    expression → logical → comparison → range → additive → term → factor → postfix
+    expression → logical → bitwise_or → bitwise_xor → bitwise_and
+    → comparison → shift → range → additive → term → factor → postfix
+
+    Os níveis `bitwise_*` e `shift` foram adicionados para suportar
+    `a | b`, `a & b`, `a ^ b`, `a << n`, `a >> n` em expressões comuns
+    (não só em tipos). Isso destrava vários exemplos e std/async_fs.lm.
     """
 
     def parse_expression(self):
@@ -29,27 +34,67 @@ class ExpressionParser(ParserBase):
         return node
 
     def parse_logical(self):
-        node = self.parse_comparison()
+        node = self.parse_bitwise_or()
         while self.check(TokenType.AND) or self.check(TokenType.OR):
+            op = self.consume().value
+            right = self.parse_bitwise_or()
+            node = BinaryExpr(op, node, right)
+        return node
+
+    def parse_bitwise_or(self):
+        node = self.parse_bitwise_xor()
+        while self.check(TokenType.PIPE):
+            # Só consome `|` se NÃO for `|>` (que é tratado em parse_expression)
+            next_tok = self.peek(1)
+            if next_tok and next_tok.type == TokenType.GT:
+                break
+            op = self.consume().value
+            right = self.parse_bitwise_xor()
+            node = BinaryExpr(op, node, right)
+        return node
+
+    def parse_bitwise_xor(self):
+        node = self.parse_bitwise_and()
+        while self.check(TokenType.CARET):
+            op = self.consume().value
+            right = self.parse_bitwise_and()
+            node = BinaryExpr(op, node, right)
+        return node
+
+    def parse_bitwise_and(self):
+        node = self.parse_comparison()
+        while self.check(TokenType.AMP):
+            # Só consome `&` se NÃO for `&&` (tratado em parse_logical)
+            next_tok = self.peek(1)
+            if next_tok and next_tok.type == TokenType.AMP:
+                break
             op = self.consume().value
             right = self.parse_comparison()
             node = BinaryExpr(op, node, right)
         return node
 
     def parse_comparison(self):
-        node = self.parse_range()
+        node = self.parse_shift()
         ops = [TokenType.EQ, TokenType.NEQ, TokenType.LT, TokenType.GT, TokenType.LTE, TokenType.GTE]
         if any(self.check(op) for op in ops) or self.check(TokenType.IN):
             op = self.consume().value
-            right = self.parse_range()
+            right = self.parse_shift()
             if any(self.check(op) for op in ops):
                 next_op = self.consume().value
-                right2 = self.parse_range()
+                right2 = self.parse_shift()
                 left_node = BinaryExpr(op, node, right)
                 right_node = BinaryExpr(next_op, right, right2)
                 node = BinaryExpr('and', left_node, right_node)
             else:
                 node = BinaryExpr(op, node, right)
+        return node
+
+    def parse_shift(self):
+        node = self.parse_range()
+        while self.check(TokenType.SHL) or self.check(TokenType.SHR):
+            op = self.consume().value
+            right = self.parse_range()
+            node = BinaryExpr(op, node, right)
         return node
 
     def parse_range(self):
@@ -83,6 +128,18 @@ class ExpressionParser(ParserBase):
                 "Fim inesperado do código",
                 filename=self.filename, line=0, col=0, source_code=self.source_code,
             )
+
+        # NOVO: comptime(expr) ou comptime expr
+        if self.check(TokenType.COMPTIME):
+            self.consume()
+            if self.check(TokenType.LPAREN):
+                self.consume()
+                inner = self.parse_expression()
+                self.expect(TokenType.RPAREN)
+            else:
+                inner = self.parse_factor()
+            return self.parse_postfix(ComptimeExpr(inner))
+
         if self.check(TokenType.MATCH):
             return self.parse_match_expr()
         if self.check(TokenType.DOLLAR):
@@ -229,8 +286,8 @@ class ExpressionParser(ParserBase):
                 self.expect(TokenType.RBRACKET)
                 node = IndexExpr(node, index_expr)
             elif self.check(TokenType.QUESTION) and self.peek(1) and self.peek(1).type == TokenType.DOT:
-                self.consume()  # QUESTION
-                self.consume()  # DOT
+                self.consume()
+                self.consume()
                 member_name = self.expect(TokenType.IDENT).value
                 if self.check(TokenType.LPAREN):
                     self.consume()
@@ -278,7 +335,7 @@ class ExpressionParser(ParserBase):
             args = [self.parse_type()]
             while self.match(TokenType.COMMA):
                 args.append(self.parse_type())
-            self.expect(TokenType.GT)
+            self._expect_gt_for_type()
             type_name = type_name + "<" + ",".join(args) + ">"
         return type_name
 
@@ -291,5 +348,30 @@ class ExpressionParser(ParserBase):
                 continue
             else:
                 break
-        self.expect(TokenType.GT)
+        self._expect_gt_for_type()
         return params
+
+    def _expect_gt_for_type(self):
+        """Consome um '>' no contexto de tipo, tratando '>>' (SHR) como
+        dois '>' consecutivos.
+        """
+        tok = self.current_token()
+        if tok is None:
+            raise LuminaError(
+                "Fim inesperado ao esperar '>'",
+                filename=self.filename, line=0, col=0, source_code=self.source_code,
+            )
+
+        if tok.type == TokenType.GT:
+            self.consume()
+            return
+
+        if tok.type == TokenType.SHR:
+            first = Token(TokenType.GT, ">", tok.line, tok.col, tok.offset)
+            second = Token(TokenType.GT, ">", tok.line, tok.col + 1, tok.offset + 1)
+            self.tokens[self.pos] = first
+            self.tokens.insert(self.pos + 1, second)
+            self.consume()
+            return
+
+        self.expect(TokenType.GT)

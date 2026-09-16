@@ -6,7 +6,7 @@ from .statements import StatementCodegen
 from .helpers import HelpersCodegen
 from .types import TypesCodegen
 
-from ..ast import Function as AstFunction
+from ..ast import Function as AstFunction, Param
 
 
 class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCodegen):
@@ -119,7 +119,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
 
                 default_method = AstFunction(
                     full_name,
-                    list(trait_method.params),
+                    [Param('self', decl.struct_name)] + list(trait_method.params),
                     trait_method.return_type,
                     list(trait_method.body),
                 )

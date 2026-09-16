@@ -184,7 +184,21 @@ class DeclarationParser(StatementParser):
             leading = self._take_comments()
             if self.check(TokenType.FN):
                 func = self.parse_function()
-                func.name = f"{struct_name}_{func.name}"
+
+                # Guarda o nome original (antes do mangling) para
+                # detectar métodos de operador (__add__, __eq__, ...).
+                original_name = func.name
+                func.name = f"{struct_name}_{original_name}"
+
+                # Operadores recebem os 2 operandos EXPLICITAMENTE
+                # (ex: `fn __add__(a: Vector2, b: Vector2)`).
+                # Métodos normais recebem `self` implicitamente.
+                is_operator = (
+                    original_name.startswith('__') and original_name.endswith('__')
+                )
+                if not is_operator:
+                    func.params.insert(0, Param('self', struct_name))
+
                 if leading:
                     func.leading_comments = leading
                 methods.append(func)

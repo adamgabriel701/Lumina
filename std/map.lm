@@ -66,3 +66,17 @@ impl Map:
             i = (i + 1) & (self.cap - 1)
             probes += 1
         return -1
+
+
+## Cria um novo Map vazio (função livre).
+## Uso: mut m = new_map(); m.insert(42, 100)
+fn new_map() -> Map:
+    mut m: Map
+    m.cap = MAP_INITIAL_CAP
+    m.size = 0
+    m.buckets = alloc(MAP_INITIAL_CAP)
+    mut i = 0
+    while i < MAP_INITIAL_CAP:
+        m.buckets[i] = -1
+        i += 1
+    return m

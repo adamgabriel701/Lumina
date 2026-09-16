@@ -124,6 +124,10 @@ class CallsMixin:
                     self.builder.call(self.printf, [self.create_global_string("%f"), val], name="print_call")
                 elif val.type == self.i32_ty:
                     self.builder.call(self.printf, [self.create_global_string("%d"), val], name="print_call")
+                elif isinstance(val.type, ir.IntType) and val.type.width < 64:
+                    # i1 (bool), i8, i16 → zext para i64 e imprime como %ld
+                    val = self.builder.zext(val, self.i64_ty, name="print_zext")
+                    self.builder.call(self.printf, [self.create_global_string("%ld"), val], name="print_call")
                 else:
                     if isinstance(val.type, ir.PointerType) and val.type != self.voidptr_ty:
                         val = self.builder.bitcast(val, self.voidptr_ty, name="print_cast")

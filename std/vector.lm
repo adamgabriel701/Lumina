@@ -73,3 +73,13 @@ impl Vector:
             total += self.data[i]
             i += 1
         return total
+
+
+## Cria um novo Vector vazio (função livre).
+## Uso: mut v = new_vector(); v.push(10)
+fn new_vector() -> Vector:
+    mut v: Vector
+    v.data = none
+    v.len = 0
+    v.cap = 0
+    return v

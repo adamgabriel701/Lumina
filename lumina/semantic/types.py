@@ -46,6 +46,11 @@ def is_assignable(target: str, value: str) -> bool:
     if value.startswith("Option") and target == "Option":
         return True
 
+    # NOVO: Option (do literal `none`) funciona como null pointer.
+    # Cobre `v.data = none` onde `data: ptr`.
+    if value == "Option" and target in ("ptr", "fn", "str"):
+        return True
+
     # Promoção numérica
     if target == "float" and value == "int":
         return True

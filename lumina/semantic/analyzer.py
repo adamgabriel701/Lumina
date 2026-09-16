@@ -2,7 +2,7 @@ from ..builtins import BUILTIN_FUNCTIONS
 from lumina.ast.statements import ErrorNode
 from ..ast import (
     Function, ExternDecl, StructDecl, EnumDecl, ImplBlock,
-    VarDecl, VariableExpr, TraitDecl, MatchStmt,
+    VarDecl, VariableExpr, TraitDecl, MatchStmt, Param,
 )
 from ..errors import LuminaError
 from .expressions import ExpressionAnalyzer
@@ -49,7 +49,7 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
 
                 default_method = Function(
                     full_name,
-                    list(trait_method.params),
+                    [Param('self', decl.struct_name)] + list(trait_method.params),
                     trait_method.return_type,
                     list(trait_method.body),
                 )

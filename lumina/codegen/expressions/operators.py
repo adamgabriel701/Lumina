@@ -64,7 +64,31 @@ class OperatorsMixin:
             return None
 
         func = self.functions_table[real_name][0]
-        return self.builder.call(func, [left, right], name=f"op_{real_name}")
+        result = self.builder.call(func, [left, right], name=f"op_{real_name}")
+
+        # Se o operador retorna struct por ponteiro, o ponteiro aponta
+        # para a stack do callee — inválido após o retorno. Copia os
+        # campos para um slot novo na stack do caller.
+        if (isinstance(result.type, ir.PointerType)
+                and isinstance(result.type.pointee, ir.IdentifiedStructType)):
+            struct_ty = result.type.pointee
+            slot = self.builder.alloca(struct_ty, name=f"op_{real_name}_copy")
+            for i in range(len(struct_ty.elements)):
+                src = self.builder.gep(
+                    result,
+                    [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, i)],
+                    name=f"op_src_{i}",
+                )
+                dst = self.builder.gep(
+                    slot,
+                    [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, i)],
+                    name=f"op_dst_{i}",
+                )
+                field = self.builder.load(src, name=f"op_field_{i}")
+                self.builder.store(field, dst)
+            return slot
+
+        return result
 
     # ------------------------------------------------------------------
     # Binários

@@ -30,7 +30,24 @@ class VarDeclMixin:
             return
 
         # Caminho normal: aloca storage no stack e aponta ptr pra ele
-        storage = self.builder.alloca(struct_ty, name=name + "_storage")
+        # Aloca storage no HEAP (não stack). Structs locais podem ser
+        # retornadas de funções, e um ponteiro para a stack do callee
+        # é inválido após o retorno. Como não temos escape analysis
+        # completo, alocamos todas as structs no heap por segurança.
+        # O Boehm GC cuida da liberação.
+        try:
+            n_fields = len(struct_ty.elements)
+        except Exception:
+            n_fields = 4  # fallback conservador
+        size = 8 * n_fields if n_fields > 0 else 8
+        raw = self.builder.call(
+            self.malloc,
+            [ir.Constant(self.i64_ty, size)],
+            name=name + "_storage_raw",
+        )
+        storage = self.builder.bitcast(
+            raw, struct_ty.as_pointer(), name=name + "_storage"
+        )
         if zero_val is not None:
             try:
                 self.builder.store(zero_val, storage)

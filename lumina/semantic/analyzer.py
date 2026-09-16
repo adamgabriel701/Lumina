@@ -28,15 +28,18 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
     # @derive(Eq, Debug)
     # ------------------------------------------------------------------
     def _expand_derives(self, declarations):
-        """Expande @derive(Eq, Debug, ...) em métodos sintetizados
-        adicionados como ImplBlocks.
+        """Expande @derive(Eq, Debug, Default, Clone, Display) em
+        métodos sintetizados (ImplBlocks) e funções livres.
 
-        Estes ImplBlocks são injetados em `declarations` para que as
-        próximas fases (registro de funções, análise) os vejam.
+        - Eq      → `fn {Struct}___eq__(a, b) -> int`
+        - Debug   → `fn {Struct}___debug__(p) -> str`
+        - Display → alias de Debug (mesma assinatura)
+        - Clone   → `fn {Struct}_clone(self) -> {Struct}`
+        - Default → `fn new_{Struct}() -> {Struct}` (função livre)
         """
         from ..ast import ImplBlock
 
-        new_impls = []
+        new_decls = []
         for decl in declarations:
             attrs = getattr(decl, 'attrs', None)
             if not attrs:
@@ -45,21 +48,74 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
                 continue  # só struct
 
             struct_name = decl.name
-            methods = []
+            methods = []   # métodos → ImplBlock
+            free_fns = []  # funções livres → Function
 
+            # Coleta todos os derives do @derive(...)
+            derives = set()
             for attr_name, attr_args in attrs:
                 if attr_name != 'derive':
                     continue
                 for deriv in attr_args:
-                    if deriv == 'Eq':
-                        methods.append(self._gen_eq(struct_name, decl))
-                    elif deriv == 'Debug':
-                        methods.append(self._gen_debug(struct_name, decl))
+                    derives.add(deriv)
+
+            # Expande cada derive
+            if 'Eq' in derives:
+                methods.append(self._gen_eq(struct_name, decl))
+            if 'Debug' in derives or 'Display' in derives:
+                # Evita duplicar se ambos forem pedidos
+                methods.append(self._gen_debug(struct_name, decl))
+            if 'Clone' in derives:
+                methods.append(self._gen_clone(struct_name, decl))
+            if 'Default' in derives:
+                free_fns.append(self._gen_default(struct_name, decl))
 
             if methods:
-                new_impls.append(ImplBlock(struct_name, methods))
+                new_decls.append(ImplBlock(struct_name, methods))
+            new_decls.extend(free_fns)
 
-        declarations.extend(new_impls)
+        declarations.extend(new_decls)
+
+    def _gen_default(self, struct_name, struct_decl):
+        """Gera: fn new_{Struct}() -> {Struct} com todos os campos
+        zerados (0 / 0.0 / false / "" / null).
+
+        Uso: `let p = new_Ponto()`
+        """
+        from ..ast import (
+            Function, AssignStmt, MemberExpr, VariableExpr,
+            ReturnStmt, VarDecl, NumberExpr, StringExpr, BoolExpr,
+        )
+
+        result_var = 'result'
+        result_decl = VarDecl(result_var, struct_name, None, True)
+
+        body = [result_decl]
+        result_ref = VariableExpr(result_var, 0, 0)
+
+        for fname, ftype in struct_decl.fields.items():
+            lhs = MemberExpr(result_ref, fname)
+
+            # Valor zero por tipo
+            if ftype == "float":
+                rhs = NumberExpr("0.0", is_float=True)
+            elif ftype == "bool":
+                rhs = BoolExpr(False)
+            elif ftype == "str":
+                rhs = StringExpr("")
+            else:
+                # int, ptr, structs, enums — usa 0
+                rhs = NumberExpr("0", is_float=False)
+
+            body.append(AssignStmt(lhs, rhs))
+
+        body.append(ReturnStmt([VariableExpr(result_var, 0, 0)]))
+
+        # Mangled: `Struct + _ + clone` = `Struct_clone`.
+        # O `codegen_method_call` e o inferidor de VarDecl procuram
+        # por esse nome exato.
+        mangled_name = f"{struct_name}_clone"
+        return Function(mangled_name, [Param('self', struct_name)], struct_name, body)
 
     def _gen_eq(self, struct_name, struct_decl):
         """Gera: fn {Struct}___eq__(a: Struct, b: Struct) -> int
@@ -141,6 +197,73 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
             'str',
             [ReturnStmt([expr])],
         )
+
+    def _gen_clone(self, struct_name, struct_decl):
+        """Gera: fn {Struct}_clone(self) -> {Struct}
+
+        Uso: `let copia = p.clone()`
+        Nome mangled porque o `codegen_method_call` procura por
+        `Struct_clone`.
+        """
+        from ..ast import (
+            Function, Param, AssignStmt, MemberExpr, VariableExpr,
+            ReturnStmt, VarDecl,
+        )
+
+        result_var = 'result'
+        result_decl = VarDecl(result_var, struct_name, None, True)
+
+        body = [result_decl]
+        self_var = VariableExpr('self', 0, 0)
+        result_ref = VariableExpr(result_var, 0, 0)
+
+        # result.f1 = self.f1 ; result.f2 = self.f2 ; ...
+        for fname in struct_decl.fields.keys():
+            lhs = MemberExpr(result_ref, fname)
+            rhs = MemberExpr(self_var, fname)
+            body.append(AssignStmt(lhs, rhs))
+
+        body.append(ReturnStmt([VariableExpr(result_var, 0, 0)]))
+
+        # Mangled: `Struct + _ + clone` = `Struct_clone`.
+        mangled_name = f"{struct_name}_clone"
+        return Function(mangled_name, [Param('self', struct_name)], struct_name, body)
+
+    def _gen_default(self, struct_name, struct_decl):
+        """Gera: fn new_{Struct}() -> {Struct} com todos os campos
+        zerados (0 / 0.0 / false / "" / null).
+
+        Uso: `let p = new_Ponto()`
+        """
+        from ..ast import (
+            Function, AssignStmt, MemberExpr, VariableExpr,
+            ReturnStmt, VarDecl, NumberExpr, StringExpr, BoolExpr,
+        )
+
+        result_var = 'result'
+        result_decl = VarDecl(result_var, struct_name, None, True)
+
+        body = [result_decl]
+        result_ref = VariableExpr(result_var, 0, 0)
+
+        for fname, ftype in struct_decl.fields.items():
+            lhs = MemberExpr(result_ref, fname)
+
+            # Valor zero por tipo
+            if ftype == "float":
+                rhs = NumberExpr("0.0", is_float=True)
+            elif ftype == "bool":
+                rhs = BoolExpr(False)
+            elif ftype == "str":
+                rhs = StringExpr("")
+            else:
+                rhs = NumberExpr("0", is_float=False)
+
+            body.append(AssignStmt(lhs, rhs))
+
+        body.append(ReturnStmt([VariableExpr(result_var, 0, 0)]))
+
+        return Function(f"new_{struct_name}", [], struct_name, body)
 
     # ------------------------------------------------------------------
     # Trait defaults

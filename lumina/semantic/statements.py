@@ -158,7 +158,14 @@ class StatementAnalyzer:
                 elif isinstance(node.value, IndexExpr):
                     node.var_type = "int"
                 elif isinstance(node.value, CallExpr):
-                    func_name = getattr(node.value.callee, 'name', None) if hasattr(node.value, 'callee') else getattr(node.value, 'name', None)
+                    # NOVO: extrai nome da função corretamente para MemberExpr
+                    # (ex: `p.clone()` → func_name = 'clone').
+                    func_name = None
+                    _callee = getattr(node.value, 'callee', None)
+                    if isinstance(_callee, MemberExpr):
+                        func_name = _callee.member
+                    elif isinstance(_callee, VariableExpr):
+                        func_name = _callee.name
 
                     if node.value.is_method:
                         obj_node = node.value.args[0]

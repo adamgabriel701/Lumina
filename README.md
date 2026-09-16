@@ -6,12 +6,12 @@
 [![Status](https://img.shields.io/badge/Status-Alpha%20%2F%20Active-green.svg)](#)
 [![Language](https://img.shields.io/badge/Language-Lumina-6A0DAD.svg)](#)
 [![Features](https://img.shields.io/badge/features-28%2F28-success.svg)](#-status-de-implementação)
-[![Tests](https://img.shields.io/badge/tests-118%20passed%20%2B%201%20skip-brightgreen.svg)](#-testes-automatizados)
-[![Examples](https://img.shields.io/badge/examples-63%2F63%20%2B%201%20skip-success.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-153%20passed%20%2B%201%20skip-brightgreen.svg)](#-testes-automatizados)
+[![Examples](https://img.shields.io/badge/examples-66%2F66%20%2B%201%20skip-success.svg)](#)
 
 **Lumina** é uma linguagem de programação de sistemas de propósito geral, focada em alta performance, ergonomia moderna, concorrência e segurança de memória. Ela combina a sintaxe limpa e expressiva baseada em indentação (estilo Python/Nim) com o poder de baixo nível e otimização industrial do backend **LLVM**.
 
-A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums com multi-payload), Generics com **Monomorphization** (`<T>`), Traits com Métodos Padrão, Standard Library Bootstrapped, Pattern Matching (incluindo destructuring de structs), Canais de Concorrência (CSP), operadores modernos (`|>`, `defer`, `?.`, `?`, `as`, `:=`), interoperabilidade nativa com C/C++ (FFI), suporte a I/O Assíncrono (`epoll`/`O_NONBLOCK`), um REPL interativo, um Web Playground, um LSP com Autocomplete e "Go to Definition", compilação incremental, testes nativos com relatório de cobertura, e é **Cross-Platform** (compila para binários nativos x86_64/ARM, WebAssembly e Bare-Metal).
+A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums com multi-payload), Generics com **Monomorphization** (`<T>`), Traits com Métodos Padrão, Standard Library Bootstrapped, Pattern Matching (incluindo destructuring de structs), Canais de Concorrência (CSP), operadores modernos (`|>`, `defer`, `?.`, `?`, `as`, `:=`), interoperabilidade nativa com C/C++ (FFI), suporte a I/O Assíncrono (`epoll`/`O_NONBLOCK`), um REPL interativo, um Web Playground, um LSP completo (com autocomplete, hover, go-to-definition, rename e find-references), compilação incremental, testes nativos com relatório de cobertura, e é **Cross-Platform** (compila para binários nativos x86_64/ARM, WebAssembly e Bare-Metal).
 
 ---
 
@@ -19,8 +19,14 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
 
 * **Sintaxe Limpa & Ergonômica:** Escopo definido por indentação significativa. Sem chaves `{}` ou pontos e vírgula `;`.
 * **Standard Library Bootstrapped:** Módulos como `std/math`, `std/str`, `std/time`, `std/vector`, `std/map`, `std/set`, `std/deque`, `std/iter` e `std/async_fs` são escritos 100% na própria Lumina.
-* **Coleções Nativas:** `Vector` (array dinâmico), `Map` (hash map), `Set` (conjunto) e `Deque` (fila dupla) com API consistente de structs + métodos.
+* **Coleções Nativas:** `Vector` (array dinâmico), `Map` (hash map com rehash automático), `Set` (conjunto com rehash automático) e `Deque` (fila dupla com `grow()` automático) com API consistente de structs + métodos.
 * **Adaptadores Funcionais (`std/iter`):** `map`, `filter`, `count_if`, `sum`, `sum_by`, `product`, `min`, `max`, `all`, `any`, `find_index`, `copy`, `fill`, `for_each`, `reverse` — com suporte a lambdas.
+* **`@derive` Attributes:** `@derive(Eq, Debug, Default, Clone, Display)` gera automaticamente:
+  * `Eq`      → `fn __eq__(a, b) -> int` comparando campo a campo
+  * `Debug`   → `fn __debug__(p) -> str` formatando `Nome { f1: v1, f2: v2 }`
+  * `Display` → alias de `Debug`
+  * `Clone`   → `fn clone() -> Struct` copiando campos de `self`
+  * `Default` → `fn new_Struct() -> Struct` com todos os campos zerados
 * **Tipagem Estática com Inferência:** O compilador deduz os tipos automaticamente, incluindo retornos de métodos, generics, lambdas, operações binárias, `Option<T>` e `comptime`.
 * **Generics com Monomorphization:** Suporte a tipos genéricos `<T>` que geram cópias especializadas em tempo de compilação, garantindo zero overhead de runtime. Cobre funções e structs (`Box<int>`, `Box<float>`, ...).
 * **Tipos Algébricos (ADTs) & Pattern Matching:** `enum`s com **múltiplos payloads** (`Dois(int, int)`) e extração via `match` ou `switch`. O compilador checa a exaustividade dos casos.
@@ -98,6 +104,11 @@ Todas as 28 features testadas em `tests/features/uncertain_features.lm` estão f
 | 26 | `comptime` (constant folding) | ✅ |
 | 27 | `SliceExpr` dedicado | ✅ |
 | 28 | Auto-formatter preserva comentários | ✅ |
+| 29 | Operator Overloading (`__add__`, `__eq__`) | ✅ |
+| 30 | `@derive(Eq, Debug, Default, Clone, Display)` | ✅ |
+| 31 | `std/vector`, `std/map`, `std/set`, `std/deque` | ✅ |
+| 32 | `std/iter` (adaptadores funcionais) | ✅ |
+| 33 | LSP completo (hover, rename, references, outline) | ✅ |
 
 ---
 
@@ -119,11 +130,13 @@ Cobre:
 | `test_parser.py` | 35 | Declarações, expressões, slices, controle de fluxo, match |
 | `test_semantic.py` | 19 (1 skip) | Escopo, exaustividade, traits, inferência |
 | `test_types.py` | 24 | Validação de tipo em VarDecl/Assign/Return/conditions |
-| `test_fmt_comments.py` | 5 | Formatter preservando comentários + idempotência |
+| `test_codegen_bugs.py` | 20 | Regressão de bugs no codegen |
+| `test_semantic_bugs.py` | 15 | Regressão de bugs no semantic |
+| `test_fmt_comments.py` | 8 | Formatter preservando comentários + idempotência |
 | `cli/` | 3 | Integração ponta-a-ponta da CLI |
 | `features/` | 2 | Smoke tests dos exemplos + uncertain_features |
 
-**Total:** `118 passed, 1 skipped`.
+**Total:** `153 passed, 1 skipped`.
 
 ### 2. Script standalone (5 segundos)
 
@@ -147,10 +160,10 @@ Compila, executa, e valida cada linha esperada do `tests/features/uncertain_feat
 ./scripts/check_examples.sh
 ```
 
-Compila **todos** os 63 arquivos de `examples/`, respeitando a `tests/features/skip.txt`:
+Compila **todos** os 66 arquivos de `examples/`, respeitando a `tests/features/skip.txt`:
 
 ```
-📊 PASS: 63    ⏭️  SKIP: 1    ❌ FAIL: 0
+📊 PASS: 66    ⏭️  SKIP: 1    ❌ FAIL: 0
 ```
 
 O único skip é `util.lm` — módulo auxiliar que não tem `fn main()`, importado por outros exemplos.
@@ -511,13 +524,14 @@ import "std/map"
 
 fn main() -> int:
     mut m = new_map()
-    m.insert(10, 100)
-    m.insert(26, 200)
-    m.insert(42, 999)
+    # Cresce automaticamente (rehash) quando passa de 75% de carga
+    mut i = 0
+    while i < 100:
+        m.insert(i, i * 10)
+        i += 1
 
-    print("get(10):", m.get(10))
+    print("size:", m.size)
     print("get(42):", m.get(42))
-    print("contains(10):", m.contains(10))
     print("contains(99):", m.contains(99))
     return 0
 ```
@@ -545,13 +559,15 @@ import "std/deque"
 
 fn main() -> int:
     mut d = new_deque()
-    d.push_back(1)
-    d.push_back(2)
-    d.push_front(0)
+    # Cresce automaticamente quando atinge a capacidade
+    mut i = 0
+    while i < 100:
+        d.push_back(i)
+        i += 1
 
     print("size:", d.size)
-    print("pop_front:", d.pop_front())
-    print("pop_back:", d.pop_back())
+    print("get(0):", d.get(0))
+    print("get(99):", d.get(99))
     return 0
 ```
 
@@ -584,17 +600,21 @@ fn main() -> int:
 ### 11. Traits com Métodos Padrão
 ```lumina
 trait Greeter:
+    fn name() -> str
     fn greet():
-        print("Hello from Lumina")
+        let n = name()
+        print("Hello from", n)
 
 struct English:
     dummy: int
 
 impl Greeter for English:
-    # usa o default do trait
+    fn name() -> str:
+        return "Lumina"
 
 fn main() -> int:
     mut e: English
+    e.dummy = 0
     e.greet()
     return 0
 ```
@@ -634,7 +654,35 @@ fn main() -> int:
     return 0
 ```
 
-### 13. Generics com Monomorphization
+### 13. `@derive(Eq, Debug, Default, Clone)`
+```lumina
+@derive(Eq, Debug, Default, Clone)
+struct Ponto:
+    x: int
+    y: int
+
+fn main() -> int:
+    # Default → new_Ponto()
+    let p1 = new_Ponto()
+    print("p1.x =", p1.x)   # 0
+
+    # Clone → p.clone()
+    mut original: Ponto
+    original.x = 10
+    original.y = 20
+    let copia = original.clone()
+    print("copia.x =", copia.x)   # 10
+
+    # Eq → operador ==
+    print("p1 == copia?", p1 == copia)
+
+    # Debug → __debug__()
+    print(copia.__debug__())   # "Ponto { x: 10, y: 20 }"
+
+    return 0
+```
+
+### 14. Generics com Monomorphization
 ```lumina
 fn identidade<T>(x: T) -> T:
     return x
@@ -647,7 +695,7 @@ fn main() -> int:
     return 0
 ```
 
-### 14. Navegação Segura e Propagação de Erros
+### 15. Navegação Segura e Propagação de Erros
 ```lumina
 struct Node:
     value: int
@@ -673,7 +721,7 @@ fn main() -> int:
     return 0
 ```
 
-### 15. Canais de Concorrência (CSP)
+### 16. Canais de Concorrência (CSP)
 ```lumina
 import "std/channel"
 
@@ -685,14 +733,14 @@ fn main() -> int:
     return 0
 ```
 
-### 16. Bitwise e Shifts
+### 17. Bitwise e Shifts
 ```lumina
 fn main() -> int:
-    let x = 0b1100 & 0b1010     # and
-    let y = 0b1100 | 0b1010     # or
-    let z = 0b1100 ^ 0b1010     # xor
-    let w = 1 << 4              # shl
-    let v = 256 >> 2            # shr
+    let x = 12 & 10     # and   = 8
+    let y = 12 | 10     # or    = 14
+    let z = 12 ^ 10     # xor   = 6
+    let w = 1 << 4      # shl   = 16
+    let v = 256 >> 2    # shr   = 64
     print(x, y, z, w, v)
     return 0
 ```
@@ -711,9 +759,9 @@ fn main() -> int:
 
 ### Coleções
 * `std/vector`: Array dinâmico que cresce automaticamente (`push`, `pop`, `get`, `set`, `clear`, `is_empty`, `sum`, `reserve`).
-* `std/map`: Hash map de `int → int` com colisão linear (`insert`, `get`, `contains`, `remove`).
-* `std/set`: Conjunto de `int` usando hash table (`add`, `contains`, `remove`).
-* `std/deque`: Fila dupla com buffer circular (`push_back`, `push_front`, `pop_front`, `pop_back`, `get`, `is_empty`).
+* `std/map`: Hash map de `int → int` com **rehash automático** em load factor ≥ 0.75 (`insert`, `get`, `contains`, `remove`).
+* `std/set`: Conjunto de `int` com **rehash automático** em load factor ≥ 0.75 (`add`, `contains`, `remove`).
+* `std/deque`: Fila dupla com buffer circular e **`grow()` automático** (`push_back`, `push_front`, `pop_front`, `pop_back`, `get`, `is_empty`).
 * `std/list`: Lista Ligada (Linked List) dinâmica usando Structs e Ponteiros.
 * `std/iter`: Adaptadores funcionais (`map`, `filter`, `count_if`, `sum`, `sum_by`, `product`, `min`, `max`, `all`, `any`, `find_index`, `copy`, `fill`, `for_each`, `reverse`).
 
@@ -739,8 +787,8 @@ Lumina/
 ├── lumina/                     # Núcleo do Compilador
 │   ├── ast/                    #   Árvore Sintática (Expr, Stmt, Visitor)
 │   ├── lexer/                  #   Tokenizer (INDENT/DEDENT, f-strings, COMMENT)
-│   ├── parser/                 #   Parser recursivo descendente
-│   ├── semantic/               #   Análise semântica + validação de tipo
+│   ├── parser/                 #   Parser recursivo descendente (com @attrs)
+│   ├── semantic/               #   Análise semântica + validação + @derive
 │   ├── codegen/                #   LLVM IR (exprs, stmts, types, match)
 │   ├── common/                 #   Utilitários compartilhados (cores ANSI)
 │   ├── builtins.py             #   Fonte única de verdade dos builtins
@@ -754,9 +802,12 @@ Lumina/
 │   ├── utils.py                #   Cores, cache hash, resolução de imports
 │   └── __main__.py             #   Permite `python -m lumina_cli`
 ├── lumina-vscode/              # Extensão VS Code (Syntax + LSP Client + Server)
+│   ├── lumina_lsp.py           #   LSP: hover, rename, references, documentSymbol
+│   ├── extension.js            #   Client LSP
+│   └── syntaxes/               #   TextMate grammar
 ├── std/                        # Standard Library (.lm)
 ├── benchmarks/                 # Benchmarks (Lumina vs C, Rust, Go, Node, Python)
-├── examples/                   # 63 exemplos + sidecars [link]
+├── examples/                   # 66 exemplos + sidecars [link]
 ├── scripts/
 │   ├── check_examples.sh       #   Compila todos os exemplos (PASS/SKIP/FAIL)
 │   └── run_benchmarks.sh       #   Roda a suíte de benchmarks
@@ -765,7 +816,9 @@ Lumina/
 │   ├── test_parser.py          #   35 testes de parsing
 │   ├── test_semantic.py        #   19 testes de análise semântica
 │   ├── test_types.py           #   24 testes de validação de tipo
-│   ├── test_fmt_comments.py    #   5 testes de formatter com comentários
+│   ├── test_codegen_bugs.py    #   20 testes de regressão (codegen)
+│   ├── test_semantic_bugs.py   #   15 testes de regressão (semantic)
+│   ├── test_fmt_comments.py    #   8 testes de formatter com comentários
 │   ├── cli/                    #   Testes de integração da CLI
 │   ├── features/               #   Smoke tests + uncertain_features.lm + skip.txt
 │   └── fixtures/               #   Arquivos .lm auxiliares
@@ -778,13 +831,33 @@ Lumina/
 
 ## 🎨 Extensão para o VS Code e Sublime Text
 
-A Lumina oferece suporte a realce de sintaxe, regras de indentação, **Autocomplete de funções do usuário**, **Diagnóstico de Erros em tempo real** e **Go to Definition**:
+A extensão VS Code oferece:
 
-1. Gere o pacote `.vsix` executando `npx vsce package` na pasta `lumina-vscode`.
-2. No VS Code, abra o painel de Extensões (`Ctrl+Shift+X`).
-3. Clique no menu de três pontos (`...`) no canto superior direito > **Instalar de VSIX...**.
-4. Selecione o arquivo `.vsix` gerado e reinicie a janela.
-5. Para Sublime Text, copie o arquivo `syntaxes/lumina.tmLanguage.json` para a pasta `Packages/Lumina/` e instale o pacote `LSP` da Package Control.
+- **Realce de sintaxe** (TextMate grammar em `syntaxes/lumina.tmLanguage.json`)
+- **Autocomplete** de keywords, funções, variáveis, structs e enums
+- **Diagnóstico de erros em tempo real** (parser + semantic)
+- **Go to Definition** (Ctrl+Click / F12)
+- **Hover** — mostra tipo/assinatura do símbolo sob o cursor
+- **Find References** (Shift+F12)
+- **Rename Symbol** (F2) — renomeia em todas as ocorrências do arquivo
+- **Document Symbols** (Ctrl+Shift+O) — outline de funções, structs, enums, traits e impl blocks
+
+### Instalação
+
+1. Gere o pacote `.vsix`:
+   ```bash
+   cd lumina-vscode
+   npx vsce package
+   ```
+2. No VS Code, abra `Ctrl+Shift+P` > **Extensions: Install from VSIX...**
+3. Selecione o arquivo `lumina-0.2.0.vsix` gerado
+4. Recarregue a janela (`Ctrl+Shift+P` > **Developer: Reload Window**)
+
+### Sublime Text
+
+1. Copie `syntaxes/lumina.tmLanguage.json` para `Packages/Lumina/`
+2. Instale o pacote `LSP` da Package Control
+3. Configure o `LSP` para apontar para `lumina-vscode/lumina_lsp.py`
 
 ---
 
@@ -795,10 +868,12 @@ A Lumina oferece suporte a realce de sintaxe, regras de indentação, **Autocomp
 * **Pattern matching em structs via `match`:** suportado em `MatchExpr` (expressões), ainda não em `MatchStmt` (statements com bloco).
 * **Validação de tipo por campo em struct literals:** `P { x: "texto", y: 2 }` com `x: int` não é detectado (só a existência dos campos é checada).
 * **`arr[a..]` sem `end`:** em strings, usa `strlen`; em arrays, assume length 0 (limitação do codegen atual — não há `len()` para `ptr`).
-* **`comptime`:** suporta apenas constant folding de literais e operações aritméticas (`+`, `-`, `*`, `/`, `%`, unário `-`). Chamadas de função em compile-time ainda não são suportadas.
-* **`std/map` e `std/set`:** não redimensionam (cap fixo). Inserir mais que `MAP_INITIAL_CAP` (16) elementos pode falhar. Crescimento/rehash fica para uma versão futura.
-* **`std/deque`:** capacidade fixa (`DEQUE_INITIAL_CAP = 16`). `push` além disso corrompe memória. `grow()` fica para uma versão futura.
+* **`comptime`:** suporta constant folding de literais e operações aritméticas (`+`, `-`, `*`, `/`, `%`, comparações e unário `-`). Chamadas de função em compile-time ainda não são suportadas.
+* **`std/map` e `std/set`:** crescem automaticamente via rehash quando o load factor ≥ 0.75. Não libera memória de tombstones em `remove` (retrocompatível com a estratégia atual).
 * **`std/iter` callbacks:** como o codegen só suporta chamadas indiretas com assinatura `i64 -> i64`, todas as funções de callback recebem e retornam `int`. Para predicados, use 1 = true / 0 = false.
+* **LSP `references`:** usa varredura léxica — não distingue escopos nem filtra por tipo. Suficiente para `rename` e navegação em código simples.
+* **LSP `rename`:** afeta só o arquivo atual (não propaga para imports em outros arquivos).
+* **LSP `documentSymbol`:** só retorna símbolos de topo (funções, structs, enums, traits) e métodos de `impl`. Variáveis locais não aparecem no outline.
 
 ---
 
@@ -823,15 +898,16 @@ A Lumina oferece suporte a realce de sintaxe, regras de indentação, **Autocomp
 - [x] Formatter preservando comentários
 - [x] `std/iter` (adaptadores funcionais)
 - [x] `std/vector` (array dinâmico)
-- [x] `std/map` (hash map)
-- [x] `std/set` (conjunto)
-- [x] `std/deque` (fila dupla)
-- [ ] LSP completo (hover, rename, find references)
+- [x] `std/map` (hash map com rehash automático)
+- [x] `std/set` (conjunto com rehash automático)
+- [x] `std/deque` (fila dupla com grow automático)
+- [x] `@derive(Eq, Debug)` para structs
+- [x] `@derive(Default, Clone, Display)`
+- [x] LSP (autocomplete, go-to-def, hover, references, rename, documentSymbol)
 - [ ] Self-hosting (bootstrapping)
 - [ ] `--target=aarch64-linux` (cross-compile)
-- [ ] Macros ou `@derive(Eq, Debug)`
-- [ ] `std/map` com rehash automático
-- [ ] `std/deque` com `grow()` automático
+- [ ] Macros (quasiquote / `comptime` com AST)
+- [ ] Semantic tokens no LSP
 
 ---
 

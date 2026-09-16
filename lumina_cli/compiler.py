@@ -234,6 +234,25 @@ def _fmt_params(params):
 
 
 def format_node(node, indent_level=0):
+    """Formata um nó, emitindo comentários leading se houver."""
+    indent = "    " * indent_level
+
+    # Comentários leading (anexados pelo parser)
+    prefix = ""
+    leading = getattr(node, 'leading_comments', None) or []
+    for c in leading:
+        prefix += _format_comment(c, indent)
+
+    return prefix + _format_node_impl(node, indent_level)
+
+
+def _format_comment(text, indent):
+    """Reindenta um comentário (possivelmente multi-linha)."""
+    lines = text.split('\n')
+    return ''.join(f"{indent}{line.strip()}\n" for line in lines)
+
+
+def _format_node_impl(node, indent_level=0):
     indent = "    " * indent_level
 
     if isinstance(node, Function):

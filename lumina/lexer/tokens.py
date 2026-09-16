@@ -103,6 +103,7 @@ class TokenType(Enum):
     DOLLAR = auto()
 
     # Controle de Escopo
+    COMMENT = auto()
     NEWLINE = auto()
     INDENT = auto()
     DEDENT = auto()

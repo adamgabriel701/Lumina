@@ -6,7 +6,7 @@
 [![Status](https://img.shields.io/badge/Status-Alpha%20%2F%20Active-green.svg)](#)
 [![Language](https://img.shields.io/badge/Language-Lumina-6A0DAD.svg)](#)
 [![Features](https://img.shields.io/badge/features-24%2F24-success.svg)](#-status-de-implementação)
-[![Tests](https://img.shields.io/badge/tests-8%20passed%20%2B%2028%2F28-brightgreen.svg)](#-testes-automatizados)
+[![Tests](https://img.shields.io/badge/tests-118%20passed%20%2B%201%20skip-brightgreen.svg)](#-testes-automatizados)
 [![Examples](https://img.shields.io/badge/examples-61%2F61%20%2B%201%20skip-success.svg)](#)
 
 **Lumina** é uma linguagem de programação de sistemas de propósito geral, focada em alta performance, ergonomia moderna, concorrência e segurança de memória. Ela combina a sintaxe limpa e expressiva baseada em indentação (estilo Python/Nim) com o poder de baixo nível e otimização industrial do backend **LLVM**.
@@ -19,9 +19,11 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
 
 * **Sintaxe Limpa & Ergonômica:** Escopo definido por indentação significativa. Sem chaves `{}` ou pontos e vírgula `;`.
 * **Standard Library Bootstrapped:** Módulos como `std/math`, `std/str`, `std/time`, `std/list`, `std/channel` e `std/async_fs` são escritos 100% na própria Lumina.
-* **Tipagem Estática com Inferência:** O compilador deduz os tipos automaticamente, incluindo retornos de métodos, generics e Lambdas.
+* **Tipagem Estática com Inferência:** O compilador deduz os tipos automaticamente, incluindo retornos de métodos, generics, lambdas, operações binárias, `Option<T>` e `comptime`.
 * **Generics com Monomorphization:** Suporte a tipos genéricos `<T>` que geram cópias especializadas em tempo de compilação, garantindo zero overhead de runtime. Cobre funções e structs (`Box<int>`, `Box<float>`, ...).
 * **Tipos Algébricos (ADTs) & Pattern Matching:** `enum`s com **múltiplos payloads** (`Dois(int, int)`) e extração via `match` ou `switch`. O compilador checa a exaustividade dos casos.
+* **`Option<T>` e `NoneExpr`:** `none` é um literal dedicado que constrói `Option::None`. `Option` (sem args) é compatível com qualquer `Option<X>` via `is_assignable`.
+* **`comptime` real (constant folding):** `comptime(2 + 3 * 4)` é avaliado em compile-time e vira um literal no IR.
 * **Pattern Matching em Structs:** Destructuring direto no `match` para extrair campos de structs literais.
 * **Closures (Lambdas):** Funções anônimas inline (`fn(x: int) -> int: x * 2`) com suporte a **function pointers**.
 * **Ergonomia Moderna:**
@@ -32,11 +34,11 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
   * **Navegação Segura (`?.`):** Evita Segmentation Faults ao acessar structs nulas (null check nativo no LLVM IR).
   * **Propagação de Erros (`?`):** Retorna erros automaticamente em funções que retornam `Result`.
   * **Casting Explícito (`as`):** `10 as float`, `ptr as int`.
-  * **String / Array Slicing:** Fatiamento nativo: `texto[1..5]`, `arr[1..4]`.
+  * **String / Array Slicing:** Fatiamento nativo: `texto[1..5]`, `arr[1..4]`, `arr[..3]`, `arr[2..]`, `arr[..]`.
   * **Switch Statements:** Sintaxe limpa de salto (jump table nativa do LLVM) para inteiros e enums.
   * **Defer & Assert:** Garantia de limpeza de escopo e testes nativos.
-  * **Auto-Formatter:** `lumina fmt` formata o código automaticamente (AST-based).
-* **Mensagens Inteligentes:** Erros léxicos e semânticos sugerem correções ("Did you mean?") com destaque colorido da linha.
+  * **Auto-Formatter:** `lumina fmt` formata o código automaticamente (AST-based), **preservando comentários** (linha e bloco). Suporta `--check` para pre-commit.
+* **Mensagens Inteligentes:** Erros léxicos e semânticos sugerem correções ("Did you mean?") com destaque colorido da linha. Suporta saída JSON (`--error-format=json`) para integração com ferramentas.
 * **Concorrência e I/O Assíncrono:**
   * **Canais (CSP):** Comunicação segura entre threads estilo Go usando `pthread_mutex` e `pthread_cond`.
   * **Green Threads:** Suporte a Corrotinas via troca de contexto de CPU (`ucontext`).
@@ -46,10 +48,12 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
   * **Arena Allocator:** Modo Bare-Metal (`--no-gc`) com alocador determinístico.
 * **Otimizações de Compilador:**
   * Tail Call Optimization (TCO), Constant Folding, Comptime Evaluation.
+  * **Níveis de otimização:** `-O0` (debug), `-O2` (padrão), `-O3` (`--release`).
   * **Forward Declarations:** Funções podem ser chamadas antes de serem definidas no arquivo.
-  * **Build Incremental:** A CLI detecta se o LLVM IR não mudou e pula a linkagem. O hash inclui os fontes do compilador — mudanças em `.py` também invalidam o cache.
+  * **Build Incremental:** A CLI detecta se o LLVM IR não mudou e pula a linkagem. O hash inclui os fontes do compilador — mudanças em `.py` também invalidam o cache. O hash de link inclui a flag de otimização.
   * **Debug Info (DWARF):** Gera metadados de depuração (`--debug`) permitindo inspectar código `.lm` no GDB/LLDB.
-* **Ecossistema Integrado:** CLI via `pip install`, REPL, Web Playground (JIT), Package Manager (`lumina.toml`), Auto-Gerador de Bindings C, Test Runner nativo (`lumina test`) com relatório de cobertura via `llvm-cov`.
+* **Configuração de Link (`[link]`):** Linka bibliotecas C/C++ (`libs`), compila objetos auxiliares (`extra_objects`), força targets (`target = "wasm"`) e passa flags extras ao linker (`extra_flags`), via `lumina.toml` ou sidecar `.toml` ao lado do `.lm`.
+* **Ecossistema Integrado:** CLI via `pip install`, REPL, Web Playground (JIT), Package Manager (`lumina.toml`), Auto-Gerador de Bindings C, Test Runner nativo (`lumina test`) com relatório de cobertura via `llvm-cov`, `lumina check` (só lexer+parser+semantic) e `lumina doc --format=html|md|json`.
 * **Cross-Platform:** Compila para binários nativos, WebAssembly (`.wasm` com exports diretos para JS) e Bare-Metal.
 
 ---
@@ -62,7 +66,7 @@ Todas as 24 features testadas em `tests/features/uncertain_features.lm` estão f
 |---|---|---|
 | 1 | String Slicing (`s[1..4]`) | ✅ |
 | 2 | Array Indexing (`arr[i]`) | ✅ |
-| 2b | Array Slicing real (`arr[a..b]`) | ✅ |
+| 2b | Array Slicing real (`arr[a..b]`, `arr[..b]`, `arr[a..]`, `arr[..]`) | ✅ |
 | 3 | Operador Pipe (`\|>`) | ✅ |
 | 4 | Pipe encadeado | ✅ |
 | 5 | Safe Navigation (`?.`) | ✅ |
@@ -85,12 +89,16 @@ Todas as 24 features testadas em `tests/features/uncertain_features.lm` estão f
 | 22 | Lambda com bloco | ✅ |
 | 23 | Trait com método default | ✅ |
 | 24 | Match em string | ✅ |
+| **25** | **`Option<T>` + `NoneExpr`** | ✅ |
+| **26** | **`comptime` (constant folding)** | ✅ |
+| **27** | **`SliceExpr` dedicado** | ✅ |
+| **28** | **Auto-formatter preserva comentários** | ✅ |
 
 ---
 
 ## 🧪 Testes Automatizados
 
-A suíte é dividida em três partes:
+A suíte é dividida em quatro partes:
 
 ### 1. Pytest (unitários + integração)
 
@@ -99,9 +107,18 @@ pytest tests/ -v
 ```
 
 Cobre:
-- `tests/test_types.py` — 8 testes de validação de tipo (VarDecl, Assign, Return, conditions)
-- `tests/cli/` — integração ponta-a-ponta (`new`, `build`, `fmt`, `errors`)
-- `tests/features/` — smoke tests de todos os exemplos + language features
+
+| Arquivo | Testes | Cobre |
+|---|---|---|
+| `test_lexer.py` | 30 | Tokens, strings, indentação, comentários, block comments |
+| `test_parser.py` | 35 | Declarações, expressões, slices, controle de fluxo, match |
+| `test_semantic.py` | 19 (1 skip) | Escopo, exaustividade, traits, inferência |
+| `test_types.py` | 24 | Validação de tipo em VarDecl/Assign/Return/conditions |
+| `test_fmt_comments.py` | 5 | Formatter preservando comentários + idempotência |
+| `cli/` | 3 | Integração ponta-a-ponta da CLI |
+| `features/` | 2 | Smoke tests dos exemplos + uncertain_features |
+
+**Total:** `118 passed, 1 skipped`.
 
 ### 2. Script standalone (5 segundos)
 
@@ -109,7 +126,7 @@ Cobre:
 python3 run_tests.py
 ```
 
-Compila, executa, e valida cada linha esperada do `tests/features/uncertain_features.lm`. Retorna exit code 0/1 — ideal para pre-commit hooks ou CI rápido.
+Compila, executa, e valida cada linha esperada do `tests/features/uncertain_features.lm`.
 
 ```
 ==============================================================
@@ -131,7 +148,16 @@ Compila **todos** os 61 arquivos de `examples/`, respeitando a `tests/features/s
 📊 PASS: 61    ⏭️  SKIP: 1    ❌ FAIL: 0
 ```
 
-O único skip é `util.lm` — um módulo auxiliar que não tem `fn main()`, importado por outros exemplos.
+O único skip é `util.lm` — módulo auxiliar que não tem `fn main()`, importado por outros exemplos.
+
+### 4. `lumina check` (rápido, sem codegen)
+
+```bash
+lumina check examples/main.lm         # texto colorido
+lumina check examples/main.lm --error-format=json | jq .
+```
+
+Roda só lexer + parser + semantic. Ideal para pre-commit manual (~100ms).
 
 ---
 
@@ -154,6 +180,13 @@ O único skip é `util.lm` — um módulo auxiliar que não tem `fn main()`, imp
 
 ### Web Server (`wrk -t4 -c100`)
 * **Lumina-Serve (epoll):** ~5.868 Requests/sec.
+
+### Rodando os benchmarks
+
+```bash
+./scripts/run_benchmarks.sh              # Lumina em -O2 (padrão)
+./scripts/run_benchmarks.sh --release    # Lumina em -O3
+```
 
 ---
 
@@ -178,9 +211,11 @@ Agora o comando `lumina` está disponível globalmente no seu terminal!
 lumina new meu_projeto          # Cria a estrutura inicial (com lumina.toml)
 lumina install                  # Baixa dependências do GitHub via lumina.toml
 lumina bind header.h nome       # Gera bindings FFI a partir de um arquivo C
-lumina fmt arquivo.lm           # Formata o código automaticamente
+lumina fmt arquivo.lm           # Formata o código (preserva comentários)
+lumina fmt arquivo.lm --check   # Verifica formatação sem escrever (pre-commit)
 lumina clean                    # Limpa o cache e binários antigos
 lumina run arquivo.lm           # Compila e executa o binário nativo
+lumina check arquivo.lm         # Só lexer+parser+semantic (rápido)
 lumina test arquivo.lm          # Compila e executa a suíte de testes nativa
 lumina repl                     # Inicia o console interativo (REPL JIT)
 lumina jit arquivo.lm           # Executa instantaneamente na memória RAM
@@ -189,7 +224,27 @@ lumina build app.lm --release   # Compila com -O3 (release)
 lumina build app.lm --debug     # Compila com -O0 + DWARF (GDB/LLDB)
 lumina build app.lm --wasm      # Compila para WebAssembly (.wasm)
 lumina build app.lm --no-gc     # Compila para Bare-Metal (sem Garbage Collector)
+lumina doc                      # Gera docs em HTML (docs/index.html)
+lumina doc --format=md          # Gera docs em Markdown (docs/index.md)
+lumina doc --format=json        # Gera docs em JSON (docs/index.json)
 lumina playground               # Inicia o Web Playground JIT (porta 8080)
+```
+
+### Saída estruturada (JSON)
+
+Qualquer comando que reporta erro aceita `--error-format=json`. Progresso vai para `stderr`, JSON vai para `stdout` — perfeito para pipes:
+
+```bash
+lumina check app.lm --error-format=json | jq .
+# {
+#   "type": "error",
+#   "message": "Tipo inválido em declaração de 'x': esperado 'int', obteve 'str'.",
+#   "filename": "app.lm",
+#   "line": 2,
+#   "col": 9,
+#   "end_col": null,
+#   "notes": []
+# }
 ```
 
 ---
@@ -230,8 +285,8 @@ Isso permite que cada exemplo tenha sua própria configuração de link.
 |---|---|---|
 | `libs` | `List[str]` | Bibliotecas para linkar (`-l<nome>`). O linker procura em `/usr/lib`, `/usr/local/lib`, `LD_LIBRARY_PATH`, etc. |
 | `extra_objects` | `List[str]` | Arquivos `.c`, `.cpp`, `.cc`, `.cxx` que serão **compilados** (por `clang`/`clang++`) e linkados. Os `.o` resultantes são gerados ao lado do fonte. |
-| `target` | `str` | Força um target. Valores aceitos: `"wasm"`. Outros targets podem ser adicionados no futuro. |
-| `extra_flags` | `List[str]` | Flags extras que são passadas **diretamente** para o `clang` na fase de linkagem. Útil para `-L`, `-Wl,...`, defines, etc. |
+| `target` | `str` | Força um target. Valores aceitos: `"wasm"`. |
+| `extra_flags` | `List[str]` | Flags extras passadas **diretamente** para o `clang` na linkagem. Útil para `-L`, `-Wl,...`, defines, etc. |
 
 ### Exemplos práticos
 
@@ -292,14 +347,6 @@ sudo tar xzf /tmp/wasi-sdk.tar.gz -C /opt/wasi-sdk --strip-components=1
 
 O `cmd_build` usa `/opt/wasi-sdk/bin/clang` automaticamente quando disponível.
 
-**Biblioteca matemática + flags extras:**
-
-```toml
-[link]
-libs = ["m", "pthread"]
-extra_flags = ["-L/opt/custom/lib", "-Wl,-rpath,/opt/custom/lib"]
-```
-
 ### Ordem de montagem do comando
 
 Para builds nativos, o `cmd_build` monta o comando assim:
@@ -316,16 +363,6 @@ Onde `<opt_flag>` é:
 - `-O0` se `--debug`
 - `-O3` se `--release`
 - `-O2` no padrão
-
-### Notas
-
-- **`GC_malloc` → `malloc`:** no target WASM, o `cmd_build` substitui
-  automaticamente `GC_malloc` por `malloc`, já que o Boehm GC não está
-  disponível em WASM.
-- **`export fn`:** funções marcadas com `export fn nome` são detectadas
-  via regex no fonte e exportadas para o JS (`-Wl,--export=nome`).
-- **Cache incremental:** o hash de link inclui a flag de otimização. Trocar
-  `--release` ↔ padrão ↔ `--debug` força relinkagem.
 
 ---
 
@@ -373,12 +410,12 @@ fn avaliar_dia(dia: int) -> str:
 fn main() -> int:
     x := 10
     y := 20
-    
+
     if x + y == 30:
         let temp = 100
         print("Dentro do if, temp =", temp)
     # A variável 'temp' não existe aqui fora!
-    
+
     let dia = avaliar_dia(2)
     print("Hoje é:", dia)
     return 0
@@ -398,7 +435,55 @@ fn main() -> int:
     return 0
 ```
 
-### 3. Traits com Métodos Padrão
+### 3. `Option<T>` e `none`
+```lumina
+fn buscar(id: int) -> Option:
+    if id == 42:
+        return Some(100)
+    return none
+
+fn main() -> int:
+    let x: Option = none
+    match x:
+        case Some(v): print("Some:", v)
+        case None:    print("None")
+
+    let y = buscar(42)
+    match y:
+        case Some(v): print("Achou:", v)
+        case None:    print("Não achou")
+    return 0
+```
+
+### 4. `comptime` (constant folding)
+```lumina
+fn main() -> int:
+    let x = comptime(2 + 3 * 4)      # vira literal 14 no IR
+    let y = comptime(10 % 3)          # vira literal 1
+    let z = comptime(2.5 * 4)         # vira literal 10.0
+
+    print("x =", x)
+    print("y =", y)
+    print("z =", z)
+    return 0
+```
+
+### 5. Slicing (novo nó `SliceExpr`)
+```lumina
+fn main() -> int:
+    let s = "abcdef"
+    print(s[1..4])    # bcd
+    print(s[..3])     # abc
+    print(s[2..])     # cdef
+    print(s[..])      # abcdef
+
+    let arr = [10, 20, 30, 40, 50]
+    let sub = arr[1..3]   # [20, 30]
+    print(sub[0], sub[1])
+    return 0
+```
+
+### 6. Traits com Métodos Padrão
 ```lumina
 trait Greeter:
     fn greet():
@@ -416,7 +501,7 @@ fn main() -> int:
     return 0
 ```
 
-### 4. Generics com Monomorphization
+### 7. Generics com Monomorphization
 ```lumina
 fn identidade<T>(x: T) -> T:
     return x
@@ -429,7 +514,7 @@ fn main() -> int:
     return 0
 ```
 
-### 5. Navegação Segura e Propagação de Erros
+### 8. Navegação Segura e Propagação de Erros
 ```lumina
 struct Node:
     value: int
@@ -455,7 +540,7 @@ fn main() -> int:
     return 0
 ```
 
-### 6. Canais de Concorrência (CSP)
+### 9. Canais de Concorrência (CSP)
 ```lumina
 import "std/channel"
 
@@ -472,7 +557,7 @@ fn main() -> int:
 ## 📦 Standard Library (`std/`)
 
 * `std/math`: Funções matemáticas via FFI (`potencia`, `raiz_quadrada`, `valor_absoluto`).
-* `std/str`: Manipulação de strings nativa (`to_upper`, `to_lower`, `trim`, `split`, `join`, `find`, `substr`).
+* `std/str`: Manipulação de strings (`to_upper`, `to_lower`, `trim`, `split`, `join`, `find`, `substr`).
 * `std/list`: Lista Ligada (Linked List) dinâmica usando Structs e Ponteiros.
 * `std/channel`: Canais de concorrência seguros entre threads (CSP).
 * `std/async_fs`: I/O de arquivos não-bloqueante usando `O_NONBLOCK`.
@@ -488,6 +573,7 @@ fn main() -> int:
 * `std/json`: Parser de JSON nativo escrito em Lumina.
 * `std/sqlite`: Bindings para banco de dados SQLite.
 * `std/raylib`: Bindings para engine gráfica Raylib.
+* `std/prelude`: Tipos `Option` e `Result` disponíveis em todos os arquivos.
 
 ---
 
@@ -497,7 +583,7 @@ fn main() -> int:
 Lumina/
 ├── lumina/                     # Núcleo do Compilador
 │   ├── ast/                    #   Árvore Sintática (Expr, Stmt, Visitor)
-│   ├── lexer/                  #   Tokenizer (INDENT/DEDENT, f-strings)
+│   ├── lexer/                  #   Tokenizer (INDENT/DEDENT, f-strings, COMMENT)
 │   ├── parser/                 #   Parser recursivo descendente
 │   ├── semantic/               #   Análise semântica + validação de tipo
 │   ├── codegen/                #   LLVM IR (exprs, stmts, types, match)
@@ -508,7 +594,7 @@ Lumina/
 ├── lumina_cli/                 # CLI modular, Build System, REPL, Test Runner
 │   ├── main.py                 #   Ponto de entrada + dispatch de comandos
 │   ├── commands.py             #   Lógica dos comandos + suporte a [link]
-│   ├── compiler.py             #   parse_module, compile_lumina, run_jit, format_node
+│   ├── compiler.py             #   parse_module, compile_lumina, check_lumina, format_node
 │   ├── playground.py           #   Web Playground (JIT HTTP Server)
 │   ├── utils.py                #   Cores, cache hash, resolução de imports
 │   └── __main__.py             #   Permite `python -m lumina_cli`
@@ -520,9 +606,13 @@ Lumina/
 │   ├── check_examples.sh       #   Compila todos os exemplos (PASS/SKIP/FAIL)
 │   └── run_benchmarks.sh       #   Roda a suíte de benchmarks
 ├── tests/
-│   ├── test_types.py           #   8 testes de validação de tipo
+│   ├── test_lexer.py           #   30 testes de lexing
+│   ├── test_parser.py          #   35 testes de parsing
+│   ├── test_semantic.py        #   19 testes de análise semântica
+│   ├── test_types.py           #   24 testes de validação de tipo
+│   ├── test_fmt_comments.py    #   5 testes de formatter com comentários
 │   ├── cli/                    #   Testes de integração da CLI
-│   ├── features/               #   Smoke tests + uncertain_features.lm
+│   ├── features/               #   Smoke tests + uncertain_features.lm + skip.txt
 │   └── fixtures/               #   Arquivos .lm auxiliares
 ├── run_tests.py                # Suíte standalone (28 validações, ~5s)
 ├── pyproject.toml              # Configuração de build e distribuição PyPI
@@ -545,11 +635,12 @@ A Lumina oferece suporte a realce de sintaxe, regras de indentação, **Autocomp
 
 ## 📝 Notas e Limitações Conhecidas
 
-* **Auto-formatter:** funciona sobre a AST, então **comentários são descartados** ao reformatar. Planejado para uma versão futura.
 * **Escape analysis:** os dados de escape são coletados no semantic (`analyzer.escapes`), mas a alocação automática Stack↔Heap ainda não foi conectada ao codegen — hoje tudo passa pelo Boehm GC quando o GC está ativo.
 * **`dois as int`:** o operador `as` só faz cast entre tipos primitivos e ponteiros; cast entre structs requer método explícito.
 * **Pattern matching em structs via `match`:** suportado em `MatchExpr` (expressões), ainda não em `MatchStmt` (statements com bloco).
-* **`comptime`:** reconhecido pelo parser e produzido na AST, mas ainda é no-op no codegen (não avalia em compile-time de fato).
+* **Validação de tipo por campo em struct literals:** `P { x: "texto", y: 2 }` com `x: int` não é detectado (só a existência dos campos é checada).
+* **`arr[a..]` sem `end`:** em strings, usa `strlen`; em arrays, assume length 0 (limitação do codegen atual — não há `len()` para `ptr`).
+* **`comptime`:** suporta apenas constant folding de literais e operações aritméticas (`+`, `-`, `*`, `/`, `%`, unário `-`). Chamadas de função em compile-time ainda não são suportadas.
 
 ---
 
@@ -563,14 +654,19 @@ A Lumina oferece suporte a realce de sintaxe, regras de indentação, **Autocomp
 - [x] Validação de tipo em VarDecl/Assign/Return/conditions
 - [x] Configuração de link (`[link]`) com suporte a C/C++/WASM
 - [x] `-O0`/`-O2`/`-O3` configuráveis
-- [ ] `SliceExpr` na AST (substituir `IndexExpr(BinaryExpr('..'))`)
-- [ ] `Option<T>` + `NoneExpr` dedicados
-- [ ] `comptime` real (avaliação em compile-time)
-- [ ] `lumina check` (só lexer+parser+semantic)
-- [ ] Formatter preservando comentários
+- [x] `SliceExpr` na AST
+- [x] `Option<T>` + `NoneExpr` dedicados
+- [x] `comptime` real (constant folding)
+- [x] `lumina check` (só lexer+parser+semantic)
+- [x] `--error-format=json` em todos os comandos
+- [x] `lumina fmt --check` (pre-commit)
+- [x] `lumina doc --format=html|md|json`
+- [x] Formatter preservando comentários
 - [ ] LSP completo (hover, rename, find references)
-- [ ] CI no GitHub Actions
 - [ ] Self-hosting (bootstrapping)
+- [ ] `std/iter` (adaptadores `map`, `filter`, `fold`)
+- [ ] `--target=aarch64-linux` (cross-compile)
+- [ ] Macros ou `@derive(Eq, Debug)`
 
 ---
 

@@ -16,9 +16,13 @@ class Parser(DeclarationParser):
     def parse(self):
         declarations = []
         while self.current_token() and not self.check(TokenType.EOF):
-            if self.check(TokenType.NEWLINE):
-                self.consume()
-                continue
+            # Consome NEWLINEs e COMMENTs, guardando os comentários.
+            self._skip_newlines_and_comments()
+
+            if not self.current_token() or self.check(TokenType.EOF):
+                break
+
+            leading = self._take_comments()
 
             is_export = False
             if self.check(TokenType.EXPORT):
@@ -50,6 +54,12 @@ class Parser(DeclarationParser):
 
             if is_export and hasattr(decl, 'is_exported'):
                 decl.is_exported = True
+
+            if leading and decl is not None:
+                try:
+                    decl.leading_comments = leading
+                except AttributeError:
+                    pass
 
             declarations.append(decl)
 

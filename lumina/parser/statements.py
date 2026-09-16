@@ -11,12 +11,36 @@ class StatementParser(PatternParser):
     """Statements e estruturas de controle."""
 
     def parse_statement(self):
+        """Wrapper: coleta comentários antes de cada statement e os anexa
+        ao nó resultante como `leading_comments`.
+
+        Retorna None se, após consumir comentários/newlines, o token atual
+        for DEDENT ou EOF (não há statement pra parsear).
+        """
+        self._skip_newlines_and_comments()
+
+        if (not self.current_token()
+                or self.check(TokenType.EOF)
+                or self.check(TokenType.DEDENT)):
+            # Comentários soltos antes de DEDENT/EOF. Por ora descartamos.
+            self.pending_comments.clear()
+            return None
+
+        leading = self._take_comments()
+        result = self._parse_statement_inner()
+
+        if result is not None and leading:
+            try:
+                result.leading_comments = leading
+            except AttributeError:
+                pass
+
+        return result
+
+    def _parse_statement_inner(self):
         token = self.current_token()
         if not token:
             return None
-        if token.type == TokenType.NEWLINE:
-            self.consume()
-            return self.parse_statement()
         if token.type == TokenType.LET or token.type == TokenType.MUT:
             return self.parse_let()
         elif token.type == TokenType.RETURN:
@@ -139,7 +163,7 @@ class StatementParser(PatternParser):
         return ReturnStmt(values)
 
     # ------------------------------------------------------------------
-    # If / Elif / Else — refatorado para `elif` parsear a condição
+    # If / Elif / Else
     # ------------------------------------------------------------------
     def parse_if(self):
         self.consume(TokenType.IF)
@@ -160,15 +184,15 @@ class StatementParser(PatternParser):
         while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
             if self.match(TokenType.NEWLINE):
                 continue
-            then_body.append(self.parse_statement())
+            stmt = self.parse_statement()
+            if stmt is not None:
+                then_body.append(stmt)
         self.expect(TokenType.DEDENT)
 
         else_body = None
 
         if self.check(TokenType.ELIF):
             self.consume()
-            # elif: reaproveita _parse_if_core (o token inicial já foi
-            # consumido). Isso é o que estava faltando antes.
             inner = self._parse_if_core()
             else_body = [inner]
         elif self.check(TokenType.ELSE):
@@ -182,7 +206,9 @@ class StatementParser(PatternParser):
             while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
                 if self.match(TokenType.NEWLINE):
                     continue
-                else_body.append(self.parse_statement())
+                stmt = self.parse_statement()
+                if stmt is not None:
+                    else_body.append(stmt)
             self.expect(TokenType.DEDENT)
 
         return IfStmt(condition, then_body, else_body)
@@ -199,7 +225,9 @@ class StatementParser(PatternParser):
         while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
             if self.match(TokenType.NEWLINE):
                 continue
-            body.append(self.parse_statement())
+            stmt = self.parse_statement()
+            if stmt is not None:
+                body.append(stmt)
         self.expect(TokenType.DEDENT)
         return WhileStmt(condition, body)
 
@@ -226,7 +254,9 @@ class StatementParser(PatternParser):
         while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
             if self.match(TokenType.NEWLINE):
                 continue
-            body.append(self.parse_statement())
+            stmt = self.parse_statement()
+            if stmt is not None:
+                body.append(stmt)
         self.expect(TokenType.DEDENT)
         return ForStmt(var_name, start, end, iterable, body)
 
@@ -241,7 +271,9 @@ class StatementParser(PatternParser):
             while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
                 if self.match(TokenType.NEWLINE):
                     continue
-                body.append(self.parse_statement())
+                stmt = self.parse_statement()
+                if stmt is not None:
+                    body.append(stmt)
             self.expect(TokenType.DEDENT)
             return DeferStmt(body, False)
         expr = self.parse_expression()
@@ -268,7 +300,9 @@ class StatementParser(PatternParser):
         while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
             if self.match(TokenType.NEWLINE):
                 continue
-            body.append(self.parse_statement())
+            stmt = self.parse_statement()
+            if stmt is not None:
+                body.append(stmt)
         self.expect(TokenType.DEDENT)
         return Function(f"test_{test_name.replace(' ', '_')}", [], "int", body)
 
@@ -284,6 +318,8 @@ class StatementParser(PatternParser):
         while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
             if self.match(TokenType.NEWLINE):
                 continue
-            body.append(self.parse_statement())
+            stmt = self.parse_statement()
+            if stmt is not None:
+                body.append(stmt)
         self.expect(TokenType.DEDENT)
         return BenchStmt(bench_name, body)

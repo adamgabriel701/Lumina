@@ -25,11 +25,13 @@ from lumina.errors import LuminaError
 
 from .utils import (
     Color, paint, cprint, info, success, warn, error, step, header, arrow,
+    set_progress_stream,
 )
 from .compiler import compile_lumina, run_jit, format_node
 
+
 # ============================================================
-#  Formato de erro global (text ou json)
+#  Error format global (text ou json)
 # ============================================================
 ERROR_FORMAT = "text"
 
@@ -46,7 +48,6 @@ def set_error_format(fmt: str):
         fmt = "text"
     ERROR_FORMAT = fmt
 
-    from .utils import set_progress_stream
     if fmt == "json":
         set_progress_stream(sys.stderr)
     else:
@@ -54,20 +55,21 @@ def set_error_format(fmt: str):
 
 
 def _report_error(e):
-    """Reporta um LuminaError respeitando ERROR_FORMAT.
+    """Reporta um erro respeitando ERROR_FORMAT.
 
-    Em modo 'json', emite uma linha JSON. Em modo 'text', usa o
-    formatador colorido padrão.
+    Em modo 'json', emite uma linha JSON no stdout. Em modo 'text',
+    usa o formatador colorido padrão (via `error`).
+    Aceita tanto LuminaError quanto strings simples.
     """
     if ERROR_FORMAT == "json":
         try:
             payload = e.to_dict()
         except AttributeError:
-            # Não é LuminaError — embrulha numa forma mínima
             payload = {"type": "error", "message": str(e)}
         print(json.dumps(payload, ensure_ascii=False), flush=True)
     else:
         error(e)
+
 
 # ============================================================
 #  Helpers de [link]
@@ -115,8 +117,7 @@ def _load_link_config(entry_file=None):
 def _compile_extra_objects(extra_objects):
     """Compila cada extra_object (.c/.cpp/.cc) para .o e retorna a lista.
 
-    Retorna (obj_paths, has_cpp) onde has_cpp indica se algum veio de C++
-    (para adicionar -lstdc++ na linkagem).
+    Retorna (obj_paths, has_cpp) onde has_cpp indica se algum veio de C++.
     """
     obj_paths = []
     has_cpp = False
@@ -140,7 +141,7 @@ def _compile_extra_objects(extra_objects):
                 has_cpp = True
         except subprocess.CalledProcessError as e:
             err = (e.stderr or b"").decode("utf-8", errors="replace")[:200]
-            error(f"❌ Falha ao compilar {src}: {err}")
+            _report_error(f"Falha ao compilar {src}: {err}")
 
     return obj_paths, has_cpp
 
@@ -183,11 +184,11 @@ entry = "main.lm"
 # ============================================================
 def cmd_install():
     if not os.path.exists("lumina.toml"):
-        error("❌ Erro: Nenhum arquivo 'lumina.toml' encontrado no diretório atual.")
+        _report_error("Nenhum arquivo 'lumina.toml' encontrado no diretório atual.")
         return
 
     if tomllib is None:
-        error("❌ Erro: tomllib não disponível. Use Python 3.11+.")
+        _report_error("tomllib não disponível. Use Python 3.11+.")
         return
 
     with open("lumina.toml", "rb") as f:
@@ -215,29 +216,63 @@ def cmd_install():
                 subprocess.run(["git", "-C", dest, "pull"], check=True)
                 success(f"✅ Pacote '{pkg_name}' atualizado.")
             except subprocess.CalledProcessError:
-                error(f"❌ Falha ao atualizar {pkg_name}.")
+                _report_error(f"Falha ao atualizar {pkg_name}.")
         else:
             info(f"⬇️  Baixando pacote '{paint(pkg_name, Color.BOLD)}' de {url}...")
             try:
                 subprocess.run(["git", "clone", url, dest], check=True)
                 success(f"✅ Pacote '{pkg_name}' instalado em lumina_modules/{pkg_name}")
             except subprocess.CalledProcessError:
-                error(f"❌ Falha ao baixar o repositório {url}")
+                _report_error(f"Falha ao baixar o repositório {url}")
 
 
 # ============================================================
 #  doc
 # ============================================================
-def cmd_doc():
-    info("📚 Gerando documentação...")
-    docs_data = []
+def cmd_doc(output_format="html", output_path=None):
+    """Gera documentação a partir de comentários `##`.
 
+    Formatos:
+      - html (padrão): docs/index.html
+      - md:            docs/index.md
+      - json:          docs/index.json
+
+    `output_path` sobrescreve o caminho padrão.
+    """
+    info(f"📚 Gerando documentação ({output_format})...")
+    docs_data = _collect_docs()
+
+    if output_format == "json":
+        content = _render_doc_json(docs_data)
+        default_path = os.path.join("docs", "index.json")
+    elif output_format == "md":
+        content = _render_doc_md(docs_data)
+        default_path = os.path.join("docs", "index.md")
+    else:
+        content = _render_doc_html(docs_data)
+        default_path = os.path.join("docs", "index.html")
+
+    dest = output_path or default_path
+    parent = os.path.dirname(dest)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(dest, "w") as f:
+        f.write(content)
+
+    success(f"✅ Documentação gerada em: {paint(dest, Color.BOLD + Color.BRIGHT_CYAN)}")
+
+
+def _collect_docs():
+    """Coleta os itens documentados (## acima de fn/struct/enum/trait)."""
+    docs_data = []
     for filepath in glob.glob("**/*.lm", recursive=True):
         if "lumina_modules" in filepath or filepath.startswith("std/"):
             continue
-
-        with open(filepath, "r") as f:
-            lines = f.readlines()
+        try:
+            with open(filepath, "r") as f:
+                lines = f.readlines()
+        except Exception:
+            continue
 
         current_doc = []
         for line in lines:
@@ -248,19 +283,37 @@ def cmd_doc():
                 current_doc.append(stripped[2:])
             elif stripped == "" or stripped.startswith("#"):
                 current_doc = []
-            elif current_doc and (stripped.startswith("fn ") or stripped.startswith("struct ") or stripped.startswith("enum ")):
-                clean_decl = stripped
+            elif current_doc and (
+                stripped.startswith("fn ") or
+                stripped.startswith("struct ") or
+                stripped.startswith("enum ") or
+                stripped.startswith("trait ")
+            ):
                 if stripped.startswith("fn "):
-                    clean_decl = stripped.replace("fn ", "").replace(" -> ", " ⟶ ")
+                    decl = stripped.replace("fn ", "").replace(" -> ", " ⟶ ")
+                    dtype = "Function"
+                elif stripped.startswith("struct "):
+                    decl = stripped
+                    dtype = "Struct"
+                elif stripped.startswith("enum "):
+                    decl = stripped
+                    dtype = "Enum"
+                else:
+                    decl = stripped
+                    dtype = "Trait"
+
                 docs_data.append({
                     "file": filepath,
-                    "type": ("Function" if stripped.startswith("fn ") else "Struct" if stripped.startswith("struct ") else "Enum"),
-                    "decl": clean_decl,
+                    "type": dtype,
+                    "decl": decl,
                     "doc": "\n".join(current_doc),
                 })
                 current_doc = []
+    return docs_data
 
-    html_content = """<!DOCTYPE html>
+
+def _render_doc_html(docs_data):
+    html = """<!DOCTYPE html>
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
@@ -279,32 +332,64 @@ def cmd_doc():
     <h1>🌟 Lumina Standard Library</h1>
 """
     if not docs_data:
-        html_content += "<p>Nenhuma documentação encontrada. Use '##' acima de funções, structs ou enums.</p>"
+        html += "<p>Nenhuma documentação encontrada. Use '##' acima de funções, structs ou enums.</p>"
     else:
         for item in docs_data:
-            html_content += f"""
+            html += f"""
     <div class="item">
         <div class="decl">{item['decl']} <span class="type">{item['type']}</span></div>
         <div class="doc">{item['doc']}</div>
         <div class="file">Definido em: {item['file']}</div>
     </div>
 """
-    html_content += """
+    html += """
 </body>
 </html>"""
+    return html
 
-    os.makedirs("docs", exist_ok=True)
-    with open("docs/index.html", "w") as f:
-        f.write(html_content)
 
-    success("✅ Documentação gerada com sucesso em: docs/index.html")
+def _render_doc_md(docs_data):
+    lines = ["# 🌟 Lumina Standard Library", ""]
+    if not docs_data:
+        lines.append("_Nenhuma documentação encontrada. Use `##` acima de funções, structs ou enums._")
+        return "\n".join(lines)
+
+    by_type = {}
+    for item in docs_data:
+        by_type.setdefault(item["type"], []).append(item)
+
+    for dtype in ("Function", "Struct", "Enum", "Trait"):
+        if dtype not in by_type:
+            continue
+        heading = {"Function": "Funções", "Struct": "Structs",
+                   "Enum": "Enums", "Trait": "Traits"}[dtype]
+        lines.append(f"## {heading}")
+        lines.append("")
+        for item in by_type[dtype]:
+            lines.append(f"### `{item['decl']}`")
+            lines.append("")
+            if item["doc"]:
+                for doc_line in item["doc"].split("\n"):
+                    lines.append(doc_line)
+                lines.append("")
+            lines.append(f"_Definido em: `{item['file']}`_")
+            lines.append("")
+    return "\n".join(lines)
+
+
+def _render_doc_json(docs_data):
+    payload = {
+        "title": "Lumina Standard Library",
+        "count": len(docs_data),
+        "items": docs_data,
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 # ============================================================
 #  build
 # ============================================================
 def cmd_build(entry_file=None, extra_flags=[]):
-    # Carrega config de [link]
     link_cfg = _load_link_config(entry_file)
     libs = link_cfg.get("libs", [])
     extra_objs_src = link_cfg.get("extra_objects", [])
@@ -313,28 +398,23 @@ def cmd_build(entry_file=None, extra_flags=[]):
 
     if entry_file:
         entry = entry_file
-        # Normaliza o nome do binário:
-        #   - paths relativos:  "examples/main"  (como está)
-        #   - paths absolutos:  "/tmp/slice"     (como está — não remover o /)
-        #   - remove .lm do final, sem quebrar paths
         if entry_file.endswith(".lm"):
             project_name = entry_file[:-3]
         else:
             project_name = entry_file
     else:
         if not os.path.exists("lumina.toml"):
-            error("❌ Erro: Nenhum arquivo 'lumina.toml' encontrado no diretório atual.")
+            _report_error("Nenhum arquivo 'lumina.toml' encontrado no diretório atual.")
             return None
         if tomllib is None:
-            error("❌ Erro: tomllib não disponível. Use Python 3.11+.")
+            _report_error("tomllib não disponível. Use Python 3.11+.")
             return None
         with open("lumina.toml", "rb") as f:
             config = tomllib.load(f)
         entry = config.get("package", {}).get("entry", "main.lm")
         project_name = config.get("package", {}).get("name", "programa_final")
 
-    # Target do [link] pode forçar --wasm
-    extra_flags = list(extra_flags)  # não mutar a lista do chamador
+    extra_flags = list(extra_flags)
     if link_target == "wasm" and "--wasm" not in extra_flags:
         extra_flags.append("--wasm")
         info(f"🎯 Target '{link_target}' detectado em [link] — forçando --wasm")
@@ -344,10 +424,6 @@ def cmd_build(entry_file=None, extra_flags=[]):
     is_debug = "--debug" in extra_flags
     is_release = "--release" in extra_flags
 
-    # Seleção do nível de otimização do clang:
-    #   --debug    → -O0 (fácil de debugar, preserva variáveis)
-    #   --release  → -O3 (máxima performance)
-    #   padrão     → -O2 (bom equilíbrio)
     if is_debug:
         opt_flag = "-O0"
     elif is_release:
@@ -358,7 +434,6 @@ def cmd_build(entry_file=None, extra_flags=[]):
     step(f"🛠️  Compilando projeto: {paint(project_name, Color.BOLD + Color.BRIGHT_CYAN)}")
     info(f"⚙️  Otimização: {paint(opt_flag, Color.BOLD)}")
 
-    # Conteúdo do cache inclui a flag de otimização
     cache_use = not (is_wasm or is_debug)
 
     llvm_ir = compile_lumina(entry, use_cache=cache_use, is_wasm=is_wasm,
@@ -366,12 +441,10 @@ def cmd_build(entry_file=None, extra_flags=[]):
     if not llvm_ir:
         return None
 
-    # Flags que NÃO vão para o clang (são processadas pelo próprio cmd_build)
     cli_flags = {"--wasm", "--debug", "--no-gc", "--release"}
     linker_extra_flags = [f for f in extra_flags if f not in cli_flags]
     linker_extra_flags.extend(link_extra_flags)
 
-    # Compila extra_objects (.c/.cpp → .o)
     extra_obj_paths, has_cpp = _compile_extra_objects(extra_objs_src)
 
     ir_file = f"{project_name}.ll"
@@ -396,11 +469,9 @@ def cmd_build(entry_file=None, extra_flags=[]):
 
         clang_bin = "/opt/wasi-sdk/bin/clang" if os.path.exists("/opt/wasi-sdk/bin/clang") else "clang"
 
-        # WASM sempre usa -O3 (o binário final é otimizado para produção)
         cmd_args = [clang_bin, "-O3", "-nostartfiles", debug_flag,
                     "--target=wasm32-unknown-wasi",
                     "--sysroot=/opt/wasi-sdk/share/wasi-sysroot", ir_file]
-
         cmd_args.extend(extra_obj_paths)
 
         if export_names:
@@ -436,10 +507,8 @@ def cmd_build(entry_file=None, extra_flags=[]):
 
         cmd_args.extend(linker_extra_flags)
 
-    # Hash do binário inclui a flag de otimização.
-    # Isso garante que trocar --release ↔ padrão ↔ --debug force relinkagem.
     hash_obj_file = f".lumina_cache/{project_name}.bin_hash"
-    opt_marker = opt_flag  # "-O0" / "-O2" / "-O3"
+    opt_marker = opt_flag
 
     if os.path.exists(hash_obj_file) and not is_wasm and not is_debug:
         with open(hash_obj_file, "r") as f:
@@ -457,7 +526,6 @@ def cmd_build(entry_file=None, extra_flags=[]):
     try:
         subprocess.run(cmd_args, check=True)
         output_path = f"{project_name}.wasm" if is_wasm else project_name
-        # Não prefixa `./` se já for absoluto
         display_path = output_path if os.path.isabs(output_path) else f"./{output_path}"
         success(f"✅ Build concluído: {paint(display_path, Color.BOLD + Color.SUCCESS)}")
 
@@ -472,12 +540,15 @@ def cmd_build(entry_file=None, extra_flags=[]):
 
         return output_path
     except subprocess.CalledProcessError:
-        error("❌ Erro durante a linkagem com o clang.")
+        _report_error(LuminaError(
+            "Erro durante a linkagem com o clang. Veja a saída acima para detalhes.",
+            entry, 0, 0, "",
+        ))
         return None
 
 
 # ============================================================
-#  check — só lexer + parser + semantic (rápido, sem codegen)
+#  check
 # ============================================================
 def cmd_check(entry_file=None):
     if not entry_file:
@@ -488,17 +559,16 @@ def cmd_check(entry_file=None):
         elif os.path.exists("main.lm"):
             entry_file = "main.lm"
         else:
-            error("❌ Erro: Nenhum arquivo de entrada especificado.")
+            _report_error("Nenhum arquivo de entrada especificado.")
             return False
 
     if not os.path.exists(entry_file):
-        error(f"❌ Erro: Arquivo '{paint(entry_file, Color.BOLD)}' não encontrado.")
+        _report_error(f"Arquivo '{entry_file}' não encontrado.")
         return False
 
     step(f"🔍 Verificando: {paint(entry_file, Color.BOLD + Color.BRIGHT_CYAN)}")
 
     from .compiler import check_lumina
-
     ok = check_lumina(entry_file, on_error=_report_error)
 
     if ok:
@@ -518,11 +588,11 @@ def cmd_test(entry_file=None):
         elif os.path.exists("main.lm"):
             entry_file = "main.lm"
         else:
-            error("❌ Erro: Nenhum arquivo de entrada especificado.")
+            _report_error("Nenhum arquivo de entrada especificado.")
             return
 
     if not os.path.exists(entry_file):
-        error(f"❌ Erro: Arquivo '{paint(entry_file, Color.BOLD)}' não encontrado.")
+        _report_error(f"Arquivo '{entry_file}' não encontrado.")
         return
 
     step(f"🧪 Iniciando suíte de testes para: {paint(entry_file, Color.BOLD + Color.BRIGHT_CYAN)}")
@@ -533,7 +603,7 @@ def cmd_test(entry_file=None):
     try:
         ast = parse_module(entry_file)
     except LuminaError as e:
-        error(e)
+        _report_error(e)
         return None
 
     test_funcs = [decl for decl in ast if isinstance(decl, Function) and decl.name.startswith("test_")]
@@ -553,7 +623,7 @@ def cmd_test(entry_file=None):
         analyzer = SemanticAnalyzer(entry_file, source_code)
         analyzer.analyze(new_ast)
     except LuminaError as e:
-        error(e)
+        _report_error(e)
         return
 
     codegen = LLVMCodegen()
@@ -566,7 +636,8 @@ def cmd_test(entry_file=None):
     with open(ir_file, "w") as f:
         f.write(llvm_ir)
 
-    cmd_args = ["clang", "-O0", "-fprofile-instr-generate", "-fcoverage-mapping", ir_file, "-o", binary_name, "-lc", "-lpthread", "-lgc"]
+    cmd_args = ["clang", "-O0", "-fprofile-instr-generate", "-fcoverage-mapping",
+                ir_file, "-o", binary_name, "-lc", "-lpthread", "-lgc"]
 
     try:
         subprocess.run(cmd_args, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -582,26 +653,25 @@ def cmd_test(entry_file=None):
         if result.returncode == 0:
             success(f"✅ Todos os {len(test_funcs)} testes passaram!")
             try:
-                subprocess.run(["llvm-profdata", "merge", "-sparse", "lumina_test.profraw", "-o", "lumina_test.profdata"], check=True, capture_output=True)
+                subprocess.run(["llvm-profdata", "merge", "-sparse",
+                                "lumina_test.profraw", "-o", "lumina_test.profdata"],
+                               check=True, capture_output=True)
                 header("📊 Relatório de Cobertura de Código")
-                subprocess.run(["llvm-cov", "show", binary_name, "-instr-profile=lumina_test.profdata"], check=True)
-                subprocess.run(["llvm-cov", "report", binary_name, "-instr-profile=lumina_test.profdata"], check=True)
+                subprocess.run(["llvm-cov", "show", binary_name,
+                                "-instr-profile=lumina_test.profdata"], check=True)
+                subprocess.run(["llvm-cov", "report", binary_name,
+                                "-instr-profile=lumina_test.profdata"], check=True)
             except Exception:
                 warn("⚠️ Ferramentas de cobertura (llvm-cov) não encontradas. Relatório ignorado.")
         else:
-            error("❌ Um ou mais testes falharam (Assertion Failed).")
+            _report_error("Um ou mais testes falharam (Assertion Failed).")
 
     except subprocess.CalledProcessError:
-        error("❌ Erro durante a compilação da suíte de testes.")
+        _report_error("Erro durante a compilação da suíte de testes.")
     finally:
-        if os.path.exists(ir_file):
-            os.remove(ir_file)
-        if os.path.exists(binary_name):
-            os.remove(binary_name)
-        if os.path.exists("lumina_test.profraw"):
-            os.remove("lumina_test.profraw")
-        if os.path.exists("lumina_test.profdata"):
-            os.remove("lumina_test.profdata")
+        for f in (ir_file, binary_name, "lumina_test.profraw", "lumina_test.profdata"):
+            if os.path.exists(f):
+                os.remove(f)
 
 
 # ============================================================
@@ -644,11 +714,11 @@ def cmd_run(entry_file=None, use_jit=False, extra_flags=[]):
         elif os.path.exists("main.lm"):
             entry_file = "main.lm"
         else:
-            error("❌ Erro: Nenhum arquivo de entrada especificado.")
+            _report_error("Nenhum arquivo de entrada especificado.")
             return
 
     if not os.path.exists(entry_file):
-        error(f"❌ Erro: Arquivo '{paint(entry_file, Color.BOLD)}' não encontrado.")
+        _report_error(f"Arquivo '{entry_file}' não encontrado.")
         return
 
     step(f"🚀 Iniciando processo para: {paint(entry_file, Color.BOLD + Color.BRIGHT_CYAN)}")
@@ -657,7 +727,6 @@ def cmd_run(entry_file=None, use_jit=False, extra_flags=[]):
         ir_file = "lumina_jit_temp.ll"
         llvm_ir = compile_lumina(entry_file, output_file=ir_file, on_error=_report_error)
         if not llvm_ir:
-            error("❌ Falha na compilação.")
             return
         if os.path.exists(ir_file):
             os.remove(ir_file)
@@ -666,13 +735,11 @@ def cmd_run(entry_file=None, use_jit=False, extra_flags=[]):
 
     binary_name = cmd_build(entry_file, extra_flags=extra_flags)
     if not binary_name:
-        error("❌ Falha na compilação.")
+        # cmd_build já reportou o erro
         return
 
     header("Executando Binário Nativo")
 
-    # Se `binary_name` for absoluto (começa com /), usa direto.
-    # Senão, prefixa com ./ (assumindo cwd = raiz do projeto).
     if os.path.isabs(binary_name):
         exe_path = binary_name
     else:
@@ -686,7 +753,7 @@ def cmd_run(entry_file=None, use_jit=False, extra_flags=[]):
 # ============================================================
 def cmd_bind(header_file, output_name):
     if not os.path.exists(header_file):
-        error(f"❌ Erro: Arquivo '{paint(header_file, Color.BOLD)}' não encontrado.")
+        _report_error(f"Arquivo '{header_file}' não encontrado.")
         return
 
     with open(header_file, "r") as f:
@@ -737,37 +804,56 @@ def cmd_bind(header_file, output_name):
         f.write(f"# Auto-gerado de {header_file} pelo Lumina Bind\n\n")
         f.write("\n".join(lumina_decls))
 
-    success(f"✅ Bindings gerados com sucesso em {paint(out_file, Color.BOLD + Color.BRIGHT_CYAN)} ({len(lumina_decls)} funções)")
+    success(f"✅ Bindings gerados em {paint(out_file, Color.BOLD + Color.BRIGHT_CYAN)} ({len(lumina_decls)} funções)")
 
 
 # ============================================================
 #  fmt
 # ============================================================
-def cmd_fmt(filename):
+def cmd_fmt(filename, check_only=False):
+    """Formata um arquivo Lumina.
+
+    Se `check_only=True`, não escreve — apenas verifica se o código
+    já está formatado. Retorna True se OK (ou já formatado), False se
+    precisa formatar ou se houve erro.
+
+    Nota: como o auto-formatter trabalha sobre a AST e ainda não
+    preserva comentários, arquivos com comentários sempre falham
+    no --check.
+    """
     if not os.path.exists(filename):
-        error(f"❌ Erro: Arquivo '{paint(filename, Color.BOLD)}' não encontrado.")
-        return
+        _report_error(f"Arquivo '{filename}' não encontrado.")
+        return False
 
     with open(filename, "r") as f:
-        code = f.read()
+        original_code = f.read()
 
     try:
-        lexer = Lexer(code)
+        lexer = Lexer(original_code)
         tokens = lexer.tokenize()
-        parser = Parser(tokens, filename, code)
+        parser = Parser(tokens, filename, original_code)
         ast = parser.parse()
 
         formatted_code = ""
         for node in ast:
             formatted_code += format_node(node)
-
-        with open(filename, "w") as f:
-            f.write(formatted_code)
-
-        success(f"✅ Arquivo '{paint(filename, Color.BOLD + Color.BRIGHT_CYAN)}' formatado com sucesso!")
     except LuminaError as e:
-        error("❌ Não foi possível formatar devido a erros de sintaxe:")
-        print(e)
+        _report_error(e)
+        return False
+
+    if check_only:
+        if formatted_code == original_code:
+            success(f"✅ {paint(filename, Color.BOLD)} — já formatado")
+            return True
+        else:
+            info(f"⚠️  {paint(filename, Color.BOLD)} precisa ser formatado")
+            return False
+
+    with open(filename, "w") as f:
+        f.write(formatted_code)
+
+    success(f"✅ Arquivo '{paint(filename, Color.BOLD + Color.BRIGHT_CYAN)}' formatado com sucesso!")
+    return True
 
 
 # ============================================================
@@ -828,7 +914,7 @@ def cmd_repl():
                 except LuminaError as e:
                     print(e)
                 except Exception as e:
-                    error(f"Erro interno: {e}")
+                    _report_error(f"Erro interno: {e}")
                 finally:
                     buffer = []
                 continue

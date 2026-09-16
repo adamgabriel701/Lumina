@@ -40,14 +40,20 @@ class Lexer:
             if self.paren_depth > 0:
                 while True:
                     self._skip_whitespace()
-                    # Comentários de linha dentro de parênteses
+                    # Comentários dentro de parênteses: também guardamos como
+                    # COMMENT (o parser descarta dentro de expressões, mas
+                    # manter o token evita ter que diferenciar dois modos).
                     if self.peek() == '#':
+                        start_line, start_col = self.line, self.col
+                        text = ""
                         while self.peek() not in ('\n', '\0'):
-                            self.advance()
+                            text += self.advance()
+                        self.add_token(TokenType.COMMENT, text, start_line, start_col)
                         continue
-                    # Comentários de bloco dentro de parênteses
                     if self.peek() == '/' and self.peek(1) == '*':
-                        self._skip_block_comment()
+                        start_line, start_col = self.line, self.col
+                        text = self._collect_block_comment()
+                        self.add_token(TokenType.COMMENT, text, start_line, start_col)
                         continue
                     if self.peek() == '\n':
                         self.advance()
@@ -77,13 +83,18 @@ class Lexer:
 
             # Comentário de linha
             if c == '#':
+                start_line, start_col = self.line, self.col
+                text = ""
                 while self.peek() not in ('\n', '\0'):
-                    self.advance()
+                    text += self.advance()
+                self.add_token(TokenType.COMMENT, text, start_line, start_col)
                 continue
 
-            # Comentário de bloco /* ... */ (NOVO)
+            # Comentário de bloco /* ... */
             if c == '/' and self.peek(1) == '*':
-                self._skip_block_comment()
+                start_line, start_col = self.line, self.col
+                text = self._collect_block_comment()
+                self.add_token(TokenType.COMMENT, text, start_line, start_col)
                 continue
 
             if c.isdigit():
@@ -121,18 +132,19 @@ class Lexer:
         self.add_token(TokenType.EOF, "")
         return self.tokens
 
-    def _skip_block_comment(self):
-        """Consome /* ... */ (não aninhado)."""
-        self.advance()  # /
-        self.advance()  # *
+    def _collect_block_comment(self):
+        """Consome /* ... */ e retorna o texto completo (incluindo /* */)."""
+        text = ""
+        text += self.advance()  # /
+        text += self.advance()  # *
         while True:
             if self.peek() == '\0':
                 self.error("Comentário /* não terminado")
             if self.peek() == '*' and self.peek(1) == '/':
-                self.advance()  # *
-                self.advance()  # /
-                return
-            self.advance()
+                text += self.advance()  # *
+                text += self.advance()  # /
+                return text
+            text += self.advance()
 
     def _skip_whitespace(self):
         while self.peek() in (' ', '\t'):
@@ -151,10 +163,9 @@ class Lexer:
             self.at_line_start = False
             return
 
-        # NOVO: linhas de comentário NÃO afetam a pilha de indentação.
-        # Sem isso, um `# ...` no meio de um bloco (com indentação menor
-        # que o corpo) gera um DEDENT prematuro e o parser perde o `elif`
-        # que vem depois. Bug observado em bootstrap_lexer.lm.
+        # Comentários no início da linha NÃO afetam a pilha de indentação.
+        # Eles "pertencem" à próxima linha de código — o INDENT/DEDENT
+        # correspondente será emitido quando a linha de código for processada.
         if self.peek() == '#':
             self.at_line_start = False
             return

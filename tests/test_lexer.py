@@ -13,14 +13,17 @@ from lumina.lexer.tokens import TokenType
 
 
 def _types(tokens):
-    """Retorna a lista de TokenTypes, ignorando NEWLINE/INDENT/DEDENT."""
-    ignore = {TokenType.NEWLINE, TokenType.INDENT, TokenType.DEDENT, TokenType.EOF}
+    """Retorna a lista de TokenTypes, ignorando trivia
+    (NEWLINE/INDENT/DEDENT/EOF/COMMENT)."""
+    ignore = {TokenType.NEWLINE, TokenType.INDENT, TokenType.DEDENT,
+              TokenType.EOF, TokenType.COMMENT}
     return [t.type for t in tokens if t.type not in ignore]
 
 
 def _values(tokens):
-    """Retorna os valores dos tokens, ignorando NEWLINE/INDENT/DEDENT."""
-    ignore = {TokenType.NEWLINE, TokenType.INDENT, TokenType.DEDENT, TokenType.EOF}
+    """Retorna os valores dos tokens, ignorando trivia."""
+    ignore = {TokenType.NEWLINE, TokenType.INDENT, TokenType.DEDENT,
+              TokenType.EOF, TokenType.COMMENT}
     return [t.value for t in tokens if t.type not in ignore]
 
 
@@ -218,9 +221,31 @@ def test_empty_source(lex):
 
 
 def test_only_comment(lex):
+    """Arquivo só com comentário não tem tokens significativos,
+    mas o COMMENT é preservado para o formatter."""
     toks = lex("# apenas um comentário\n")
-    types = _types(toks)
-    assert types == []
+    # Nenhum token significativo
+    assert _types(toks) == []
+    # Mas o COMMENT está lá
+    comments = [t.value for t in toks if t.type == TokenType.COMMENT]
+    assert comments == ["# apenas um comentário"]
+
+
+def test_comment_preserved(lex):
+    """O lexer emite COMMENT com o texto completo."""
+    toks = lex("# foo\nlet x = 1  # bar\n")
+    comments = [t.value for t in toks if t.type == TokenType.COMMENT]
+    assert "# foo" in comments
+    assert "# bar" in comments
+
+
+def test_block_comment_preserved(lex):
+    """Comentário /* */ também é preservado como um único token."""
+    toks = lex("/* multi\nlinha */\nlet x = 1\n")
+    comments = [t.value for t in toks if t.type == TokenType.COMMENT]
+    assert len(comments) == 1
+    assert comments[0].startswith("/*")
+    assert comments[0].endswith("*/")
 
 
 def test_eof_always_present(lex):

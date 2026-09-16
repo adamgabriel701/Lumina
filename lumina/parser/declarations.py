@@ -55,8 +55,11 @@ class DeclarationParser(StatementParser):
         self.expect(TokenType.INDENT)
         fields = {}
         while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
-            if self.match(TokenType.NEWLINE):
-                continue
+            # NOVO: consome NEWLINEs e COMMENTs (comentários dentro da struct)
+            self._skip_newlines_and_comments()
+            if self.check(TokenType.DEDENT) or self.check(TokenType.EOF):
+                break
+            self._take_comments()  # descarta comentários dentro de struct (por ora)
             fn = self.expect(TokenType.IDENT).value
             self.expect(TokenType.COLON)
             ft = self.expect(TokenType.IDENT).value
@@ -75,10 +78,13 @@ class DeclarationParser(StatementParser):
         self.expect(TokenType.INDENT)
         variants = []
         while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
-            if self.match(TokenType.NEWLINE):
-                continue
+            # NOVO: consome NEWLINEs e COMMENTs (comentários dentro do enum)
+            self._skip_newlines_and_comments()
+            if self.check(TokenType.DEDENT) or self.check(TokenType.EOF):
+                break
             if self.check(TokenType.ENUM) or self.check(TokenType.STRUCT) or self.check(TokenType.FN):
                 break
+            self._take_comments()
             vn = self.expect(TokenType.IDENT).value
             payloads = []
             if self.check(TokenType.LPAREN):
@@ -103,8 +109,11 @@ class DeclarationParser(StatementParser):
         self.expect(TokenType.INDENT)
         methods = []
         while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
-            if self.match(TokenType.NEWLINE):
-                continue
+            # NOVO: consome NEWLINEs e COMMENTs (comentários dentro do trait)
+            self._skip_newlines_and_comments()
+            if self.check(TokenType.DEDENT) or self.check(TokenType.EOF):
+                break
+            leading = self._take_comments()
             if self.check(TokenType.FN):
                 self.consume()
                 m_name = self.expect(TokenType.IDENT).value
@@ -138,9 +147,12 @@ class DeclarationParser(StatementParser):
                     self.expect(TokenType.DEDENT)
                 else:
                     self.match(TokenType.NEWLINE)
-                methods.append(Function(m_name, params, return_type, body))
+
+                _fn = Function(m_name, params, return_type, body)
+                if leading:
+                    _fn.leading_comments = leading
+                methods.append(_fn)
             else:
-                # NOVO: token inesperado dentro do trait — erro, não loop
                 t = self.current_token()
                 raise LuminaError(
                     f"Token inesperado em 'trait': {t.type.name} ('{t.value}'). "
@@ -166,14 +178,17 @@ class DeclarationParser(StatementParser):
         self.expect(TokenType.INDENT)
         methods = []
         while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
-            if self.match(TokenType.NEWLINE):
-                continue
+            self._skip_newlines_and_comments()
+            if self.check(TokenType.DEDENT) or self.check(TokenType.EOF):
+                break
+            leading = self._take_comments()
             if self.check(TokenType.FN):
                 func = self.parse_function()
                 func.name = f"{struct_name}_{func.name}"
+                if leading:
+                    func.leading_comments = leading
                 methods.append(func)
             else:
-                # NOVO: token inesperado dentro do impl — erro, não loop
                 t = self.current_token()
                 raise LuminaError(
                     f"Token inesperado em 'impl': {t.type.name} ('{t.value}'). "
@@ -223,6 +238,8 @@ class DeclarationParser(StatementParser):
         while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
             if self.match(TokenType.NEWLINE):
                 continue
-            body.append(self.parse_statement())
+            stmt = self.parse_statement()
+            if stmt is not None:
+                body.append(stmt)
         self.expect(TokenType.DEDENT)
         return Function(name, params, return_type, body, type_params, line, col, is_exported, attrs)

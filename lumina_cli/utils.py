@@ -27,10 +27,6 @@ def paint(text, color):
     return f"{color}{text}{Color.RESET}"
 
 
-def cprint(*args, color=Color.RESET, end='\n', sep=' '):
-    text = sep.join(str(a) for a in args)
-    print(f"{color}{text}{Color.RESET}", end=end)
-
 
 def info(msg):    cprint(msg, color=Color.INFO)
 def success(msg): cprint(msg, color=Color.SUCCESS)

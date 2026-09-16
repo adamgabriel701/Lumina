@@ -29,10 +29,10 @@ def usage():
         ("test [arquivo]",                "Compila e executa a suíte de testes nativa"),
         ("jit [arquivo]",                 "Compila e executa via JIT (Just-In-Time)"),
         ("clean",                         "Limpa o cache e os binários gerados"),
-        ("doc",                           "Gera documentação HTML do projeto"),
+        ("doc [flags]",                   "Gera documentação (--format=html|md|json)"),
         ("install",                       "Baixa/instala dependências do lumina.toml"),
         ("bind <header.h> <nome>",        "Gera bindings Lumina a partir de um header C"),
-        ("fmt <arquivo.lm>",              "Formata o código-fonte Lumina"),
+        ("fmt <arquivo.lm> [--check]",    "Formata (ou verifica) o código Lumina"),
         ("repl",                          "Inicia o REPL interativo"),
         ("playground [porta]",            "Inicia o playground web (padrão: 8080)"),
     ]
@@ -43,6 +43,7 @@ def usage():
          f"{paint('--debug (-O0 + DWARF)', Color.MUTED)}, "
          f"{paint('--wasm', Color.MUTED)}, "
          f"{paint('--no-gc', Color.MUTED)}")
+    info(f"Flags globais: {paint('--error-format=text|json', Color.MUTED)}")
     info(f"Exemplo: {paint('lumina new meu_projeto', Color.MUTED)}")
 
 
@@ -106,7 +107,14 @@ def main():
         cmd_run(entry_file, use_jit=True)
 
     elif command == "doc":
-        cmd_doc()
+        output_format = "html"
+        output_path = None
+        for arg in args:
+            if arg.startswith("--format="):
+                output_format = arg.split("=", 1)[1]
+            elif arg.startswith("--output="):
+                output_path = arg.split("=", 1)[1]
+        cmd_doc(output_format=output_format, output_path=output_path)
 
     elif command == "install":
         cmd_install()
@@ -118,10 +126,14 @@ def main():
         cmd_bind(args[0], args[1])
 
     elif command == "fmt":
-        if len(args) < 1:
-            error("Uso: lumina fmt <arquivo.lm>")
+        check_only = "--check" in args
+        files = [a for a in args if not a.startswith("--")]
+        if not files:
+            error("Uso: lumina fmt <arquivo.lm> [--check]")
             return
-        cmd_fmt(args[0])
+        ok = cmd_fmt(files[0], check_only=check_only)
+        if check_only and not ok:
+            sys.exit(1)
 
     elif command == "repl":
         cmd_repl()

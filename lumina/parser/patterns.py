@@ -89,7 +89,9 @@ class PatternParser(ExpressionParser):
                 while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
                     if self.match(TokenType.NEWLINE):
                         continue
-                    body.append(self.parse_statement())
+                    stmt = self.parse_statement()
+                    if stmt is not None:
+                        body.append(stmt)
                 self.expect(TokenType.DEDENT)
                 binding = bindings[0] if isinstance(bindings, list) and bindings else bindings
                 cases.append((VariableExpr(variant or binding or "_", 0, 0), body[0] if body else NumberExpr("0", False)))
@@ -177,10 +179,13 @@ class PatternParser(ExpressionParser):
                     while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
                         if self.match(TokenType.NEWLINE):
                             continue
-                        body.append(self.parse_statement())
+                        stmt = self.parse_statement()
+                        if stmt is not None:
+                            body.append(stmt)
                     self.expect(TokenType.DEDENT)
                 else:
-                    body = [self.parse_statement()]
+                    stmt = self.parse_statement()
+                    body = [stmt] if stmt is not None else []
 
                 cases.append((variant, bindings, guard, body))
 
@@ -197,10 +202,13 @@ class PatternParser(ExpressionParser):
                     while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
                         if self.match(TokenType.NEWLINE):
                             continue
-                        default.append(self.parse_statement())
+                        stmt = self.parse_statement()
+                        if stmt is not None:
+                            default.append(stmt)
                     self.expect(TokenType.DEDENT)
                 else:
-                    default = [self.parse_statement()]
+                    stmt = self.parse_statement()
+                    default = [stmt] if stmt is not None else []
             else:
                 t = self.current_token()
                 raise LuminaError(
@@ -243,10 +251,13 @@ class PatternParser(ExpressionParser):
                     while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
                         if self.match(TokenType.NEWLINE):
                             continue
-                        body.append(self.parse_statement())
+                        stmt = self.parse_statement()
+                        if stmt is not None:
+                            body.append(stmt)
                     self.expect(TokenType.DEDENT)
                 else:
-                    body = [self.parse_statement()]
+                    stmt = self.parse_statement()
+                    body = [stmt] if stmt is not None else []
 
                 cases.append((variant, bindings, guard, body))
 
@@ -263,10 +274,13 @@ class PatternParser(ExpressionParser):
                     while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
                         if self.match(TokenType.NEWLINE):
                             continue
-                        default.append(self.parse_statement())
+                        stmt = self.parse_statement()
+                        if stmt is not None:
+                            default.append(stmt)
                     self.expect(TokenType.DEDENT)
                 else:
-                    default = [self.parse_statement()]
+                    stmt = self.parse_statement()
+                    default = [stmt] if stmt is not None else []
             else:
                 t = self.current_token()
                 raise LuminaError(

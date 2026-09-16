@@ -293,6 +293,20 @@ class ExpressionAnalyzer(NodeVisitor):
             except (ValueError, TypeError):
                 return None
 
+            # Comparações
+            if node.op == '==':
+                return BoolExpr(lv == rv)
+            if node.op == '!=':
+                return BoolExpr(lv != rv)
+            if node.op == '<':
+                return BoolExpr(lv < rv)
+            if node.op == '>':
+                return BoolExpr(lv > rv)
+            if node.op == '<=':
+                return BoolExpr(lv <= rv)
+            if node.op == '>=':
+                return BoolExpr(lv >= rv)
+
             is_float = left.is_float or right.is_float
             try:
                 if node.op == '+':

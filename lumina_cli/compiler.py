@@ -295,9 +295,16 @@ def _format_node_impl(node, indent_level=0):
         prefix_newline = "\n" if indent_level == 0 else ""
         s = f"{prefix_newline}{indent}trait {node.name}:\n"
         for method in node.methods:
+            # Emite comentários leading (o parser anexa em `leading_comments`)
+            for c in (getattr(method, 'leading_comments', None) or []):
+                for line in c.split('\n'):
+                    s += f"{indent}    {line.strip()}\n"
             params = _fmt_params(method.params)
             ret = f" -> {method.return_type}" if method.return_type != "void" else ""
             s += f"{indent}    fn {method.name}({params}){ret}\n"
+            # Corpo do método (se houver)
+            for stmt in (method.body or []):
+                s += format_node(stmt, indent_level + 2)
         return s
 
     elif isinstance(node, ImplBlock):

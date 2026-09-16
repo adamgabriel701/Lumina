@@ -93,3 +93,41 @@ def test_check_on_formatted_file():
         assert r2.returncode == 0, f"Esperava 0, veio {r2.returncode}:\n{r2.stdout}"
     finally:
         os.unlink(path)
+
+def test_comment_between_functions():
+    src = (
+        "fn a() -> int:\n"
+        "    return 1\n"
+        "\n"
+        "# Entre funções\n"
+        "\n"
+        "fn b() -> int:\n"
+        "    return 2\n"
+    )
+    out = _fmt(src)
+    assert "# Entre funções" in out
+
+
+def test_comment_inside_impl():
+    src = (
+        "struct S:\n"
+        "    x: int\n"
+        "\n"
+        "impl S:\n"
+        "    # Método abaixo\n"
+        "    fn get() -> int:\n"
+        "        return self.x\n"
+    )
+    out = _fmt(src)
+    assert "# Método abaixo" in out
+
+
+def test_comment_inside_trait():
+    src = (
+        "trait T:\n"
+        "    # Método default\n"
+        "    fn greet():\n"
+        "        print(1)\n"
+    )
+    out = _fmt(src)
+    assert "# Método default" in out

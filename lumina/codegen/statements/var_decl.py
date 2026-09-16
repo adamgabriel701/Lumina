@@ -49,10 +49,12 @@ class VarDeclMixin:
         val = self.visit(node.value) if node.value else None
         var_type = node.var_type if node.var_type else "int"
 
-        is_alloc_call = (
-            isinstance(node.value, CallExpr)
-            and getattr(node.value.callee, 'name', None) in ("alloc", "alloc_bytes")
+        callee_name = (
+            getattr(node.value.callee, 'name', None)
+            if isinstance(node.value, CallExpr) else None
         )
+        is_alloc_call = callee_name == "alloc"
+        is_alloc_bytes_call = callee_name == "alloc_bytes"
 
         is_struct_like = (
             (var_type in self.struct_types and not var_type.endswith("*"))
@@ -60,7 +62,11 @@ class VarDeclMixin:
         )
 
         if is_alloc_call:
+            # alloc(N) → N elementos de i64 (N*8 bytes)
             llvm_ty = self.i64_ty.as_pointer()
+        elif is_alloc_bytes_call:
+            # alloc_bytes(N) → N bytes (stride 1)
+            llvm_ty = self.i8_ty.as_pointer()
         elif is_struct_like:
             struct_ty = self.get_llvm_type(var_type)
             llvm_ty = struct_ty.as_pointer()
@@ -144,5 +150,5 @@ class VarDeclMixin:
             except Exception:
                 pass
 
-        if is_alloc_call:
+        if is_alloc_call or is_alloc_bytes_call:
             self.heap_allocs.add(node.name)

@@ -148,9 +148,32 @@ class FlowMixin:
                 else:
                     elem_ptr = self.builder.gep(arr_val, [idx_val])
 
-                if val.type != elem_ptr.type.pointee:
+                elem_ty = elem_ptr.type.pointee
+
+                # Normaliza val para o tipo do elemento.
+                # alloc_bytes() cria i8*, então primes[i] = 1 escreve 1 byte.
+                if isinstance(elem_ty, ir.IntType) and elem_ty.width < 64:
+                    if isinstance(val.type, ir.IntType):
+                        if val.type.width > elem_ty.width:
+                            val = self.builder.trunc(val, elem_ty, name="idx_trunc")
+                        elif val.type.width < elem_ty.width:
+                            val = self.builder.sext(val, elem_ty, name="idx_sext")
+                    else:
+                        # Valores não-int (ptr, float) → ptrtoint/fptosi + trunc
+                        if isinstance(val.type, ir.PointerType):
+                            val = self.builder.ptrtoint(val, self.i64_ty, name="idx_ptrtoint")
+                            val = self.builder.trunc(val, elem_ty, name="idx_trunc")
+                        elif val.type == self.f64_ty:
+                            val = self.builder.fptosi(val, elem_ty, name="idx_fptosi")
+                elif elem_ty == self.f64_ty and val.type == self.i64_ty:
+                    val = self.builder.sitofp(val, self.f64_ty, name="idx_sitofp")
+                elif isinstance(elem_ty, ir.PointerType) and val.type == self.i64_ty:
+                    val = self.builder.inttoptr(val, elem_ty, name="idx_inttoptr")
+                elif elem_ty != val.type:
+                    # Fallback: força cast via ponteiro (comportamento antigo)
                     elem_ptr_int = self.builder.ptrtoint(elem_ptr, self.i64_ty, name="idx_elem_int")
                     elem_ptr = self.builder.inttoptr(elem_ptr_int, val.type.as_pointer(), name="idx_elem_cast")
+
                 self.builder.store(val, elem_ptr)
 
     def visit_ReturnStmt(self, node):

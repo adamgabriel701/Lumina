@@ -132,6 +132,16 @@ class ExpressionAnalyzer(NodeVisitor):
                         self.filename, getattr(node, 'line', 0), getattr(node, 'col', 0), self.source_code,
                     )
         else:
+            # NOVO: chamada indireta via function pointer local.
+            # Caso `f: fn` em parâmetro, ou `let f = fn(...)`. O codegen
+            # já suporta chamadas indiretas (`codegen_user_call` tem
+            # o branch "indirect call"), mas o semantic estava rejeitando.
+            info = self.get_var_info(func_name) if func_name else None
+            if info is not None and info.get('type') == 'fn':
+                for arg in node.args:
+                    self.visit(arg)
+                return "int"
+
             if func_name not in self.builtin_functions and func_name not in self.functions:
                 suggestion = get_suggestion(func_name, list(self.functions) + list(self.builtin_functions))
                 msg = f"Função '{func_name}' não declarada."

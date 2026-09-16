@@ -364,7 +364,13 @@ class ExpressionParser(ParserBase):
         return IndexExpr(base_node, first)
 
     def parse_type(self):
-        type_name = self.expect(TokenType.IDENT).value
+        # NOVO: aceita a keyword `fn` como tipo (function pointer).
+        # Sem isso, `f: fn` em parâmetros/retornos falha em `expect(IDENT)`.
+        if self.check(TokenType.FN):
+            self.consume()
+            type_name = "fn"
+        else:
+            type_name = self.expect(TokenType.IDENT).value
         if self.check(TokenType.LT):
             self.consume()
             args = [self.parse_type()]

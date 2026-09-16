@@ -124,14 +124,10 @@ class AggregatesMixin:
             if isinstance(stmt, ExprBase):
                 val = self.visit(stmt)
                 if ret_ty != ir.VoidType() and val.type != ret_ty:
-                    if ret_ty == self.i64_ty and val.type == self.f64_ty:
-                        val = self.builder.fptosi(val, self.i64_ty, name="lambda_ret_cast")
-                    elif ret_ty == self.f64_ty and val.type == self.i64_ty:
-                        val = self.builder.sitofp(val, self.f64_ty, name="lambda_ret_cast")
-                    elif isinstance(ret_ty, ir.PointerType) and val.type == self.i64_ty:
-                        val = self.builder.inttoptr(val, ret_ty, name="lambda_ret_cast")
-                    elif ret_ty == self.i64_ty and isinstance(val.type, ir.PointerType):
-                        val = self.builder.ptrtoint(val, self.i64_ty, name="lambda_ret_cast")
+                    # _coerce_for_store cobre int↔int (zext/sext/trunc),
+                    # int↔float, ptr↔int e ptr↔ptr. É o que precisamos
+                    # para lambdas que retornam bool (i1) em assinatura i64.
+                    val = self._coerce_for_store(val, ret_ty, name_hint="lambda_ret")
                 self.builder.ret(val)
                 break
             else:

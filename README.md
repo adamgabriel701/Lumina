@@ -5,9 +5,9 @@
 [![Python Version](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![Status](https://img.shields.io/badge/Status-Alpha%20%2F%20Active-green.svg)](#)
 [![Language](https://img.shields.io/badge/Language-Lumina-6A0DAD.svg)](#)
-[![Features](https://img.shields.io/badge/features-24%2F24-success.svg)](#-status-de-implementação)
+[![Features](https://img.shields.io/badge/features-28%2F28-success.svg)](#-status-de-implementação)
 [![Tests](https://img.shields.io/badge/tests-118%20passed%20%2B%201%20skip-brightgreen.svg)](#-testes-automatizados)
-[![Examples](https://img.shields.io/badge/examples-61%2F61%20%2B%201%20skip-success.svg)](#)
+[![Examples](https://img.shields.io/badge/examples-63%2F63%20%2B%201%20skip-success.svg)](#)
 
 **Lumina** é uma linguagem de programação de sistemas de propósito geral, focada em alta performance, ergonomia moderna, concorrência e segurança de memória. Ela combina a sintaxe limpa e expressiva baseada em indentação (estilo Python/Nim) com o poder de baixo nível e otimização industrial do backend **LLVM**.
 
@@ -18,11 +18,13 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
 ## ✨ Funcionalidades Principais
 
 * **Sintaxe Limpa & Ergonômica:** Escopo definido por indentação significativa. Sem chaves `{}` ou pontos e vírgula `;`.
-* **Standard Library Bootstrapped:** Módulos como `std/math`, `std/str`, `std/time`, `std/list`, `std/channel` e `std/async_fs` são escritos 100% na própria Lumina.
+* **Standard Library Bootstrapped:** Módulos como `std/math`, `std/str`, `std/time`, `std/vector`, `std/map`, `std/set`, `std/deque`, `std/iter` e `std/async_fs` são escritos 100% na própria Lumina.
+* **Coleções Nativas:** `Vector` (array dinâmico), `Map` (hash map), `Set` (conjunto) e `Deque` (fila dupla) com API consistente de structs + métodos.
+* **Adaptadores Funcionais (`std/iter`):** `map`, `filter`, `count_if`, `sum`, `sum_by`, `product`, `min`, `max`, `all`, `any`, `find_index`, `copy`, `fill`, `for_each`, `reverse` — com suporte a lambdas.
 * **Tipagem Estática com Inferência:** O compilador deduz os tipos automaticamente, incluindo retornos de métodos, generics, lambdas, operações binárias, `Option<T>` e `comptime`.
 * **Generics com Monomorphization:** Suporte a tipos genéricos `<T>` que geram cópias especializadas em tempo de compilação, garantindo zero overhead de runtime. Cobre funções e structs (`Box<int>`, `Box<float>`, ...).
 * **Tipos Algébricos (ADTs) & Pattern Matching:** `enum`s com **múltiplos payloads** (`Dois(int, int)`) e extração via `match` ou `switch`. O compilador checa a exaustividade dos casos.
-* **`Option<T>` e `NoneExpr`:** `none` é um literal dedicado que constrói `Option::None`. `Option` (sem args) é compatível com qualquer `Option<X>` via `is_assignable`.
+* **`Option<T>` e `NoneExpr`:** `none` é um literal dedicado que constrói `Option::None` e é compatível com `ptr` (null pointer).
 * **`comptime` real (constant folding):** `comptime(2 + 3 * 4)` é avaliado em compile-time e vira um literal no IR.
 * **Pattern Matching em Structs:** Destructuring direto no `match` para extrair campos de structs literais.
 * **Closures (Lambdas):** Funções anônimas inline (`fn(x: int) -> int: x * 2`) com suporte a **function pointers**.
@@ -35,6 +37,7 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
   * **Propagação de Erros (`?`):** Retorna erros automaticamente em funções que retornam `Result`.
   * **Casting Explícito (`as`):** `10 as float`, `ptr as int`.
   * **String / Array Slicing:** Fatiamento nativo: `texto[1..5]`, `arr[1..4]`, `arr[..3]`, `arr[2..]`, `arr[..]`.
+  * **Operadores Bitwise:** `&`, `|`, `^`, `~`, `<<`, `>>` funcionam em inteiros.
   * **Switch Statements:** Sintaxe limpa de salto (jump table nativa do LLVM) para inteiros e enums.
   * **Defer & Assert:** Garantia de limpeza de escopo e testes nativos.
   * **Auto-Formatter:** `lumina fmt` formata o código automaticamente (AST-based), **preservando comentários** (linha e bloco). Suporta `--check` para pre-commit.
@@ -45,11 +48,13 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
   * **Async I/O:** Event Loop não-bloqueante de baixa latência usando `epoll` e `O_NONBLOCK`.
 * **Gerenciamento de Memória Avançado:**
   * **Garbage Collector:** Integração nativa com o **Boehm GC** (`libgc`).
+  * **Structs no Heap:** Structs locais que podem escapar (retornadas de funções, armazenadas em campos) são alocadas no heap. O Boehm GC cuida da liberação.
   * **Arena Allocator:** Modo Bare-Metal (`--no-gc`) com alocador determinístico.
 * **Otimizações de Compilador:**
   * Tail Call Optimization (TCO), Constant Folding, Comptime Evaluation.
   * **Níveis de otimização:** `-O0` (debug), `-O2` (padrão), `-O3` (`--release`).
   * **Forward Declarations:** Funções podem ser chamadas antes de serem definidas no arquivo.
+  * **Top-level constants inlined:** `let X = 42` no topo é inline em cada uso.
   * **Build Incremental:** A CLI detecta se o LLVM IR não mudou e pula a linkagem. O hash inclui os fontes do compilador — mudanças em `.py` também invalidam o cache. O hash de link inclui a flag de otimização.
   * **Debug Info (DWARF):** Gera metadados de depuração (`--debug`) permitindo inspectar código `.lm` no GDB/LLDB.
 * **Configuração de Link (`[link]`):** Linka bibliotecas C/C++ (`libs`), compila objetos auxiliares (`extra_objects`), força targets (`target = "wasm"`) e passa flags extras ao linker (`extra_flags`), via `lumina.toml` ou sidecar `.toml` ao lado do `.lm`.
@@ -60,7 +65,7 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
 
 ## 📊 Status de Implementação
 
-Todas as 24 features testadas em `tests/features/uncertain_features.lm` estão funcionando e validadas por CI local:
+Todas as 28 features testadas em `tests/features/uncertain_features.lm` estão funcionando e validadas por CI local:
 
 | # | Feature | Status |
 |---|---|---|
@@ -89,10 +94,10 @@ Todas as 24 features testadas em `tests/features/uncertain_features.lm` estão f
 | 22 | Lambda com bloco | ✅ |
 | 23 | Trait com método default | ✅ |
 | 24 | Match em string | ✅ |
-| **25** | **`Option<T>` + `NoneExpr`** | ✅ |
-| **26** | **`comptime` (constant folding)** | ✅ |
-| **27** | **`SliceExpr` dedicado** | ✅ |
-| **28** | **Auto-formatter preserva comentários** | ✅ |
+| 25 | `Option<T>` + `NoneExpr` | ✅ |
+| 26 | `comptime` (constant folding) | ✅ |
+| 27 | `SliceExpr` dedicado | ✅ |
+| 28 | Auto-formatter preserva comentários | ✅ |
 
 ---
 
@@ -142,10 +147,10 @@ Compila, executa, e valida cada linha esperada do `tests/features/uncertain_feat
 ./scripts/check_examples.sh
 ```
 
-Compila **todos** os 61 arquivos de `examples/`, respeitando a `tests/features/skip.txt`:
+Compila **todos** os 63 arquivos de `examples/`, respeitando a `tests/features/skip.txt`:
 
 ```
-📊 PASS: 61    ⏭️  SKIP: 1    ❌ FAIL: 0
+📊 PASS: 63    ⏭️  SKIP: 1    ❌ FAIL: 0
 ```
 
 O único skip é `util.lm` — módulo auxiliar que não tem `fn main()`, importado por outros exemplos.
@@ -483,7 +488,100 @@ fn main() -> int:
     return 0
 ```
 
-### 6. Traits com Métodos Padrão
+### 6. Vector (Array Dinâmico)
+```lumina
+import "std/vector"
+
+fn main() -> int:
+    mut v = new_vector()
+    v.push(10)
+    v.push(20)
+    v.push(30)
+
+    print("len:", v.len)
+    print("get(0):", v.get(0))
+    print("sum:", v.sum())
+    print("is_empty:", v.is_empty())
+    return 0
+```
+
+### 7. Map (Hash Map)
+```lumina
+import "std/map"
+
+fn main() -> int:
+    mut m = new_map()
+    m.insert(10, 100)
+    m.insert(26, 200)
+    m.insert(42, 999)
+
+    print("get(10):", m.get(10))
+    print("get(42):", m.get(42))
+    print("contains(10):", m.contains(10))
+    print("contains(99):", m.contains(99))
+    return 0
+```
+
+### 8. Set (Conjunto)
+```lumina
+import "std/set"
+
+fn main() -> int:
+    mut s = new_set()
+    s.add(1)
+    s.add(2)
+    s.add(3)
+    s.add(1)          # no-op (já existe)
+
+    print("size:", s.size)
+    print("contains(1):", s.contains(1))
+    print("contains(99):", s.contains(99))
+    return 0
+```
+
+### 9. Deque (Fila Dupla, buffer circular)
+```lumina
+import "std/deque"
+
+fn main() -> int:
+    mut d = new_deque()
+    d.push_back(1)
+    d.push_back(2)
+    d.push_front(0)
+
+    print("size:", d.size)
+    print("pop_front:", d.pop_front())
+    print("pop_back:", d.pop_back())
+    return 0
+```
+
+### 10. Adaptadores Funcionais (`std/iter`)
+```lumina
+import "std/iter"
+
+fn main() -> int:
+    let n = 5
+    mut arr = alloc(n)
+    arr[0] = 1
+    arr[1] = 2
+    arr[2] = 3
+    arr[3] = 4
+    arr[4] = 5
+
+    print("Soma:", sum(arr, n))
+    print("Max:", max(arr, n))
+
+    # map com lambda
+    let dobrados = map(arr, n, fn(x: int) -> int: x * 2)
+    print("Dobrados somam:", sum(dobrados, n))
+
+    # filter com predicado
+    let npares = count_if(arr, n, fn(x: int) -> int: (x % 2) == 0)
+    print("Quantidade de pares:", npares)
+    return 0
+```
+
+### 11. Traits com Métodos Padrão
 ```lumina
 trait Greeter:
     fn greet():
@@ -501,7 +599,42 @@ fn main() -> int:
     return 0
 ```
 
-### 7. Generics com Monomorphization
+### 12. Operator Overloading
+```lumina
+struct Vector2:
+    x: int
+    y: int
+
+impl Vector2:
+    fn __add__(a: Vector2, b: Vector2) -> Vector2:
+        mut result: Vector2
+        result.x = a.x + b.x
+        result.y = a.y + b.y
+        return result
+
+    fn __eq__(a: Vector2, b: Vector2) -> int:
+        if a.x == b.x and a.y == b.y:
+            return 1
+        return 0
+
+fn main() -> int:
+    mut v1: Vector2
+    v1.x = 10
+    v1.y = 20
+    mut v2: Vector2
+    v2.x = 5
+    v2.y = 5
+
+    let v3 = v1 + v2       # chama Vector2___add__
+    print("V3 X:", v3.x)
+    print("V3 Y:", v3.y)
+
+    let iguais = v1 == v2  # chama Vector2___eq__
+    print("iguais?", iguais)
+    return 0
+```
+
+### 13. Generics com Monomorphization
 ```lumina
 fn identidade<T>(x: T) -> T:
     return x
@@ -514,7 +647,7 @@ fn main() -> int:
     return 0
 ```
 
-### 8. Navegação Segura e Propagação de Erros
+### 14. Navegação Segura e Propagação de Erros
 ```lumina
 struct Node:
     value: int
@@ -540,7 +673,7 @@ fn main() -> int:
     return 0
 ```
 
-### 9. Canais de Concorrência (CSP)
+### 15. Canais de Concorrência (CSP)
 ```lumina
 import "std/channel"
 
@@ -552,28 +685,50 @@ fn main() -> int:
     return 0
 ```
 
+### 16. Bitwise e Shifts
+```lumina
+fn main() -> int:
+    let x = 0b1100 & 0b1010     # and
+    let y = 0b1100 | 0b1010     # or
+    let z = 0b1100 ^ 0b1010     # xor
+    let w = 1 << 4              # shl
+    let v = 256 >> 2            # shr
+    print(x, y, z, w, v)
+    return 0
+```
+
 ---
 
 ## 📦 Standard Library (`std/`)
 
+### Fundamentos
+* `std/prelude`: Tipos `Option` e `Result` disponíveis em todos os arquivos.
 * `std/math`: Funções matemáticas via FFI (`potencia`, `raiz_quadrada`, `valor_absoluto`).
 * `std/str`: Manipulação de strings (`to_upper`, `to_lower`, `trim`, `split`, `join`, `find`, `substr`).
-* `std/list`: Lista Ligada (Linked List) dinâmica usando Structs e Ponteiros.
-* `std/channel`: Canais de concorrência seguros entre threads (CSP).
-* `std/async_fs`: I/O de arquivos não-bloqueante usando `O_NONBLOCK`.
 * `std/time`: Medição de tempo de alta precisão.
 * `std/fs`: Manipulação de arquivos.
-* `std/http`: Web Framework HTTP nativo.
-* `std/net`: Sockets TCP e Proxy Reverso.
-* `std/async`: Green Threads e troca de contexto (ucontext).
-* `std/epoll`: Event Loop Assíncrono (I/O não-bloqueante).
-* `std/vector`: Array Dinâmico que cresce automaticamente na memória.
-* `std/map`: Hash Map (Dicionário) com tratamento de colisões.
 * `std/alloc`: Arena Allocator para sistemas Bare-Metal.
+
+### Coleções
+* `std/vector`: Array dinâmico que cresce automaticamente (`push`, `pop`, `get`, `set`, `clear`, `is_empty`, `sum`, `reserve`).
+* `std/map`: Hash map de `int → int` com colisão linear (`insert`, `get`, `contains`, `remove`).
+* `std/set`: Conjunto de `int` usando hash table (`add`, `contains`, `remove`).
+* `std/deque`: Fila dupla com buffer circular (`push_back`, `push_front`, `pop_front`, `pop_back`, `get`, `is_empty`).
+* `std/list`: Lista Ligada (Linked List) dinâmica usando Structs e Ponteiros.
+* `std/iter`: Adaptadores funcionais (`map`, `filter`, `count_if`, `sum`, `sum_by`, `product`, `min`, `max`, `all`, `any`, `find_index`, `copy`, `fill`, `for_each`, `reverse`).
+
+### Concorrência e I/O
+* `std/channel`: Canais de concorrência seguros entre threads (CSP).
+* `std/async`: Green Threads e troca de contexto (ucontext).
+* `std/async_fs`: I/O de arquivos não-bloqueante usando `O_NONBLOCK`.
+* `std/epoll`: Event Loop Assíncrono (I/O não-bloqueante).
+* `std/net`: Sockets TCP e Proxy Reverso.
+* `std/http`: Web Framework HTTP nativo.
+
+### Integração e Ferramentas
 * `std/json`: Parser de JSON nativo escrito em Lumina.
 * `std/sqlite`: Bindings para banco de dados SQLite.
 * `std/raylib`: Bindings para engine gráfica Raylib.
-* `std/prelude`: Tipos `Option` e `Result` disponíveis em todos os arquivos.
 
 ---
 
@@ -601,7 +756,7 @@ Lumina/
 ├── lumina-vscode/              # Extensão VS Code (Syntax + LSP Client + Server)
 ├── std/                        # Standard Library (.lm)
 ├── benchmarks/                 # Benchmarks (Lumina vs C, Rust, Go, Node, Python)
-├── examples/                   # 61 exemplos + sidecars [link]
+├── examples/                   # 63 exemplos + sidecars [link]
 ├── scripts/
 │   ├── check_examples.sh       #   Compila todos os exemplos (PASS/SKIP/FAIL)
 │   └── run_benchmarks.sh       #   Roda a suíte de benchmarks
@@ -635,12 +790,15 @@ A Lumina oferece suporte a realce de sintaxe, regras de indentação, **Autocomp
 
 ## 📝 Notas e Limitações Conhecidas
 
-* **Escape analysis:** os dados de escape são coletados no semantic (`analyzer.escapes`), mas a alocação automática Stack↔Heap ainda não foi conectada ao codegen — hoje tudo passa pelo Boehm GC quando o GC está ativo.
+* **Escape analysis:** os dados de escape são coletados no semantic (`analyzer.escapes`), mas a alocação automática Stack↔Heap ainda não foi conectada ao codegen. Por segurança, **toda struct local é alocada no heap** — o Boehm GC cuida da liberação.
 * **`dois as int`:** o operador `as` só faz cast entre tipos primitivos e ponteiros; cast entre structs requer método explícito.
 * **Pattern matching em structs via `match`:** suportado em `MatchExpr` (expressões), ainda não em `MatchStmt` (statements com bloco).
 * **Validação de tipo por campo em struct literals:** `P { x: "texto", y: 2 }` com `x: int` não é detectado (só a existência dos campos é checada).
 * **`arr[a..]` sem `end`:** em strings, usa `strlen`; em arrays, assume length 0 (limitação do codegen atual — não há `len()` para `ptr`).
 * **`comptime`:** suporta apenas constant folding de literais e operações aritméticas (`+`, `-`, `*`, `/`, `%`, unário `-`). Chamadas de função em compile-time ainda não são suportadas.
+* **`std/map` e `std/set`:** não redimensionam (cap fixo). Inserir mais que `MAP_INITIAL_CAP` (16) elementos pode falhar. Crescimento/rehash fica para uma versão futura.
+* **`std/deque`:** capacidade fixa (`DEQUE_INITIAL_CAP = 16`). `push` além disso corrompe memória. `grow()` fica para uma versão futura.
+* **`std/iter` callbacks:** como o codegen só suporta chamadas indiretas com assinatura `i64 -> i64`, todas as funções de callback recebem e retornam `int`. Para predicados, use 1 = true / 0 = false.
 
 ---
 
@@ -651,6 +809,7 @@ A Lumina oferece suporte a realce de sintaxe, regras de indentação, **Autocomp
 - [x] Generics com monomorphization
 - [x] Pattern matching (int, enum, string, struct)
 - [x] Traits com métodos default
+- [x] Operator overloading (`__add__`, `__eq__`, ...)
 - [x] Validação de tipo em VarDecl/Assign/Return/conditions
 - [x] Configuração de link (`[link]`) com suporte a C/C++/WASM
 - [x] `-O0`/`-O2`/`-O3` configuráveis
@@ -662,11 +821,17 @@ A Lumina oferece suporte a realce de sintaxe, regras de indentação, **Autocomp
 - [x] `lumina fmt --check` (pre-commit)
 - [x] `lumina doc --format=html|md|json`
 - [x] Formatter preservando comentários
+- [x] `std/iter` (adaptadores funcionais)
+- [x] `std/vector` (array dinâmico)
+- [x] `std/map` (hash map)
+- [x] `std/set` (conjunto)
+- [x] `std/deque` (fila dupla)
 - [ ] LSP completo (hover, rename, find references)
 - [ ] Self-hosting (bootstrapping)
-- [ ] `std/iter` (adaptadores `map`, `filter`, `fold`)
 - [ ] `--target=aarch64-linux` (cross-compile)
 - [ ] Macros ou `@derive(Eq, Debug)`
+- [ ] `std/map` com rehash automático
+- [ ] `std/deque` com `grow()` automático
 
 ---
 

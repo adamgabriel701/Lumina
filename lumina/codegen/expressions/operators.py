@@ -167,6 +167,31 @@ class OperatorsMixin:
                 elif node.op == '%':
                     return self.builder.srem(left, right, name="mod")
 
+        # Bitwise e shifts
+        if node.op in ('&', '|', '^', '<<', '>>'):
+            if left.type == self.voidptr_ty or right.type == self.voidptr_ty:
+                return ir.Constant(self.i64_ty, 0)
+            left, right = self._normalize_ints(left, right)
+            if left.type != right.type:
+                # Força ambos para i64 (o normalize já faz o comum, mas
+                # se ainda houver mismatch, trunca/estende)
+                if isinstance(left.type, ir.IntType) and isinstance(right.type, ir.IntType):
+                    if left.type.width < right.type.width:
+                        left = self.builder.sext(left, right.type, name="bw_ext_l")
+                    else:
+                        right = self.builder.sext(right, left.type, name="bw_ext_r")
+            if node.op == '&':
+                return self.builder.and_(left, right, name="bitand")
+            if node.op == '|':
+                return self.builder.or_(left, right, name="bitor")
+            if node.op == '^':
+                return self.builder.xor(left, right, name="bitxor")
+            if node.op == '<<':
+                return self.builder.shl(left, right, name="shl")
+            if node.op == '>>':
+                # Shift aritmético (signed) — o `>>` em Lumina preserva sinal
+                return self.builder.ashr(left, right, name="ashr")
+
         # Comparações
         if node.op in ('==', '!=', '<', '>', '<=', '>='):
             # NOVO: normaliza antes de comparar

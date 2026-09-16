@@ -1,82 +1,93 @@
-## Map: hash map de int -> int com tratamento de colisão por encadeamento.
+## Map: hash map de int → int com dois arrays paralelos.
 ## Uso:
-##   mut m = Map { buckets: none, size: 0, cap: 0 }
+##   mut m = new_map()
 ##   m.insert(42, 100)
-##   print(m.get(42))
+##   print(m.get(42))   # 100
 struct Map:
-    buckets: ptr
+    keys: ptr      # -1 = slot vazio
+    values: ptr
     size: int
     cap: int
 
-# Capacidade inicial (potência de 2 ajuda no hash).
 let MAP_INITIAL_CAP = 16
 
-## Hash simples: `key & (cap - 1)`. Funciona bem com cap potência de 2.
 fn _map_hash(key: int, cap: int) -> int:
     return key & (cap - 1)
 
 impl Map:
-    ## Cria um Map vazio.
-    fn new() -> Map:
-        mut m: Map
-        m.cap = MAP_INITIAL_CAP
-        m.size = 0
-        m.buckets = alloc(MAP_INITIAL_CAP)
-        mut i = 0
-        while i < MAP_INITIAL_CAP:
-            m.buckets[i] = -1
-            i += 1
-        return m
-
     ## Insere ou atualiza um par chave-valor.
+    ## Se a chave já existe, atualiza o valor.
     fn insert(key: int, value: int):
         let idx = _map_hash(key, self.cap)
         mut i = idx
         mut probes = 0
         while probes < self.cap:
-            if self.buckets[i] == -1 or self.buckets[i] == key * 0 - 1:
-                # Slot vazio (marcado com -1)
-                self.buckets[i] = key
-                self.data_write(i, value)
+            if self.keys[i] == -1:
+                self.keys[i] = key
+                self.values[i] = value
                 self.size += 1
                 return
-            elif self.buckets[i] == key:
-                self.data_write(i, value)
+            if self.keys[i] == key:
+                self.values[i] = value
                 return
             i = (i + 1) & (self.cap - 1)
             probes += 1
 
-    fn data_write(i: int, value: int):
-        # Por enquanto, guardamos os valores num segundo array.
-        # Simplificação: chaves e valores no mesmo array intercalados.
-        # (Melhor prática seria um array de structs, mas o codegen
-        # atual não suporta array de struct — só i64.)
-        pass
-
-    ## Busca um valor pela chave. Retorna -1 se não achar.
+    ## Busca um valor. Retorna -1 se não achar.
     fn get(key: int) -> int:
         let idx = _map_hash(key, self.cap)
         mut i = idx
         mut probes = 0
         while probes < self.cap:
-            if self.buckets[i] == -1:
+            if self.keys[i] == -1:
                 return -1
-            if self.buckets[i] == key:
-                return 0
+            if self.keys[i] == key:
+                return self.values[i]
             i = (i + 1) & (self.cap - 1)
             probes += 1
         return -1
 
+    ## Retorna 1 se a chave existe; senão 0.
+    fn contains(key: int) -> int:
+        let idx = _map_hash(key, self.cap)
+        mut i = idx
+        mut probes = 0
+        while probes < self.cap:
+            if self.keys[i] == -1:
+                return 0
+            if self.keys[i] == key:
+                return 1
+            i = (i + 1) & (self.cap - 1)
+            probes += 1
+        return 0
+
+    ## Remove uma chave. Retorna 1 se removeu; 0 se não achou.
+    ## Marca com -2 (tombstone) para não quebrar a cadeia de probes.
+    fn remove(key: int) -> int:
+        let idx = _map_hash(key, self.cap)
+        mut i = idx
+        mut probes = 0
+        while probes < self.cap:
+            if self.keys[i] == -1:
+                return 0
+            if self.keys[i] == key:
+                self.keys[i] = -2
+                self.size -= 1
+                return 1
+            i = (i + 1) & (self.cap - 1)
+            probes += 1
+        return 0
 
 ## Cria um novo Map vazio (função livre).
-## Uso: mut m = new_map(); m.insert(42, 100)
 fn new_map() -> Map:
     mut m: Map
     m.cap = MAP_INITIAL_CAP
     m.size = 0
-    m.buckets = alloc(MAP_INITIAL_CAP)
+    m.keys = alloc(MAP_INITIAL_CAP)
+    m.values = alloc(MAP_INITIAL_CAP)
     mut i = 0
     while i < MAP_INITIAL_CAP:
-        m.buckets[i] = -1
+        m.keys[i] = -1
+        m.values[i] = 0
         i += 1
     return m

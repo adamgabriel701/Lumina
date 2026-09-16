@@ -126,6 +126,15 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
                 decl.methods.append(default_method)
 
     def generate_module(self, ast):
+        # 0. NOVO: coleta VarDecls de topo (globais) para inlining.
+        # Top-level `let X = <literal>` é tratado como constante em
+        # tempo de compilação — o codegen inlineia o valor em cada uso
+        # em vez de emitir uma global LLVM.
+        self.global_var_decls = {}
+        for decl in ast:
+            if type(decl).__name__ == 'VarDecl' and getattr(decl, 'value', None) is not None:
+                self.global_var_decls[decl.name] = decl
+
         # 1. Pré-registra todas as structs e enums
         for decl in ast:
             if hasattr(decl, 'name') and decl.name in self.struct_defs:

@@ -24,9 +24,16 @@ class MembersMixin:
 
     def visit_VariableExpr(self, node):
         ptr = self.symbol_table.get(node.name)
-        if not ptr:
-            return ir.Constant(self.i64_ty, 0)
-        return self.builder.load(ptr, name=node.name + "_load")
+        if ptr:
+            return self.builder.load(ptr, name=node.name + "_load")
+
+        # NOVO: top-level `let X = <literal>` vira constante inline.
+        # Sem isso, `MAP_INITIAL_CAP` usado dentro de funções retorna 0.
+        global_node = getattr(self, 'global_var_decls', {}).get(node.name)
+        if global_node is not None:
+            return self.visit(global_node.value)
+
+        return ir.Constant(self.i64_ty, 0)
 
     def visit_MemberExpr(self, node):
         """Acesso a campo, com suporte a safe navigation (`?.`)."""

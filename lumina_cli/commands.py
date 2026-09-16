@@ -419,6 +419,17 @@ def cmd_build(entry_file=None, extra_flags=[]):
         extra_flags.append("--wasm")
         info(f"🎯 Target '{link_target}' detectado em [link] — forçando --wasm")
 
+    # NOVO: extrai --target=<triple> antes de qualquer coisa.
+    # `--target=aarch64-linux-gnu` etc.
+    target_triple = None
+    filtered_flags = []
+    for f in extra_flags:
+        if f.startswith("--target="):
+            target_triple = f.split("=", 1)[1]
+        else:
+            filtered_flags.append(f)
+    extra_flags = filtered_flags
+
     is_no_gc = "--no-gc" in extra_flags
     is_wasm = "--wasm" in extra_flags
     is_debug = "--debug" in extra_flags
@@ -437,7 +448,8 @@ def cmd_build(entry_file=None, extra_flags=[]):
     cache_use = not (is_wasm or is_debug)
 
     llvm_ir = compile_lumina(entry, use_cache=cache_use, is_wasm=is_wasm,
-                             is_debug=is_debug, on_error=_report_error)
+                             is_debug=is_debug, on_error=_report_error,
+                             target_triple=target_triple)
     if not llvm_ir:
         return None
 
@@ -491,8 +503,17 @@ def cmd_build(entry_file=None, extra_flags=[]):
         if is_no_gc:
             warn("⚠️ Modo Bare-Metal (--no-gc): Garbage Collector desativado.")
 
-        cmd_args = ["clang", opt_flag, "-Wno-override-module", debug_flag,
-                    ir_file, "-o", project_name, "-lc", "-lm", "-lpthread"]
+        if target_triple:
+            info(f"🎯 Cross-compilando para: {paint(target_triple, Color.BOLD)}")
+            warn("⚠️ Cross-compile requer sysroot/toolchain do target no PATH "
+                 "(ex: gcc-aarch64-linux-gnu). libgc precisa estar linkável "
+                 "para o target, ou use --no-gc.")
+
+        cmd_args = ["clang"]
+        if target_triple:
+            cmd_args.append(f"--target={target_triple}")
+        cmd_args.extend([opt_flag, "-Wno-override-module", debug_flag,
+                         ir_file, "-o", project_name, "-lc", "-lm", "-lpthread"])
 
         if gc_flag:
             cmd_args.append(gc_flag)

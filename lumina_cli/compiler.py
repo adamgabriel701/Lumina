@@ -85,13 +85,17 @@ def parse_module(filename):
 
 
 def compile_lumina(filename, output_file="output.ll", use_cache=True,
-                   is_wasm=False, is_debug=False, on_error=None):
+                   is_wasm=False, is_debug=False, on_error=None,
+                   target_triple=None):
     cache_dir = ".lumina_cache"
     raw_hash = get_cache_hash(filename)
     if is_wasm:
         raw_hash += "_wasm"
     if is_debug:
         raw_hash += "_debug"
+    if target_triple:
+        # sanitiza o triple para virar parte do nome do arquivo
+        raw_hash += "_" + target_triple.replace("-", "_").replace(".", "_")
     cache_file = os.path.join(cache_dir, raw_hash + ".ll") if use_cache else None
 
     if use_cache and os.path.exists(cache_file):
@@ -126,7 +130,7 @@ def compile_lumina(filename, output_file="output.ll", use_cache=True,
         return None
 
     header("3. Geração de Código LLVM IR")
-    codegen = LLVMCodegen()
+    codegen = LLVMCodegen(target_triple=target_triple)
     codegen.escapes = analyzer.escapes
     codegen.is_wasm = is_wasm
     codegen.is_debug = is_debug

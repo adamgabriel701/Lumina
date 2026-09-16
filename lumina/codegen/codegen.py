@@ -10,14 +10,15 @@ from ..ast import Function as AstFunction, Param, TraitDecl
 
 
 class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCodegen):
-    def __init__(self):
+    def __init__(self, target_triple=None):
         self.module = ir.Module(name="lumina_module")
 
-        # Consistência com o triple do host — evita o warning
-        # "overriding the module target triple" do clang.
+        # Consistência com o triple do alvo (ou do host, se não
+        # especificado). Evita o warning "overriding the module
+        # target triple" do clang e é essencial para cross-compile.
         try:
             from llvmlite.binding import get_default_triple
-            self.module.triple = get_default_triple()
+            self.module.triple = target_triple or get_default_triple()
         except Exception:
             pass
 

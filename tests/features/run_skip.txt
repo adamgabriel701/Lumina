@@ -1,0 +1,11 @@
+# Exemplos que NÃO devem ser executados no modo --run do check_examples.sh.
+# Motivo: abrem sockets, threads, ou produzem output não determinístico.
+
+gc_test.lm            # output de GC depende da implementação
+http_framework.lm     # abre servidor HTTP (bloqueia)
+json_parser.lm        # output muito grande para comparar
+proxy.lm              # abre proxy reverso (bloqueia)
+serve.lm              # abre servidor (bloqueia)
+server.lm             # abre servidor (bloqueia)
+threads.lm            # output depende do scheduler
+wasm_js_interop.lm    # WASM-only, não roda nativo

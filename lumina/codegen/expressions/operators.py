@@ -249,8 +249,20 @@ class OperatorsMixin:
         if node.op == '-':
             return self.builder.neg(val, name="neg") if val.type == self.i64_ty else self.builder.fneg(val, name="fneg")
         elif node.op == 'not':
-            zero = ir.Constant(val.type, 0)
-            return self.builder.icmp_signed("!=", val, zero, name="not_cond")
+            # `not x` é negação lógica:
+            #   - se `x` é bool (i1):      xor x, 1
+            #   - se `x` é iN (N>1):       icmp eq x, 0  (x é falso se == 0)
+            #   - se `x` é ptr:            icmp eq x, null
+            if isinstance(val.type, ir.IntType) and val.type.width == 1:
+                one = ir.Constant(ir.IntType(1), 1)
+                return self.builder.xor(val, one, name="not_bool")
+            elif isinstance(val.type, ir.IntType):
+                zero = ir.Constant(val.type, 0)
+                return self.builder.icmp_signed("==", val, zero, name="not_int")
+            elif isinstance(val.type, ir.PointerType):
+                null = ir.Constant(val.type, None)
+                return self.builder.icmp_signed("==", val, null, name="not_ptr")
+            return val
         return val
 
     def visit_CastExpr(self, node):

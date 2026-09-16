@@ -3,6 +3,7 @@ from lumina.ast.statements import ErrorNode
 from ..ast import (
     Function, ExternDecl, StructDecl, EnumDecl, ImplBlock,
     VarDecl, VariableExpr, TraitDecl, MatchStmt, Param,
+    UnaryExpr,
 )
 from ..errors import LuminaError
 from .expressions import ExpressionAnalyzer
@@ -31,11 +32,12 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
         """Expande @derive(Eq, Debug, Default, Clone, Display) em
         métodos sintetizados (ImplBlocks) e funções livres.
 
-        - Eq      → `fn {Struct}___eq__(a, b) -> int`
-        - Debug   → `fn {Struct}___debug__(p) -> str`
-        - Display → alias de Debug (mesma assinatura)
-        - Clone   → `fn {Struct}_clone(self) -> {Struct}`
-        - Default → `fn new_{Struct}() -> {Struct}` (função livre)
+        - Eq        → `fn {Struct}___eq__(a, b) -> int`
+        - PartialEq → `__eq__` E `__ne__` (habilita `==` e `!=`)
+        - Debug     → `fn {Struct}___debug__(p) -> str`
+        - Display   → alias de Debug
+        - Clone     → `fn {Struct}_clone(self) -> {Struct}`
+        - Default   → `fn new_{Struct}() -> {Struct}` (função livre)
         """
         from ..ast import ImplBlock
 
@@ -60,10 +62,16 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
                     derives.add(deriv)
 
             # Expande cada derive
-            if 'Eq' in derives:
+            #
+            # NOTA: `PartialEq` gera __eq__ E __ne__ (equivalente ao `==`
+            # e `!=`). `Eq` gera apenas __eq__ (Rust-style: Eq é um
+            # marcador que requer PartialEq, mas em Lumina simplificamos
+            # para "só igualdade").
+            if 'Eq' in derives or 'PartialEq' in derives:
                 methods.append(self._gen_eq(struct_name, decl))
+            if 'PartialEq' in derives:
+                methods.append(self._gen_ne(struct_name, decl))
             if 'Debug' in derives or 'Display' in derives:
-                # Evita duplicar se ambos forem pedidos
                 methods.append(self._gen_debug(struct_name, decl))
             if 'Clone' in derives:
                 methods.append(self._gen_clone(struct_name, decl))
@@ -118,14 +126,15 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
         return Function(mangled_name, [Param('self', struct_name)], struct_name, body)
 
     def _gen_eq(self, struct_name, struct_decl):
-        """Gera: fn {Struct}___eq__(a: Struct, b: Struct) -> int
+        """Gera: fn {Struct}___eq__(a, b) -> bool
 
-        Nome já mangled porque o codegen procura `{Struct}___eq__`
-        na `functions_table`.
+        Nome mangled porque o codegen procura `{Struct}___eq__`.
+        Retorna `bool` (i1) para que `print(p1 == p2)` mostre
+        `true`/`false`.
         """
         from ..ast import (
             Function, Param, BinaryExpr, VariableExpr, MemberExpr,
-            ReturnStmt, IfStmt, NumberExpr,
+            ReturnStmt, IfStmt, BoolExpr,
         )
 
         a_var = VariableExpr('a', 0, 0)
@@ -139,7 +148,7 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
             conditions.append(BinaryExpr('==', a_field, b_field))
 
         if not conditions:
-            cond = NumberExpr('1', False)  # struct vazia: sempre igual
+            cond = BoolExpr(True)  # struct vazia: sempre igual
         elif len(conditions) == 1:
             cond = conditions[0]
         else:
@@ -147,17 +156,50 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
             for c in conditions[1:]:
                 cond = BinaryExpr('and', cond, c)
 
-        then_body = [ReturnStmt([NumberExpr('1', False)])]
+        then_body = [ReturnStmt([BoolExpr(True)])]
         if_stmt = IfStmt(cond, then_body, None)
-        return_stmt = ReturnStmt([NumberExpr('0', False)])
+        return_stmt = ReturnStmt([BoolExpr(False)])
 
-        # Mangled: `Struct + ___ + eq__` = `Struct___eq__`
         mangled_name = f"{struct_name}___eq__"
 
         return Function(
             mangled_name,
             [Param('a', struct_name), Param('b', struct_name)],
-            'int',
+            'bool',
+            [if_stmt, return_stmt],
+        )
+
+    def _gen_ne(self, struct_name, struct_decl):
+        """Gera: fn {Struct}___ne__(a, b) -> bool
+
+        Uso: `a != b`
+        """
+        from ..ast import (
+            Function, Param, BinaryExpr, VariableExpr, CallExpr,
+            ReturnStmt, IfStmt, BoolExpr,
+        )
+
+        a_var = VariableExpr('a', 0, 0)
+        b_var = VariableExpr('b', 0, 0)
+
+        # Chama __eq__(a, b)
+        eq_callee = VariableExpr(f'{struct_name}___eq__', 0, 0)
+        eq_call = CallExpr(eq_callee, [a_var, b_var])
+
+        # if not __eq__(a, b): return True
+        not_eq = UnaryExpr('not', eq_call)
+        then_body = [ReturnStmt([BoolExpr(True)])]
+        if_stmt = IfStmt(not_eq, then_body, None)
+
+        # return False
+        return_stmt = ReturnStmt([BoolExpr(False)])
+
+        mangled_name = f"{struct_name}___ne__"
+
+        return Function(
+            mangled_name,
+            [Param('a', struct_name), Param('b', struct_name)],
+            'bool',
             [if_stmt, return_stmt],
         )
 

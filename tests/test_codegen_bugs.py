@@ -207,7 +207,7 @@ def test_struct_operator_return_valid():
 # ============================================================
 # print(bool)
 # ============================================================
-def test_print_bool_uses_zext():
+def test_print_bool_uses_true_false():
     src = (
         'fn main() -> int:\n'
         '    let x = 1 == 1\n'
@@ -216,8 +216,7 @@ def test_print_bool_uses_zext():
         '    return 0\n'
     )
     out = _run(src)
-    # Deve imprimir "1 0", não caracteres estranhos nem "(null)"
-    assert "1 0" in out
+    assert "true false" in out
     assert "(null)" not in out
 
 
@@ -230,7 +229,7 @@ def test_print_bool_from_comparison():
         '    return 0\n'
     )
     out = _run(src)
-    assert "1" in out
+    assert "true" in out
 
 
 # ============================================================

@@ -124,8 +124,14 @@ class CallsMixin:
                     self.builder.call(self.printf, [self.create_global_string("%f"), val], name="print_call")
                 elif val.type == self.i32_ty:
                     self.builder.call(self.printf, [self.create_global_string("%d"), val], name="print_call")
+                elif isinstance(val.type, ir.IntType) and val.type.width == 1:
+                    # NOVO: bool → "true" / "false" (via select).
+                    true_str = self.create_global_string("true")
+                    false_str = self.create_global_string("false")
+                    val = self.builder.select(val, true_str, false_str, name="print_bool")
+                    self.builder.call(self.printf, [self.create_global_string("%s"), val], name="print_call")
                 elif isinstance(val.type, ir.IntType) and val.type.width < 64:
-                    # i1 (bool), i8, i16 → zext para i64 e imprime como %ld
+                    # i8, i16 → zext para i64 e imprime como %ld
                     val = self.builder.zext(val, self.i64_ty, name="print_zext")
                     self.builder.call(self.printf, [self.create_global_string("%ld"), val], name="print_call")
                 else:

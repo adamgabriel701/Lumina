@@ -1,16 +1,19 @@
 """Análise semântica de statements.
 
 Notas de decisão:
-  * `ArrayExpr` → var_type = "ptr" (codegen trata como i64*)
+  * `BinaryExpr` → var_type inferido pelo operador e tipos dos lados
+  * `ArrayExpr` → var_type = "ptr"
   * `AddressOfExpr` → var_type = "ptr"
   * `DerefExpr` → var_type = "int"
   * `PropagateExpr` → var_type = "int"
   * `LambdaExpr` → var_type = "fn"
+  * `NoneExpr` → var_type = "Option"
+  * `ComptimeExpr` → var_type inferido pelo valor dobrado
+  * `SliceExpr` → var_type = "ptr"
   * Funções genéricas: se o return_type é um type_param (T), infere pelos args
 
-Bug corrigido: corpos de IfStmt/WhileStmt/ForStmt/MatchStmt agora usam
-`analyze_stmt` (não `visit`), que faz a análise semântica real. Antes,
-var decls dentro desses blocos não eram registradas no escopo.
+Bug corrigido: corpos de IfStmt/WhileStmt/ForStmt/MatchStmt usam
+`analyze_stmt` (não `visit`), que faz a análise semântica real.
 """
 from ..ast import (
     VarDecl, DestructureStmt, AssignStmt, ReturnStmt, IfStmt, WhileStmt,
@@ -18,7 +21,7 @@ from ..ast import (
     BenchStmt, CallExpr, MemberExpr, DerefExpr, SliceExpr, IndexExpr,
     VariableExpr, StringExpr, NumberExpr, BoolExpr, BinaryExpr,
     StructLiteralExpr, ArrayExpr, AddressOfExpr, PropagateExpr, LambdaExpr,
-    ErrorNode,
+    NoneExpr, ComptimeExpr, ErrorNode,
 )
 from ..errors import LuminaError
 from .types import is_assignable
@@ -38,9 +41,6 @@ class StatementAnalyzer:
         )
 
     def _require_bool(self, cond_type, context, line=0, col=0):
-        # Aceita `bool` e `int` (0 = false, != 0 = true) — o codegen
-        # já converte i64 → i1 no cbranch. Isso é idiomático em C, Python,
-        # JS, e a maioria dos exemplos Lumina usa `if <int>`.
         if cond_type in ("bool", "int", None, "Unknown"):
             return
         raise LuminaError(
@@ -49,10 +49,7 @@ class StatementAnalyzer:
         )
 
     def _find_enum_of_variant(self, variant_name):
-        """Retorna o nome do enum que contém `variant_name`, ou None.
-
-        Usado para inferir o tipo de `let p = Dois(1, 2)` → "Par".
-        """
+        """Retorna o nome do enum que contém `variant_name`, ou None."""
         for enum_name, enum_def in self.struct_defs.items():
             if not hasattr(enum_def, 'variants'):
                 continue
@@ -60,6 +57,42 @@ class StatementAnalyzer:
                 if v[0] == variant_name:
                     return enum_name
         return None
+
+    def _infer_binary_type(self, node: BinaryExpr):
+        """Infere o tipo de uma expressão binária.
+
+        Regras (heurísticas — olha o tipo dos lados, não o valor):
+          - Comparações (==, !=, <, >, <=, >=) → "bool"
+          - `and`/`or` → "bool"
+          - `+` com str de um lado → "str"
+          - Se algum lado é float → "float"
+          - Se algum lado é struct → o tipo da struct (sobrecarga)
+          - Caso contrário → "int"
+        """
+        # Comparações e lógicos → bool
+        if node.op in ('==', '!=', '<', '>', '<=', '>='):
+            return "bool"
+        if node.op in ('and', 'or'):
+            return "bool"
+
+        lt = self.visit(node.left)
+        rt = self.visit(node.right)
+
+        # Concatenação de string
+        if node.op == '+' and (lt == "str" or rt == "str"):
+            return "str"
+
+        # Structs: assume que o overload retorna a mesma struct
+        if lt and lt.split('<')[0] in self.structs:
+            return lt
+        if rt and rt.split('<')[0] in self.structs:
+            return rt
+
+        # Promoção numérica
+        if lt == "float" or rt == "float":
+            return "float"
+
+        return "int"
 
     def analyze_stmt(self, node):
         if isinstance(node, ErrorNode):
@@ -78,7 +111,22 @@ class StatementAnalyzer:
                     )
 
             if node.var_type is None and node.value is not None:
-                if isinstance(node.value, StringExpr):
+                # NOVO: infere tipo de operação binária (corrige overload_test)
+                if isinstance(node.value, BinaryExpr):
+                    node.var_type = self._infer_binary_type(node.value)
+                elif isinstance(node.value, NoneExpr):
+                    node.var_type = "Option"
+                elif isinstance(node.value, ComptimeExpr):
+                    folded = self._constant_fold(node.value.expr)
+                    if folded is not None:
+                        node.value.folded = folded
+                        if isinstance(folded, NumberExpr):
+                            node.var_type = "float" if folded.is_float else "int"
+                        elif isinstance(folded, BoolExpr):
+                            node.var_type = "bool"
+                        elif isinstance(folded, StringExpr):
+                            node.var_type = "str"
+                elif isinstance(node.value, StringExpr):
                     node.var_type = "str"
                 elif isinstance(node.value, NumberExpr):
                     node.var_type = "float" if node.value.is_float else "int"
@@ -97,10 +145,8 @@ class StatementAnalyzer:
                 elif isinstance(node.value, PropagateExpr):
                     node.var_type = "int"
                 elif isinstance(node.value, SliceExpr):
-                    # arr[a..b] sempre produz ptr
                     node.var_type = "ptr"
                 elif isinstance(node.value, IndexExpr):
-                    # Index normal: elemento é int (por padrão)
                     node.var_type = "int"
                 elif isinstance(node.value, CallExpr):
                     func_name = getattr(node.value.callee, 'name', None) if hasattr(node.value, 'callee') else getattr(node.value, 'name', None)
@@ -117,8 +163,8 @@ class StatementAnalyzer:
                                 else:
                                     node.var_type = "int"
                     else:
-                        # 1) Função normal (não-genérica): usa o return_type
-                        # 2) Função genérica: infere pelo primeiro arg que casa com T
+                        # 1) Função normal: usa return_type
+                        # 2) Genérica: infere pelo primeiro arg que casa com T
                         # 3) Construtor de enum: pega o nome do enum
                         # 4) Fallback: "int"
                         if func_name in self.function_defs:
@@ -127,7 +173,6 @@ class StatementAnalyzer:
                             type_params = getattr(fn_def, 'type_params', None) or []
 
                             if ret_t in type_params:
-                                # Infere pelo primeiro arg que casa com o type_param
                                 inferred = "int"
                                 for arg_node, param in zip(node.value.args, fn_def.params):
                                     if param.type_ann == ret_t:
@@ -250,7 +295,7 @@ class StatementAnalyzer:
                     )
 
         # ------------------------------------------------------------------
-        # IfStmt  ← BUG CORRIGIDO: analyze_stmt em vez de visit
+        # IfStmt
         # ------------------------------------------------------------------
         elif isinstance(node, IfStmt):
             cond_type = self.visit(node.condition)
@@ -258,17 +303,17 @@ class StatementAnalyzer:
 
             self.push_scope()
             for stmt in node.then_body:
-                self.analyze_stmt(stmt)   # ← NÃO é self.visit
+                self.analyze_stmt(stmt)
             self.pop_scope()
 
             if node.else_body:
                 self.push_scope()
                 for stmt in node.else_body:
-                    self.analyze_stmt(stmt)   # ← NÃO é self.visit
+                    self.analyze_stmt(stmt)
                 self.pop_scope()
 
         # ------------------------------------------------------------------
-        # WhileStmt  ← BUG CORRIGIDO
+        # WhileStmt
         # ------------------------------------------------------------------
         elif isinstance(node, WhileStmt):
             cond_type = self.visit(node.condition)
@@ -276,11 +321,11 @@ class StatementAnalyzer:
 
             self.push_scope()
             for stmt in node.body:
-                self.analyze_stmt(stmt)   # ← CORRIGIDO
+                self.analyze_stmt(stmt)
             self.pop_scope()
 
         # ------------------------------------------------------------------
-        # ForStmt  ← BUG CORRIGIDO
+        # ForStmt
         # ------------------------------------------------------------------
         elif isinstance(node, ForStmt):
             if node.iterable is not None:
@@ -291,11 +336,11 @@ class StatementAnalyzer:
             self.push_scope()
             self.declare_var(node.var_name, "int", False)
             for stmt in node.body:
-                self.analyze_stmt(stmt)   # ← CORRIGIDO
+                self.analyze_stmt(stmt)
             self.pop_scope()
 
         # ------------------------------------------------------------------
-        # MatchStmt  ← BUG CORRIGIDO
+        # MatchStmt
         # ------------------------------------------------------------------
         elif isinstance(node, MatchStmt):
             self.visit(node.condition)
@@ -312,12 +357,12 @@ class StatementAnalyzer:
                     guard_type = self.visit(guard)
                     self._require_bool(guard_type, context="Guard de 'case'")
                 for stmt in body:
-                    self.analyze_stmt(stmt)   # ← CORRIGIDO
+                    self.analyze_stmt(stmt)
                 self.pop_scope()
             if node.default:
                 self.push_scope()
                 for stmt in node.default:
-                    self.analyze_stmt(stmt)   # ← CORRIGIDO
+                    self.analyze_stmt(stmt)
                 self.pop_scope()
 
         # ------------------------------------------------------------------

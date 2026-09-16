@@ -4,7 +4,7 @@ from ..ast import (
     NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr,
     ArrayExpr, IndexExpr, SliceExpr, MemberExpr, AddressOfExpr, DerefExpr,
     UnaryExpr, PropagateExpr, ComptimeExpr, StructLiteralExpr, CastExpr,
-    LambdaExpr, StructLiteralField, Param, InterpolatedStringExpr,
+    LambdaExpr, StructLiteralField, Param, InterpolatedStringExpr, NoneExpr,
 )
 from ..errors import LuminaError
 
@@ -273,7 +273,7 @@ class ExpressionParser(ParserBase):
             return self.parse_postfix(node)
         if self.check(TokenType.NONE):
             self.consume()
-            return NumberExpr('0', False)
+            return self.parse_postfix(NoneExpr())
         raise LuminaError(
             f"Token inesperado {token.type.name} ('{token.value}')",
             filename=self.filename, line=token.line, col=token.col, source_code=self.source_code,

@@ -125,7 +125,7 @@ class SliceExpr(Expr):
     array: Expr
     start: Optional[Expr] = None
     end: Optional[Expr] = None
-    
+
 
 @dataclass
 class MemberExpr(Expr):
@@ -199,5 +199,20 @@ class PropagateExpr(Expr):
 
 
 @dataclass
+class NoneExpr(Expr):
+    """Literal `none` — variante None de Option<T>.
+
+    Substitui o antigo `NumberExpr('0')` que o parser emitia.
+    No semantic, tem tipo "Option" (sem args) para permitir
+    `let x: Option<int> = none`.
+
+    No codegen, constrói Option::None (tag=1, payload=0) se o
+    enum Option estiver declarado (vem do prelude).
+    """
+    pass
+
+
+@dataclass
 class ComptimeExpr(Expr):
     expr: Expr
+    folded: Optional[Expr] = None   # preenchido pelo semantic

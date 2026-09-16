@@ -1,8 +1,8 @@
 from ..ast import (
     NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr,
     ArrayExpr, IndexExpr, SliceExpr, MemberExpr, AddressOfExpr, DerefExpr,
-    UnaryExpr, PropagateExpr, ComptimeExpr, StructLiteralExpr, MatchExpr,
-    CastExpr, LambdaExpr, StructLiteralField,
+    UnaryExpr, PropagateExpr, ComptimeExpr, NoneExpr, StructLiteralExpr,
+    MatchExpr, CastExpr, LambdaExpr, StructLiteralField,
 )
 from ..ast.visitor import NodeVisitor
 from ..errors import LuminaError
@@ -48,6 +48,11 @@ class ExpressionAnalyzer(NodeVisitor):
 
     def visit_StringExpr(self, node):
         return "str"
+
+    def visit_NoneExpr(self, node):
+        # NOVO (A): `none` tem tipo Option (sem args). O tipo concreto
+        # (Option<int>, ...) é inferido pelo contexto via is_assignable.
+        return "Option"
 
     def visit_VariableExpr(self, node):
         info = self.get_var_info(node.name)
@@ -137,7 +142,6 @@ class ExpressionAnalyzer(NodeVisitor):
             if func_name in self.function_defs:
                 fn_def = self.function_defs[func_name]
 
-                # NOVO: aplica defaults — conta apenas parâmetros obrigatórios
                 required = sum(1 for p in fn_def.params if getattr(p, 'default', None) is None)
                 n_args = len(node.args)
                 if not (required <= n_args <= len(fn_def.params)):
@@ -163,9 +167,6 @@ class ExpressionAnalyzer(NodeVisitor):
                             f"Tipo inválido para parâmetro '{p_name}': esperado '{p_type}', obteve '{arg_type}'.",
                             self.filename, getattr(node, 'line', 0), getattr(node, 'col', 0), self.source_code,
                         )
-            # NÃO retornar aqui — o `for` abaixo precisa visitar os args
-            # para pegar erros em chamadas de builtins (print, len, etc).
-            # Foi essa a causa do `test_block_scope_var_not_visible_outside`.
 
         for arg in node.args:
             self.visit(arg)
@@ -237,8 +238,91 @@ class ExpressionAnalyzer(NodeVisitor):
             )
         return None
 
+    # ------------------------------------------------------------------
+    # comptime real (B)
+    # ------------------------------------------------------------------
     def visit_ComptimeExpr(self, node):
-        return self.visit(node.expr)
+        folded = self._constant_fold(node.expr)
+        if folded is None:
+            raise LuminaError(
+                "`comptime` requer uma expressão constante "
+                "(apenas literais e operações aritméticas são suportados por enquanto).",
+                self.filename, getattr(node, 'line', 0), getattr(node, 'col', 0), self.source_code,
+            )
+        node.folded = folded
+        return self.visit(folded)
+
+    def _constant_fold(self, node):
+        """Tenta avaliar `node` em tempo de compilação.
+
+        Retorna um nó literal (NumberExpr/BoolExpr/StringExpr) ou None.
+        Cobre: literais, +, -, *, /, %, unário -, e recursão em ComptimeExpr.
+        """
+        from ..ast import (
+            NumberExpr, BoolExpr, StringExpr, BinaryExpr,
+            UnaryExpr, ComptimeExpr,
+        )
+
+        if isinstance(node, (NumberExpr, BoolExpr, StringExpr)):
+            return node
+
+        if isinstance(node, ComptimeExpr):
+            return self._constant_fold(node.expr)
+
+        if isinstance(node, BinaryExpr):
+            left = self._constant_fold(node.left)
+            right = self._constant_fold(node.right)
+            if left is None or right is None:
+                return None
+            if not (isinstance(left, NumberExpr) and isinstance(right, NumberExpr)):
+                return None
+
+            try:
+                lv = float(left.value) if left.is_float else int(left.value, 0)
+                rv = float(right.value) if right.is_float else int(right.value, 0)
+            except (ValueError, TypeError):
+                return None
+
+            is_float = left.is_float or right.is_float
+            try:
+                if node.op == '+':
+                    result = lv + rv
+                elif node.op == '-':
+                    result = lv - rv
+                elif node.op == '*':
+                    result = lv * rv
+                elif node.op == '/':
+                    if rv == 0:
+                        return None
+                    result = lv / rv
+                    is_float = True
+                elif node.op == '%':
+                    if rv == 0 or is_float:
+                        return None
+                    result = lv % rv
+                else:
+                    return None
+            except Exception:
+                return None
+
+            if is_float:
+                return NumberExpr(repr(float(result)), is_float=True)
+            return NumberExpr(str(int(result)), is_float=False)
+
+        if isinstance(node, UnaryExpr):
+            val = self._constant_fold(node.val)
+            if isinstance(val, NumberExpr):
+                if node.op == '-':
+                    v = float(val.value) if val.is_float else int(val.value, 0)
+                    return NumberExpr(
+                        repr(-v) if val.is_float else str(-v),
+                        is_float=val.is_float,
+                    )
+                if node.op == 'not' and isinstance(val, BoolExpr):
+                    return BoolExpr(not val.value)
+            return None
+
+        return None
 
     def visit_StructLiteralExpr(self, node):
         if node.struct_name not in self.struct_defs:

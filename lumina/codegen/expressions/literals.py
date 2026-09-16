@@ -1,6 +1,7 @@
 from llvmlite import ir
 from ...ast import (
     NumberExpr, BoolExpr, StringExpr, InterpolatedStringExpr, ComptimeExpr,
+    NoneExpr,
 )
 
 
@@ -16,6 +17,16 @@ class LiteralsMixin:
 
     def visit_StringExpr(self, node):
         return self.create_global_string(node.value)
+
+    def visit_NoneExpr(self, node):
+        """NOVO (A): Constrói Option::None (tag=1, sem payload).
+
+        O prelude declara `enum Option: Some(int); None`, então Option
+        está em struct_types. Se não estiver, retorna 0.
+        """
+        if "Option" in self.struct_types:
+            return self._construct_enum("Option", 1, [])
+        return ir.Constant(self.i64_ty, 0)
 
     def visit_InterpolatedStringExpr(self, node):
         return self.codegen_fstring(node.parts)
@@ -49,8 +60,7 @@ class LiteralsMixin:
         return buf_i8_ptr
 
     def visit_ComptimeExpr(self, node):
-        try:
-            val = int(node.expr.value)
-            return ir.Constant(self.i64_ty, val)
-        except Exception:
-            return self.visit(node.expr)
+        # NOVO (B): se o semantic fez constant folding, usa o valor dobrado
+        if getattr(node, 'folded', None) is not None:
+            return self.visit(node.folded)
+        return self.visit(node.expr)

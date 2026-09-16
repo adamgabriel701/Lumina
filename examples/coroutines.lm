@@ -3,6 +3,11 @@ import "std/async"
 # NOVO: Variável global! Não vive na Stack, então não é resetada pelo swapcontext.
 mut resumed = 0
 
+# Contextos de CPU (opacos). Precisam existir no escopo global para
+# serem passados para getcontext/swapcontext.
+mut scheduler_ctx = 0
+mut main_ctx = 0
+
 fn task_a():
     mut i = 0
     while i < 3:

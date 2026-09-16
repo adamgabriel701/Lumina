@@ -58,6 +58,9 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
     def analyze(self, declarations):
         self._resolve_trait_defaults(declarations)
 
+        # ------------------------------------------------------------------
+        # Passada 1: registrar símbolos (funções, structs, enums, traits)
+        # ------------------------------------------------------------------
         for decl in declarations:
             if isinstance(decl, ErrorNode):
                 continue
@@ -105,6 +108,12 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
                                 self.filename, getattr(decl, 'line', 0), getattr(decl, 'col', 0), self.source_code,
                             )
 
+        # ------------------------------------------------------------------
+        # Passada 2: processar VarDecls de topo (globais) ANTES das funções.
+        # Isso garante que variáveis globais de módulos importados (ex:
+        # RAYWHITE em std/raylib.lm) estejam visíveis em funções do arquivo
+        # principal (ex: engine.lm), independente da ordem de resolução.
+        # ------------------------------------------------------------------
         for decl in declarations:
             if isinstance(decl, VarDecl):
                 if decl.var_type is not None:
@@ -120,7 +129,11 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
                 if hasattr(decl, 'line'):
                     self.definition_locations[decl.name] = (self.filename, decl.line, decl.col)
 
-            elif isinstance(decl, Function):
+        # ------------------------------------------------------------------
+        # Passada 3: analisar corpos de funções
+        # ------------------------------------------------------------------
+        for decl in declarations:
+            if isinstance(decl, Function):
                 self.analyze_function(decl)
 
     def push_scope(self):
@@ -147,14 +160,12 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
         global_scope = saved_scopes[0] if saved_scopes else {}
         self.scopes = [global_scope.copy()]
 
-        # NOVO: preserva o nome da função anterior (funções aninhadas via lambda
-        # ou match podem reentrar aqui)
         saved_func_name = getattr(self, 'current_func_name', None)
         saved_ret_type = getattr(self, 'current_ret_type', None)
 
         try:
             self.current_ret_type = node.return_type
-            self.current_func_name = node.name  # NOVO
+            self.current_func_name = node.name
 
             for param in node.params:
                 self.declare_var(param.name, param.type_ann, True)
@@ -163,8 +174,8 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
                 self.analyze_stmt(stmt)
         finally:
             self.scopes = saved_scopes
-            self.current_func_name = saved_func_name  # NOVO
-            self.current_ret_type = saved_ret_type    # NOVO
+            self.current_func_name = saved_func_name
+            self.current_ret_type = saved_ret_type
 
     def analyze_stmt(self, node):
         if isinstance(node, MatchStmt):

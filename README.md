@@ -6,8 +6,8 @@
 [![Status](https://img.shields.io/badge/Status-Alpha%20%2F%20Active-green.svg)](#)
 [![Language](https://img.shields.io/badge/Language-Lumina-6A0DAD.svg)](#)
 [![Features](https://img.shields.io/badge/features-24%2F24-success.svg)](#-status-de-implementação)
-[![Tests](https://img.shields.io/badge/tests-5%20passed%20%2B%2028%2F28-brightgreen.svg)](#-testes-automatizados)
-[![Examples](https://img.shields.io/badge/examples-70%2F70-success.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-8%20passed%20%2B%2028%2F28-brightgreen.svg)](#-testes-automatizados)
+[![Examples](https://img.shields.io/badge/examples-61%2F61%20%2B%201%20skip-success.svg)](#)
 
 **Lumina** é uma linguagem de programação de sistemas de propósito geral, focada em alta performance, ergonomia moderna, concorrência e segurança de memória. Ela combina a sintaxe limpa e expressiva baseada em indentação (estilo Python/Nim) com o poder de baixo nível e otimização industrial do backend **LLVM**.
 
@@ -56,7 +56,7 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
 
 ## 📊 Status de Implementação
 
-Todas as 24 features testadas em `tests/uncertain_features.lm` estão funcionando e validadas por CI local:
+Todas as 24 features testadas em `tests/features/uncertain_features.lm` estão funcionando e validadas por CI local:
 
 | # | Feature | Status |
 |---|---|---|
@@ -90,20 +90,18 @@ Todas as 24 features testadas em `tests/uncertain_features.lm` estão funcionand
 
 ## 🧪 Testes Automatizados
 
-A suíte é dividida em duas partes:
+A suíte é dividida em três partes:
 
-### 1. Pytest (integração ponta-a-ponta)
+### 1. Pytest (unitários + integração)
 
 ```bash
 pytest tests/ -v
 ```
 
 Cobre:
-- `test_new_and_build` — fluxo `lumina new` → `build` → `run`
-- `test_fmt` — auto-formatter em código válido
-- `test_unknown_command` — CLI rejeita comandos inválidos
-- `test_smoke_tests_examples` — compila **todos** os arquivos de `examples/`
-- `test_uncertain_features` — valida 28 linhas de output do teste de features
+- `tests/test_types.py` — 8 testes de validação de tipo (VarDecl, Assign, Return, conditions)
+- `tests/cli/` — integração ponta-a-ponta (`new`, `build`, `fmt`, `errors`)
+- `tests/features/` — smoke tests de todos os exemplos + language features
 
 ### 2. Script standalone (5 segundos)
 
@@ -111,7 +109,7 @@ Cobre:
 python3 run_tests.py
 ```
 
-Compila, executa, e valida cada linha esperada do `tests/uncertain_features.lm`. Retorna exit code 0/1 — ideal para pre-commit hooks ou CI rápido.
+Compila, executa, e valida cada linha esperada do `tests/features/uncertain_features.lm`. Retorna exit code 0/1 — ideal para pre-commit hooks ou CI rápido.
 
 ```
 ==============================================================
@@ -121,16 +119,38 @@ Compila, executa, e valida cada linha esperada do `tests/uncertain_features.lm`.
 ✅ Todos os testes passaram!
 ```
 
+### 3. Check de exemplos (end-to-end)
+
+```bash
+./scripts/check_examples.sh
+```
+
+Compila **todos** os 61 arquivos de `examples/`, respeitando a `tests/features/skip.txt`:
+
+```
+📊 PASS: 61    ⏭️  SKIP: 1    ❌ FAIL: 0
+```
+
+O único skip é `util.lm` — um módulo auxiliar que não tem `fn main()`, importado por outros exemplos.
+
 ---
 
 ## 🏎️ Benchmarks de Performance
 
-### CPU (Média de 10 Execuções - `clang -O3 -march=native`)
-| Teste | C | Rust | **Lumina** | Go | Node.js | Python |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Loop Matemático** (10M) | 0.000038s | - | **0.000049s** 🥈 | - | - | - |
-| **Crivo de Eratóstenes** (10M) | 0.0308s | 0.0326s | **0.0257s** 🥇 | 0.0416s | - | - |
-| **Fibonacci** (N=35) | 0.0400s | 0.0362s | **0.0400s** 🥇 | 0.0713s | 0.2364s | 1.4574s |
+### CPU (Média de 5 execuções, host: Intel i7, Ubuntu 24.04, `-O3`)
+
+| Teste | C -O2 | Rust -O | **Lumina -O3** | Go | Node.js | Python |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| **Fibonacci** (N=35) | 0.108s | 0.155s | **0.195s** 🥈 | 0.288s | 1.139s | 5.325s |
+| **Loop Matemático** (100M) | 0.018s | 0.022s | **0.021s** 🥇 | 0.201s | 0.395s | — |
+| **Crivo de Eratóstenes** (10M) | 0.368s | 0.330s | **0.327s** 🥇 | 0.438s | — | — |
+| **Matriz 200×200** | 0.024s | 0.050s | **0.030s** 🥈 | 0.091s | 0.251s | — |
+
+**Resumo:**
+- 🥇 **Primes:** 1º lugar — empata com C e Rust, 25% mais rápido que Go
+- 🥇 **Loop:** 1º lugar — praticamente idêntico a C e Rust, 10x mais rápido que Go
+- 🥈 **Fibonacci:** perde para C/Rust por 1.3-1.8x, 1.5x mais rápido que Go
+- 🥈 **Matrix:** perde para C por 1.25x, 1.6x mais rápido que Rust, 3x mais rápido que Go
 
 ### Web Server (`wrk -t4 -c100`)
 * **Lumina-Serve (epoll):** ~5.868 Requests/sec.
@@ -144,6 +164,7 @@ Compila, executa, e valida cada linha esperada do `tests/uncertain_features.lm`.
 * **LLVM** e **Clang** no `PATH`
 * **Boehm GC** (`sudo apt install libgc-dev`)
 * *(Opcional para WASM)* **WASI SDK** instalado em `/opt/wasi-sdk`
+* *(Opcional para Raylib)* **libraylib** (compilada de source ou via gerenciador de pacotes)
 
 ### Instalação
 Após clonar o repositório, instale a CLI globalmente no seu ambiente Python:
@@ -163,8 +184,9 @@ lumina run arquivo.lm           # Compila e executa o binário nativo
 lumina test arquivo.lm          # Compila e executa a suíte de testes nativa
 lumina repl                     # Inicia o console interativo (REPL JIT)
 lumina jit arquivo.lm           # Executa instantaneamente na memória RAM
-lumina build                    # Compila para binário nativo otimizado (-O3)
-lumina build app.lm --debug     # Compila com símbolos DWARF (GDB/LLDB)
+lumina build                    # Compila (default: -O2)
+lumina build app.lm --release   # Compila com -O3 (release)
+lumina build app.lm --debug     # Compila com -O0 + DWARF (GDB/LLDB)
 lumina build app.lm --wasm      # Compila para WebAssembly (.wasm)
 lumina build app.lm --no-gc     # Compila para Bare-Metal (sem Garbage Collector)
 lumina playground               # Inicia o Web Playground JIT (porta 8080)
@@ -242,6 +264,9 @@ libs = ["raylib"]
 Requer `libraylib.so` instalada. Em Ubuntu:
 
 ```bash
+sudo apt install -y libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev \
+    libxi-dev libgl1-mesa-dev libglu1-mesa-dev mesa-common-dev
+
 git clone --depth 1 https://github.com/raysan5/raylib.git /tmp/raylib
 cd /tmp/raylib/src
 make PLATFORM=PLATFORM_DESKTOP RAYLIB_LIBTYPE=SHARED
@@ -257,8 +282,15 @@ sudo ldconfig
 target = "wasm"
 ```
 
-Requer `wasi-sdk` em `/opt/wasi-sdk`. O `cmd_build` usa
-`/opt/wasi-sdk/bin/clang` automaticamente quando disponível.
+Requer `wasi-sdk` em `/opt/wasi-sdk`:
+
+```bash
+wget https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-21/wasi-sdk-21.0-linux.tar.gz -O /tmp/wasi-sdk.tar.gz
+sudo mkdir -p /opt/wasi-sdk
+sudo tar xzf /tmp/wasi-sdk.tar.gz -C /opt/wasi-sdk --strip-components=1
+```
+
+O `cmd_build` usa `/opt/wasi-sdk/bin/clang` automaticamente quando disponível.
 
 **Biblioteca matemática + flags extras:**
 
@@ -440,7 +472,7 @@ fn main() -> int:
 ## 📦 Standard Library (`std/`)
 
 * `std/math`: Funções matemáticas via FFI (`potencia`, `raiz_quadrada`, `valor_absoluto`).
-* `std/str`: Manipulação de strings nativa (`to_upper`, `to_lower`, `trim`, `split`, `join`).
+* `std/str`: Manipulação de strings nativa (`to_upper`, `to_lower`, `trim`, `split`, `join`, `find`, `substr`).
 * `std/list`: Lista Ligada (Linked List) dinâmica usando Structs e Ponteiros.
 * `std/channel`: Canais de concorrência seguros entre threads (CSP).
 * `std/async_fs`: I/O de arquivos não-bloqueante usando `O_NONBLOCK`.
@@ -463,21 +495,35 @@ fn main() -> int:
 
 ```text
 Lumina/
-├── lumina/                     # Núcleo do Compilador (Lexer, Parser, Semantic, Codegen)
-├── lumina_core/                # Início do Bootstrapping (Lexer e Parser nativos em .lm)
-├── lumina_cli/                 # CLI modular, Build System, REPL, Test Runner e Package Manager
-│   ├── main.py                 # Ponto de entrada da CLI
-│   ├── commands.py             # Lógica dos comandos (build, run, fmt, new, test, etc)
-│   ├── compiler.py             # Lógica de compilação, JIT e geração de IR
-│   ├── playground.py           # Web Playground (JIT HTTP Server)
-│   └── utils.py                # Cores ANSI, Helpers de Caminho e Cache Hash
-├── lumina-vscode/              # Extensão VS Code (Syntax + LSP Client + LSP Server)
+├── lumina/                     # Núcleo do Compilador
+│   ├── ast/                    #   Árvore Sintática (Expr, Stmt, Visitor)
+│   ├── lexer/                  #   Tokenizer (INDENT/DEDENT, f-strings)
+│   ├── parser/                 #   Parser recursivo descendente
+│   ├── semantic/               #   Análise semântica + validação de tipo
+│   ├── codegen/                #   LLVM IR (exprs, stmts, types, match)
+│   ├── common/                 #   Utilitários compartilhados (cores ANSI)
+│   ├── builtins.py             #   Fonte única de verdade dos builtins
+│   └── errors.py               #   LuminaError com highlight estilo Rust
+├── lumina_core/                # Início do Bootstrapping (Lexer/Parser em .lm)
+├── lumina_cli/                 # CLI modular, Build System, REPL, Test Runner
+│   ├── main.py                 #   Ponto de entrada + dispatch de comandos
+│   ├── commands.py             #   Lógica dos comandos + suporte a [link]
+│   ├── compiler.py             #   parse_module, compile_lumina, run_jit, format_node
+│   ├── playground.py           #   Web Playground (JIT HTTP Server)
+│   ├── utils.py                #   Cores, cache hash, resolução de imports
+│   └── __main__.py             #   Permite `python -m lumina_cli`
+├── lumina-vscode/              # Extensão VS Code (Syntax + LSP Client + Server)
 ├── std/                        # Standard Library (.lm)
-├── benchmarks/                 # Suíte de benchmarks (Lumina vs C, Rust, Go)
-├── examples/                   # Exemplos de código (Proxy, JSON Parser, WASM, etc)
-├── tests/                      # Suíte de testes funcionais (pytest) e Smoke Tests
-│   ├── test_cli.py             # Pytest: integração ponta-a-ponta
-│   └── uncertain_features.lm   # Teste das 24 features verificadas
+├── benchmarks/                 # Benchmarks (Lumina vs C, Rust, Go, Node, Python)
+├── examples/                   # 61 exemplos + sidecars [link]
+├── scripts/
+│   ├── check_examples.sh       #   Compila todos os exemplos (PASS/SKIP/FAIL)
+│   └── run_benchmarks.sh       #   Roda a suíte de benchmarks
+├── tests/
+│   ├── test_types.py           #   8 testes de validação de tipo
+│   ├── cli/                    #   Testes de integração da CLI
+│   ├── features/               #   Smoke tests + uncertain_features.lm
+│   └── fixtures/               #   Arquivos .lm auxiliares
 ├── run_tests.py                # Suíte standalone (28 validações, ~5s)
 ├── pyproject.toml              # Configuração de build e distribuição PyPI
 └── playground.html             # Interface web do playground
@@ -503,6 +549,28 @@ A Lumina oferece suporte a realce de sintaxe, regras de indentação, **Autocomp
 * **Escape analysis:** os dados de escape são coletados no semantic (`analyzer.escapes`), mas a alocação automática Stack↔Heap ainda não foi conectada ao codegen — hoje tudo passa pelo Boehm GC quando o GC está ativo.
 * **`dois as int`:** o operador `as` só faz cast entre tipos primitivos e ponteiros; cast entre structs requer método explícito.
 * **Pattern matching em structs via `match`:** suportado em `MatchExpr` (expressões), ainda não em `MatchStmt` (statements com bloco).
+* **`comptime`:** reconhecido pelo parser e produzido na AST, mas ainda é no-op no codegen (não avalia em compile-time de fato).
+
+---
+
+## 🗺️ Roadmap
+
+- [x] Sintaxe base, AST, lexer/parser
+- [x] Codegen LLVM, JIT, REPL
+- [x] Generics com monomorphization
+- [x] Pattern matching (int, enum, string, struct)
+- [x] Traits com métodos default
+- [x] Validação de tipo em VarDecl/Assign/Return/conditions
+- [x] Configuração de link (`[link]`) com suporte a C/C++/WASM
+- [x] `-O0`/`-O2`/`-O3` configuráveis
+- [ ] `SliceExpr` na AST (substituir `IndexExpr(BinaryExpr('..'))`)
+- [ ] `Option<T>` + `NoneExpr` dedicados
+- [ ] `comptime` real (avaliação em compile-time)
+- [ ] `lumina check` (só lexer+parser+semantic)
+- [ ] Formatter preservando comentários
+- [ ] LSP completo (hover, rename, find references)
+- [ ] CI no GitHub Actions
+- [ ] Self-hosting (bootstrapping)
 
 ---
 

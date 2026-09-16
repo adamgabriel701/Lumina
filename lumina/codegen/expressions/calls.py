@@ -245,6 +245,35 @@ class CallsMixin:
         if enum_name is not None:
             return self._construct_enum(enum_name, variant_idx, node.args)
 
+        # 4.5 Alias de método (ex: `name()` dentro de um trait default
+        # que resolve para `Struct_name(self)`).
+        # Detecta quando:
+        #   - `func_name` não é uma função normal registrada em
+        #     `function_defs` (senão já é tratada no passo 5)
+        #   - mas existe uma entrada em `functions_table` com o mesmo
+        #     nome cuja função tem o `self` como primeiro parâmetro
+        #   - e estamos dentro de outro método (self no symbol_table)
+        if func_name in getattr(self, 'alias_methods', set()):
+            entry = self.functions_table[func_name]
+            if isinstance(entry, tuple):
+                func, func_type = entry
+                # Se a assinatura tem 1+ args e o `self` está disponível,
+                # injeta `self` como primeiro argumento.
+                self_ptr = self.symbol_table.get('self')
+                if self_ptr is not None and len(func_type.args) >= 1:
+                    self_val = self.builder.load(self_ptr, name="self_load")
+                    args = [self_val]
+                    for arg_node in node.args:
+                        args.append(self.visit(arg_node))
+                    # Coage se necessário
+                    final_args = []
+                    for i, a in enumerate(args):
+                        expected = func_type.args[i] if i < len(func_type.args) else None
+                        if expected is not None and a.type != expected:
+                            a = self._coerce_arg(a, expected, suffix=f"_alias_{i}")
+                        final_args.append(a)
+                    return self.builder.call(func, final_args, name=func_name + "_alias_call")
+
         # 5. Função normal
         if func_name in self.functions_table:
             func, func_type = self.functions_table[func_name]

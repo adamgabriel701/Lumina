@@ -6,8 +6,7 @@
 ##   print(d.pop_front())   # 0
 ##   print(d.pop_back())    # 1
 ##
-## Limitação: capacidade fixa (DEQUE_INITIAL_CAP). Não cresce
-## automaticamente — implementar `grow` fica como TODO.
+## Cresce automaticamente (grow) quando size == cap.
 struct Deque:
     data: ptr
     head: int       # índice do primeiro elemento
@@ -18,18 +17,36 @@ let DEQUE_INITIAL_CAP = 16
 
 impl Deque:
     ## Retorna o índice físico do elemento lógico `i`.
-    ## (i = 0 é o primeiro; i = size-1 é o último)
     fn _phys(i: int) -> int:
         return (self.head + i) & (self.cap - 1)
 
+    ## Dobra a capacidade, recopiando elementos em ordem lógica.
+    fn grow():
+        let old_cap = self.cap
+        self.cap = old_cap * 2
+        let new_data = alloc(self.cap)
+
+        mut i = 0
+        while i < self.size:
+            let old_phys = (self.head + i) & (old_cap - 1)
+            new_data[i] = self.data[old_phys]
+            i += 1
+
+        self.data = new_data
+        self.head = 0
+
     ## Adiciona no fim.
     fn push_back(value: int):
+        if self.size >= self.cap:
+            self.grow()
         let idx = self._phys(self.size)
         self.data[idx] = value
         self.size += 1
 
     ## Adiciona no início.
     fn push_front(value: int):
+        if self.size >= self.cap:
+            self.grow()
         self.head = (self.head - 1) & (self.cap - 1)
         self.data[self.head] = value
         self.size += 1

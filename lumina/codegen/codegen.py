@@ -6,7 +6,7 @@ from .statements import StatementCodegen
 from .helpers import HelpersCodegen
 from .types import TypesCodegen
 
-from ..ast import Function as AstFunction, Param
+from ..ast import Function as AstFunction, Param, TraitDecl
 
 
 class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCodegen):
@@ -36,6 +36,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         self.struct_defs = {}
         self.symbol_table = {}
         self.var_types = {}
+        self.global_var_decls = {}   # NOVO: top-level constants
 
         self.string_counter = 0
         self.lambda_counter = 0
@@ -44,6 +45,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         self.builtin_functions = BUILTIN_FUNCTIONS
 
         self.setup_libc_functions()
+        self.alias_methods = set()   # NOVO: nomes curtos de trait methods
 
     def setup_libc_functions(self):
         printf_ty = ir.FunctionType(ir.IntType(32), [self.i8_ty.as_pointer()], var_arg=True)
@@ -126,7 +128,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
                 decl.methods.append(default_method)
 
     def generate_module(self, ast):
-        # 0. NOVO: coleta VarDecls de topo (globais) para inlining.
+        # 0. Coleta VarDecls de topo (globais) para inlining.
         # Top-level `let X = <literal>` é tratado como constante em
         # tempo de compilação — o codegen inlineia o valor em cada uso
         # em vez de emitir uma global LLVM.
@@ -147,18 +149,50 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         # 1.5. Resolve métodos default de traits
         self._resolve_trait_defaults(ast)
 
-        # 2. Pré-registra todas as funções, métodos de impls e traits
+        # 2. Pré-registra todas as funções e métodos de impls.
+        # TraitDecl NÃO é registrado — seus métodos são copiados para
+        # os ImplBlocks por `_resolve_trait_defaults`.
         for decl in ast:
+            if isinstance(decl, TraitDecl):
+                continue
             if hasattr(decl, 'params') and hasattr(decl, 'return_type'):
                 self.register_function(decl)
             elif hasattr(decl, 'methods'):
                 for method in decl.methods:
                     self.register_function(method)
 
-        # 3. Gera o corpo das funções e métodos de impls
+        # 2.5 Registra aliases `metodo` → `Struct_metodo` para traits.
+        # Também marca em `alias_methods` para que o codegen saiba
+        # que essas chamadas precisam de `self` como 1º argumento.
+        #
+        # Importante: pass 2 já registrou o método ABSTRATO do TraitDecl
+        # com o nome curto (`name`), e agora o pass 2.5 sobrescreve com
+        # a implementação CONCRETA (`English_name`). Por isso NÃO
+        # verificamos `short not in functions_table` — sempre
+        # sobrescrevemos.
+        self.alias_methods = set()
         for decl in ast:
+            if not (hasattr(decl, 'methods') and hasattr(decl, 'struct_name')):
+                continue
+            trait_name = getattr(decl, 'trait_name', None)
+            if not trait_name:
+                continue
+            for method in decl.methods:
+                parts = method.name.split('_', 1)
+                if len(parts) == 2:
+                    short = parts[1]
+                    full_entry = self.functions_table.get(method.name)
+                    if full_entry:
+                        self.functions_table[short] = full_entry
+                        self.alias_methods.add(short)
+
+        # 3. Gera o corpo das funções e métodos de impls.
+        # TraitDecl NÃO gera corpo — seus métodos default são copiados
+        # para os ImplBlocks.
+        for decl in ast:
+            if isinstance(decl, TraitDecl):
+                continue
             if hasattr(decl, 'body') and decl.body is not None:
-                # Pula funções genéricas (são geradas on-demand)
                 if getattr(decl, 'type_params', None):
                     continue
                 self.generate_function_body(decl)

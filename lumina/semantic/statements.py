@@ -111,8 +111,17 @@ class StatementAnalyzer:
                     )
 
             if node.var_type is None and node.value is not None:
-                # NOVO: infere tipo de operação binária (corrige overload_test)
-                if isinstance(node.value, BinaryExpr):
+                # 1) MemberExpr: infere pelo tipo do campo
+                # 2) BinaryExpr: infere pelo operador
+                # 3) NoneExpr: Option
+                # 4) ComptimeExpr: infere pelo valor dobrado
+                # 5) Os literais de sempre
+                # 6) CallExpr: return_type / genérico / enum
+                if isinstance(node.value, MemberExpr):
+                    field_type = self.visit(node.value)
+                    if field_type:
+                        node.var_type = field_type
+                elif isinstance(node.value, BinaryExpr):
                     node.var_type = self._infer_binary_type(node.value)
                 elif isinstance(node.value, NoneExpr):
                     node.var_type = "Option"
@@ -163,10 +172,6 @@ class StatementAnalyzer:
                                 else:
                                     node.var_type = "int"
                     else:
-                        # 1) Função normal: usa return_type
-                        # 2) Genérica: infere pelo primeiro arg que casa com T
-                        # 3) Construtor de enum: pega o nome do enum
-                        # 4) Fallback: "int"
                         if func_name in self.function_defs:
                             fn_def = self.function_defs[func_name]
                             ret_t = fn_def.return_type

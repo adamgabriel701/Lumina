@@ -100,6 +100,21 @@ class OperatorsMixin:
         if left is None or right is None:
             return ir.Constant(self.i64_ty, 0)
 
+        # Lógicos (and/or). Sem short-circuit por enquanto — ambos os
+        # lados já foram avaliados. Suficiente para condições simples.
+        if node.op in ('and', 'or'):
+            if not (isinstance(left.type, ir.IntType) and left.type.width == 1):
+                left = self.builder.icmp_signed(
+                    "!=", left, ir.Constant(left.type, 0), name="to_bool_l"
+                )
+            if not (isinstance(right.type, ir.IntType) and right.type.width == 1):
+                right = self.builder.icmp_signed(
+                    "!=", right, ir.Constant(right.type, 0), name="to_bool_r"
+                )
+            if node.op == 'and':
+                return self.builder.and_(left, right, name="and")
+            return self.builder.or_(left, right, name="or")
+
         # Concatenação de strings com '+'
         if node.op == '+' and left.type == self.voidptr_ty and right.type == self.voidptr_ty:
             len1 = self.builder.call(self.strlen, [left], name="sconcat_len1")

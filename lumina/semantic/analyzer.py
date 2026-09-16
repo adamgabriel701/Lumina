@@ -30,6 +30,38 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
             if isinstance(decl, TraitDecl):
                 traits_by_name[decl.name] = decl
 
+        # ------------------------------------------------------------------
+        # Passo 1: registra aliases `metodo` → `Struct_metodo`.
+        # Permite que métodos default de traits chamem métodos abstratos
+        # pelo nome curto (ex: `name()` dentro de `greet()`).
+        # ------------------------------------------------------------------
+        for decl in declarations:
+            if not isinstance(decl, ImplBlock):
+                continue
+            trait_name = getattr(decl, 'trait_name', None)
+            if not trait_name or trait_name not in traits_by_name:
+                continue
+            trait_def = traits_by_name[trait_name]
+            for trait_method in trait_def.methods:
+                full_name = f"{decl.struct_name}_{trait_method.name}"
+                if full_name not in self.functions:
+                    self.functions.add(full_name)
+                self.functions.add(trait_method.name)
+                # Cria um Function "fake" com params vazios. O `self`
+                # é implícito no call site, então não conta na checagem
+                # de aridade.
+                if trait_method.name not in self.function_defs:
+                    self.function_defs[trait_method.name] = Function(
+                        trait_method.name,
+                        [],
+                        trait_method.return_type,
+                        [],
+                    )
+
+        # ------------------------------------------------------------------
+        # Passo 2: copia métodos default do trait para o ImplBlock que
+        # não os sobrescreve.
+        # ------------------------------------------------------------------
         for decl in declarations:
             if not isinstance(decl, ImplBlock):
                 continue
@@ -110,9 +142,6 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
 
         # ------------------------------------------------------------------
         # Passada 2: processar VarDecls de topo (globais) ANTES das funções.
-        # Isso garante que variáveis globais de módulos importados (ex:
-        # RAYWHITE em std/raylib.lm) estejam visíveis em funções do arquivo
-        # principal (ex: engine.lm), independente da ordem de resolução.
         # ------------------------------------------------------------------
         for decl in declarations:
             if isinstance(decl, VarDecl):
@@ -130,11 +159,16 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
                     self.definition_locations[decl.name] = (self.filename, decl.line, decl.col)
 
         # ------------------------------------------------------------------
-        # Passada 3: analisar corpos de funções
+        # Passada 3: analisar corpos de funções e métodos de impl.
+        # TraitDecl NÃO entra aqui — os métodos default já foram copiados
+        # para os ImplBlocks por `_resolve_trait_defaults`.
         # ------------------------------------------------------------------
         for decl in declarations:
             if isinstance(decl, Function):
                 self.analyze_function(decl)
+            elif isinstance(decl, ImplBlock):
+                for method in decl.methods:
+                    self.analyze_function(method)
 
     def push_scope(self):
         self.scopes.append({})

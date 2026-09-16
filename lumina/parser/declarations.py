@@ -45,6 +45,10 @@ class DeclarationParser(StatementParser):
         return ExternDecl(name, params, return_type, is_wasm)
 
     def parse_struct(self):
+        # Atributos já foram lidos em `parse()` e estão em `_pending_attrs`.
+        # (parse() consome `@nome` e `@nome(args)` antes de delegar.)
+        attrs = getattr(self, '_pending_attrs', []) or []
+
         self.consume(TokenType.STRUCT)
         name = self.expect(TokenType.IDENT).value
         type_params = self.parse_type_params() if self.check(TokenType.LT) else None
@@ -55,18 +59,22 @@ class DeclarationParser(StatementParser):
         self.expect(TokenType.INDENT)
         fields = {}
         while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
-            # NOVO: consome NEWLINEs e COMMENTs (comentários dentro da struct)
+            # Consome NEWLINEs e COMMENTs (comentários dentro da struct)
             self._skip_newlines_and_comments()
             if self.check(TokenType.DEDENT) or self.check(TokenType.EOF):
                 break
-            self._take_comments()  # descarta comentários dentro de struct (por ora)
+            self._take_comments()  # descarta por ora
             fn = self.expect(TokenType.IDENT).value
             self.expect(TokenType.COLON)
             ft = self.expect(TokenType.IDENT).value
             fields[fn] = ft
             self.match(TokenType.NEWLINE)
         self.match(TokenType.DEDENT)
-        return StructDecl(name, fields, type_params)
+
+        decl = StructDecl(name, fields, type_params)
+        if attrs:
+            decl.attrs = attrs
+        return decl
 
     def parse_enum(self):
         self.consume(TokenType.ENUM)
@@ -78,7 +86,7 @@ class DeclarationParser(StatementParser):
         self.expect(TokenType.INDENT)
         variants = []
         while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
-            # NOVO: consome NEWLINEs e COMMENTs (comentários dentro do enum)
+            # Consome NEWLINEs e COMMENTs (comentários dentro do enum)
             self._skip_newlines_and_comments()
             if self.check(TokenType.DEDENT) or self.check(TokenType.EOF):
                 break
@@ -109,7 +117,7 @@ class DeclarationParser(StatementParser):
         self.expect(TokenType.INDENT)
         methods = []
         while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
-            # NOVO: consome NEWLINEs e COMMENTs (comentários dentro do trait)
+            # Consome NEWLINEs e COMMENTs (comentários dentro do trait)
             self._skip_newlines_and_comments()
             if self.check(TokenType.DEDENT) or self.check(TokenType.EOF):
                 break
@@ -143,7 +151,9 @@ class DeclarationParser(StatementParser):
                     while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
                         if self.match(TokenType.NEWLINE):
                             continue
-                        body.append(self.parse_statement())
+                        stmt = self.parse_statement()
+                        if stmt is not None:
+                            body.append(stmt)
                     self.expect(TokenType.DEDENT)
                 else:
                     self.match(TokenType.NEWLINE)
@@ -213,12 +223,11 @@ class DeclarationParser(StatementParser):
         return ImplBlock(struct_name, methods, trait_name)
 
     def parse_function(self):
-        attrs = []
-        while self.check(TokenType.AT):
-            self.consume()
-            attr_name = self.expect(TokenType.IDENT).value
-            attrs.append(attr_name)
+        # Atributos já foram lidos em `parse()` e estão em `_pending_attrs`.
+        pending = getattr(self, '_pending_attrs', []) or []
+        attrs = [name for (name, _args) in pending]
         is_exported = 'export' in attrs
+
         self.expect(TokenType.FN)
         name_token = self.expect(TokenType.IDENT)
         name = name_token.value

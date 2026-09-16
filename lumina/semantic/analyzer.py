@@ -24,17 +24,134 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
 
         self.builtin_functions = BUILTIN_FUNCTIONS
 
+    # ------------------------------------------------------------------
+    # @derive(Eq, Debug)
+    # ------------------------------------------------------------------
+    def _expand_derives(self, declarations):
+        """Expande @derive(Eq, Debug, ...) em métodos sintetizados
+        adicionados como ImplBlocks.
+
+        Estes ImplBlocks são injetados em `declarations` para que as
+        próximas fases (registro de funções, análise) os vejam.
+        """
+        from ..ast import ImplBlock
+
+        new_impls = []
+        for decl in declarations:
+            attrs = getattr(decl, 'attrs', None)
+            if not attrs:
+                continue
+            if not hasattr(decl, 'fields'):
+                continue  # só struct
+
+            struct_name = decl.name
+            methods = []
+
+            for attr_name, attr_args in attrs:
+                if attr_name != 'derive':
+                    continue
+                for deriv in attr_args:
+                    if deriv == 'Eq':
+                        methods.append(self._gen_eq(struct_name, decl))
+                    elif deriv == 'Debug':
+                        methods.append(self._gen_debug(struct_name, decl))
+
+            if methods:
+                new_impls.append(ImplBlock(struct_name, methods))
+
+        declarations.extend(new_impls)
+
+    def _gen_eq(self, struct_name, struct_decl):
+        """Gera: fn {Struct}___eq__(a: Struct, b: Struct) -> int
+
+        Nome já mangled porque o codegen procura `{Struct}___eq__`
+        na `functions_table`.
+        """
+        from ..ast import (
+            Function, Param, BinaryExpr, VariableExpr, MemberExpr,
+            ReturnStmt, IfStmt, NumberExpr,
+        )
+
+        a_var = VariableExpr('a', 0, 0)
+        b_var = VariableExpr('b', 0, 0)
+
+        # Compara cada campo: a.f1 == b.f1 and a.f2 == b.f2 and ...
+        conditions = []
+        for fname in struct_decl.fields.keys():
+            a_field = MemberExpr(a_var, fname)
+            b_field = MemberExpr(b_var, fname)
+            conditions.append(BinaryExpr('==', a_field, b_field))
+
+        if not conditions:
+            cond = NumberExpr('1', False)  # struct vazia: sempre igual
+        elif len(conditions) == 1:
+            cond = conditions[0]
+        else:
+            cond = conditions[0]
+            for c in conditions[1:]:
+                cond = BinaryExpr('and', cond, c)
+
+        then_body = [ReturnStmt([NumberExpr('1', False)])]
+        if_stmt = IfStmt(cond, then_body, None)
+        return_stmt = ReturnStmt([NumberExpr('0', False)])
+
+        # Mangled: `Struct + ___ + eq__` = `Struct___eq__`
+        mangled_name = f"{struct_name}___eq__"
+
+        return Function(
+            mangled_name,
+            [Param('a', struct_name), Param('b', struct_name)],
+            'int',
+            [if_stmt, return_stmt],
+        )
+
+    def _gen_debug(self, struct_name, struct_decl):
+        """Gera: fn {Struct}___debug__(p: Struct) -> str
+
+        Nome já mangled porque o codegen procura `{Struct}___debug__`.
+        """
+        from ..ast import (
+            Function, Param, ReturnStmt, StringExpr, BinaryExpr,
+            VariableExpr, MemberExpr,
+        )
+
+        p_var = VariableExpr('p', 0, 0)
+        parts = [StringExpr(f"{struct_name} {{ ")]
+
+        for i, fname in enumerate(struct_decl.fields.keys()):
+            if i > 0:
+                parts.append(StringExpr(", "))
+            parts.append(StringExpr(f"{fname}: "))
+            field_access = MemberExpr(p_var, fname)
+            parts.append(field_access)
+
+        parts.append(StringExpr(" }"))
+
+        # Concatenação: "P1" + v1 + "P2" + v2 ...
+        expr = parts[0]
+        for p in parts[1:]:
+            expr = BinaryExpr('+', expr, p)
+
+        # Mangled: `Struct + ___ + debug__` = `Struct___debug__`
+        mangled_name = f"{struct_name}___debug__"
+
+        return Function(
+            mangled_name,
+            [Param('p', struct_name)],
+            'str',
+            [ReturnStmt([expr])],
+        )
+
+    # ------------------------------------------------------------------
+    # Trait defaults
+    # ------------------------------------------------------------------
     def _resolve_trait_defaults(self, declarations):
         traits_by_name = {}
         for decl in declarations:
             if isinstance(decl, TraitDecl):
                 traits_by_name[decl.name] = decl
 
-        # ------------------------------------------------------------------
         # Passo 1: registra aliases `metodo` → `Struct_metodo`.
-        # Permite que métodos default de traits chamem métodos abstratos
-        # pelo nome curto (ex: `name()` dentro de `greet()`).
-        # ------------------------------------------------------------------
         for decl in declarations:
             if not isinstance(decl, ImplBlock):
                 continue
@@ -47,9 +164,8 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
                 if full_name not in self.functions:
                     self.functions.add(full_name)
                 self.functions.add(trait_method.name)
-                # Cria um Function "fake" com params vazios. O `self`
-                # é implícito no call site, então não conta na checagem
-                # de aridade.
+                # Function "fake" com params vazios. O `self` é
+                # implícito no call site.
                 if trait_method.name not in self.function_defs:
                     self.function_defs[trait_method.name] = Function(
                         trait_method.name,
@@ -58,10 +174,7 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
                         [],
                     )
 
-        # ------------------------------------------------------------------
-        # Passo 2: copia métodos default do trait para o ImplBlock que
-        # não os sobrescreve.
-        # ------------------------------------------------------------------
+        # Passo 2: copia métodos default para o ImplBlock que não os sobrescreve.
         for decl in declarations:
             if not isinstance(decl, ImplBlock):
                 continue
@@ -87,7 +200,11 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
                 )
                 decl.methods.append(default_method)
 
+    # ------------------------------------------------------------------
+    # Análise principal
+    # ------------------------------------------------------------------
     def analyze(self, declarations):
+        self._expand_derives(declarations)
         self._resolve_trait_defaults(declarations)
 
         # ------------------------------------------------------------------

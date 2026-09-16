@@ -90,6 +90,22 @@ class OperatorsMixin:
 
         return result
 
+    def _try_string_concat(self, node, left, right):
+        """Retorna o resultado de `str + str` (i8*), ou None se não se aplica."""
+        if node.op != '+':
+            return None
+        if left.type != self.voidptr_ty or right.type != self.voidptr_ty:
+            return None
+
+        len1 = self.builder.call(self.strlen, [left], name="sconcat_len1")
+        len2 = self.builder.call(self.strlen, [right], name="sconcat_len2")
+        sum_len = self.builder.add(len1, len2, name="sconcat_sum")
+        total_len = self.builder.add(sum_len, ir.Constant(self.i64_ty, 1), name="sconcat_total")
+        buf = self.builder.call(self.malloc, [total_len], name="sconcat_buf")
+        self.builder.call(self.strcpy, [buf, left], name="sconcat_cpy")
+        self.builder.call(self.strcat, [buf, right], name="sconcat_cat")
+        return buf
+
     # ------------------------------------------------------------------
     # Binários
     # ------------------------------------------------------------------
@@ -115,16 +131,10 @@ class OperatorsMixin:
                 return self.builder.and_(left, right, name="and")
             return self.builder.or_(left, right, name="or")
 
-        # Concatenação de strings com '+'
-        if node.op == '+' and left.type == self.voidptr_ty and right.type == self.voidptr_ty:
-            len1 = self.builder.call(self.strlen, [left], name="sconcat_len1")
-            len2 = self.builder.call(self.strlen, [right], name="sconcat_len2")
-            sum_len = self.builder.add(len1, len2, name="sconcat_sum")
-            total_len = self.builder.add(sum_len, ir.Constant(self.i64_ty, 1), name="sconcat_total")
-            buf = self.builder.call(self.malloc, [total_len], name="sconcat_buf")
-            self.builder.call(self.strcpy, [buf, left], name="sconcat_cpy")
-            self.builder.call(self.strcat, [buf, right], name="sconcat_cat")
-            return buf
+        # Concatenação de strings com '+' (quando já são str+str)
+        concat = self._try_string_concat(node, left, right)
+        if concat is not None:
+            return concat
 
         # Overload de operador em struct (NOVO)
         struct_result = self._try_struct_operator(node, left, right)
@@ -150,6 +160,12 @@ class OperatorsMixin:
             buf_ptr = self.builder.bitcast(buf, self.voidptr_ty, name="num_to_str_ptr")
             self.builder.call(self.snprintf, [buf_ptr, ir.Constant(self.i64_ty, 64), fmt, left], name="num_to_str_call")
             left = buf_ptr
+
+        # Matemática
+        # NOVO: concat após coerção
+        concat = self._try_string_concat(node, left, right)
+        if concat is not None:
+            return concat
 
         # Matemática
         if node.op in ('+', '-', '*', '/', '%'):

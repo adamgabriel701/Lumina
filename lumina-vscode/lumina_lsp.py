@@ -8,6 +8,8 @@ Implementa o subconjunto de LSP necessário para o VS Code:
   - textDocument/prepareRename + textDocument/rename
   - textDocument/documentSymbol
   - textDocument/semanticTokens/full
+  - textDocument/inlayHint
+  - textDocument/codeAction
   - textDocument/publishDiagnostics
 
 Protocolo: JSON-RPC 2.0 sobre stdio.
@@ -48,8 +50,7 @@ SK_CONSTANT = 14
 
 
 # ============================================================
-# Semantic token types (índices no legend)
-# https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#semanticTokenTypes
+# Semantic token types
 # ============================================================
 TT_NAMESPACE = 0
 TT_TYPE = 1
@@ -82,11 +83,6 @@ SEMANTIC_TOKEN_TYPES = [
     "regexp", "operator",
 ]
 
-# Modifiers (bitmask)
-TM_DECLARATION = 1  # 1 << 0
-TM_DEFINITION = 2   # 1 << 1
-TM_READONLY = 4     # 1 << 2
-
 SEMANTIC_TOKEN_MODIFIERS = [
     "declaration", "definition", "readonly", "static",
     "deprecated", "abstract", "async", "modification",
@@ -98,7 +94,6 @@ SEMANTIC_TOKEN_MODIFIERS = [
 # Protocolo JSON-RPC (binário!)
 # ============================================================
 def read_message():
-    """Lê uma mensagem LSP do stdin em modo binário."""
     headers = {}
     while True:
         line = sys.stdin.buffer.readline()
@@ -118,7 +113,6 @@ def read_message():
 
 
 def write_message(msg):
-    """Escreve uma mensagem LSP no stdout em modo binário."""
     body_bytes = json.dumps(msg, ensure_ascii=False).encode('utf-8')
     header = f"Content-Length: {len(body_bytes)}\r\n\r\n".encode('ascii')
     sys.stdout.buffer.write(header)
@@ -168,7 +162,6 @@ def find_word_range(text, line, char):
 
 
 def _build_line_starts(source):
-    """Retorna uma lista com o offset (byte) do início de cada linha."""
     starts = [0]
     for i, c in enumerate(source):
         if c == '\n':
@@ -177,10 +170,26 @@ def _build_line_starts(source):
 
 
 def _offset_to_linecol(starts, offset):
-    """Converte um offset absoluto em (line, col), 0-based."""
     line = bisect.bisect_right(starts, offset) - 1
     col = offset - starts[line]
     return line, col
+
+
+def _expand_range_to_word(text, rng):
+    """Expande um Range LSP para cobrir a palavra inteira."""
+    line = rng["start"]["line"]
+    col = rng["start"]["character"]
+    lines = text.split('\n')
+    if line >= len(lines):
+        return rng
+    line_str = lines[line]
+    end = col
+    while end < len(line_str) and (line_str[end].isalnum() or line_str[end] == '_'):
+        end += 1
+    return {
+        "start": {"line": line, "character": col},
+        "end": {"line": line, "character": end},
+    }
 
 
 # ============================================================
@@ -197,7 +206,6 @@ def _fmt_params(params):
 
 
 def _range_around(line, col, length):
-    """Constrói um Range LSP. Assume line/col 1-based."""
     l0 = max(0, (line or 1) - 1)
     c0 = max(0, (col or 1) - 1)
     return {
@@ -207,7 +215,6 @@ def _range_around(line, col, length):
 
 
 def _walk_stmts(stmts, callback):
-    """Percorre statements recursivamente chamando callback(stmt)."""
     if not stmts:
         return
     for stmt in stmts:
@@ -235,7 +242,6 @@ def _walk_stmts(stmts, callback):
 
 
 def _find_all_references(code, names):
-    """Varredura léxica de todas as ocorrências de cada nome."""
     result = {n: [] for n in names}
     lines = code.split('\n')
     for i, line_str in enumerate(lines):
@@ -251,6 +257,14 @@ def _find_all_references(code, names):
     return result
 
 
+def _extract_suggestion(message):
+    """Extrai 'X' de 'Você quis dizer X?' da mensagem."""
+    m = re.search(r"Você quis dizer '([^']+)'\?", message)
+    if m:
+        return m.group(1)
+    return None
+
+
 # ============================================================
 # Análise do documento
 # ============================================================
@@ -260,12 +274,25 @@ def validate_and_extract_symbols(code):
     definitions = {}
     symbol_details = {}
     document_symbols = []
+    no_type_var_decls = []  # VarDecls sem tipo explícito (para inlay hints)
 
     try:
         lexer = Lexer(code)
         tokens = lexer.tokenize()
         parser = Parser(tokens, "lsp.lm", code)
         ast = parser.parse()
+
+        # ----- Passada 0: captura VarDecls sem tipo ANTES do semantic -----
+        def _capture_no_type(stmt):
+            if isinstance(stmt, VarDecl) and stmt.var_type is None:
+                no_type_var_decls.append(stmt)
+
+        for decl in ast:
+            if isinstance(decl, Function):
+                _walk_stmts(decl.body, _capture_no_type)
+            elif isinstance(decl, ImplBlock):
+                for m in decl.methods:
+                    _walk_stmts(m.body, _capture_no_type)
 
         # ----- Passada 1: top-level -----
         for decl in ast:
@@ -383,7 +410,7 @@ def validate_and_extract_symbols(code):
                     "selectionRange": _range_around(getattr(decl, 'line', 1), getattr(decl, 'col', 1), len(decl.name)),
                 })
 
-        # ----- Passada 2: semantic (infere tipos, registra locations) -----
+        # ----- Passada 2: semantic -----
         analyzer = SemanticAnalyzer("lsp.lm", code)
         analyzer.analyze(ast)
 
@@ -394,7 +421,7 @@ def validate_and_extract_symbols(code):
                     inferred = var_info.get('type') or 'inferred'
                     info["detail"] = f"{name}: {inferred}"
 
-        # ----- Passada 3: varre corpos de funções por VarDecls locais -----
+        # ----- Passada 3: VarDecls locais -----
         def _register_local(stmt):
             if isinstance(stmt, VarDecl):
                 var_type = stmt.var_type or "inferred"
@@ -441,21 +468,16 @@ def validate_and_extract_symbols(code):
 
     references = _find_all_references(code, list(symbol_details.keys()))
 
-    return diagnostics, symbols, definitions, symbol_details, document_symbols, references
+    return (diagnostics, symbols, definitions, symbol_details,
+            document_symbols, references, no_type_var_decls)
 
 
 # ============================================================
 # Semantic tokens
 # ============================================================
 def _build_name_to_type(ast, symbol_details):
-    """Constrói o mapa `nome → token type LSP`.
-
-    Top-level symbols vêm de `symbol_details`. Params e vars locais
-    são extraídos da AST (params têm precedência sobre globais).
-    """
     mapping = {}
 
-    # Top-level symbols
     for name, info in symbol_details.items():
         kind = info.get('kind')
         if kind == SK_FUNCTION:
@@ -471,13 +493,11 @@ def _build_name_to_type(ast, symbol_details):
         elif kind == SK_VARIABLE:
             mapping[name] = TT_VARIABLE
 
-    # Variants de enum
     for decl in ast:
         if isinstance(decl, EnumDecl):
             for vname, _payloads in decl.variants:
                 mapping[vname] = TT_ENUM_MEMBER
 
-    # Params (precedência sobre o resto)
     def _collect_params(methods):
         for m in methods:
             for p in m.params:
@@ -496,13 +516,7 @@ def _build_name_to_type(ast, symbol_details):
 
 
 def _collect_semantic_tokens(code, tokens, ast, symbol_details):
-    """Retorna a lista de inteiros no formato LSP de semantic tokens.
-
-    Cada token é uma tupla de 5 inteiros:
-      [deltaLine, deltaStartChar, length, tokenType, tokenModifiers]
-    """
     name_to_type = _build_name_to_type(ast, symbol_details)
-
     starts = _build_line_starts(code)
 
     result = []
@@ -517,9 +531,6 @@ def _collect_semantic_tokens(code, tokens, ast, symbol_details):
         if tt is None:
             continue
 
-        # Deriva a posição inicial do token a partir do offset bruto.
-        # O lexer salva `offset = self.pos` (após consumir o token),
-        # então a posição inicial é `offset - len(value)`.
         start_offset = tok.offset - len(tok.value)
         if start_offset < 0:
             continue
@@ -540,6 +551,52 @@ def _collect_semantic_tokens(code, tokens, ast, symbol_details):
 
 
 # ============================================================
+# Inlay hints
+# ============================================================
+def _collect_inlay_hints(no_type_var_decls, analyzer):
+    """Para cada VarDecl sem tipo explícito, se o semantic inferiu um
+    tipo concreto, emite um InlayHint `: <tipo>` após o nome.
+    """
+    hints = []
+
+    for decl in no_type_var_decls:
+        name = decl.name
+        line = getattr(decl, 'line', 0) or 0
+        col = getattr(decl, 'col', 0) or 0
+        if line <= 0 or col <= 0:
+            continue
+
+        # Busca o tipo inferido no escopo atual
+        info = None
+        try:
+            info = analyzer.get_var_info(name)
+        except Exception:
+            info = None
+        inferred = (info or {}).get('type') if info else None
+
+        # Fallback: o semantic mutou o próprio VarDecl com o tipo inferido
+        if not inferred:
+            inferred = decl.var_type
+
+        if not inferred or inferred == "inferred":
+            continue
+
+        # Posição: logo após o nome da variável
+        hints.append({
+            "position": {
+                "line": line - 1,
+                "character": (col - 1) + len(name),
+            },
+            "label": f": {inferred}",
+            "kind": 1,  # InlayHintKind.Type
+            "paddingLeft": False,
+            "paddingRight": False,
+        })
+
+    return hints
+
+
+# ============================================================
 # Servidor LSP
 # ============================================================
 class LuminaLSP:
@@ -552,6 +609,8 @@ class LuminaLSP:
         self.references = {}
         self.latest_uri = ""
         self.semantic_tokens_data = []
+        self.inlay_hints_data = []
+        self.last_diagnostics = []
 
     def run(self):
         while True:
@@ -591,6 +650,10 @@ class LuminaLSP:
                                     },
                                     "full": True,
                                 },
+                                "inlayHintProvider": True,
+                                "codeActionProvider": {
+                                    "codeActionKinds": ["quickfix"],
+                                },
                             }
                         }
                     })
@@ -605,17 +668,19 @@ class LuminaLSP:
                     self.latest_text = text
                     self.latest_uri = params.get("textDocument", {}).get("uri", "")
 
-                    (diagnostics, symbols, defs,
-                     details, doc_syms, refs) = validate_and_extract_symbols(text)
+                    (diagnostics, symbols, defs, details,
+                     doc_syms, refs, no_type_vars) = \
+                        validate_and_extract_symbols(text)
 
                     self.latest_definitions = defs
                     self.symbols = symbols
                     self.symbol_details = details
                     self.document_symbols = doc_syms
                     self.references = refs
+                    self.last_diagnostics = diagnostics
 
-                    # Recalcula semantic tokens uma vez por mudança
-                    self.semantic_tokens_data = self._recompute_semantic_tokens()
+                    # Recalcula semantic tokens + inlay hints
+                    self._recompute_extras(text, no_type_vars)
 
                     write_message({
                         "jsonrpc": "2.0",
@@ -674,6 +739,18 @@ class LuminaLSP:
                         "result": {"data": self.semantic_tokens_data},
                     })
 
+                elif method == "textDocument/inlayHint":
+                    write_message({
+                        "jsonrpc": "2.0", "id": msg_id,
+                        "result": self.inlay_hints_data,
+                    })
+
+                elif method == "textDocument/codeAction":
+                    write_message({
+                        "jsonrpc": "2.0", "id": msg_id,
+                        "result": self.get_code_actions(params),
+                    })
+
                 elif method == "shutdown":
                     write_message({"jsonrpc": "2.0", "id": msg_id, "result": None})
 
@@ -689,21 +766,36 @@ class LuminaLSP:
                     })
 
     # ------------------------------------------------------------------
-    # Recalcula semantic tokens sob demanda
+    # Recalcula semantic tokens + inlay hints
     # ------------------------------------------------------------------
-    def _recompute_semantic_tokens(self):
-        if not self.latest_text:
-            return []
+    def _recompute_extras(self, text, no_type_vars):
+        if not text:
+            self.semantic_tokens_data = []
+            self.inlay_hints_data = []
+            return
         try:
-            lexer = Lexer(self.latest_text)
+            lexer = Lexer(text)
             tokens = lexer.tokenize()
-            parser = Parser(tokens, "lsp.lm", self.latest_text)
+            parser = Parser(tokens, "lsp.lm", text)
             ast = parser.parse()
-            return _collect_semantic_tokens(
-                self.latest_text, tokens, ast, self.symbol_details
+            self.semantic_tokens_data = _collect_semantic_tokens(
+                text, tokens, ast, self.symbol_details
             )
+
+            # Roda semantic para preencher var_type dos VarDecls capturados
+            try:
+                analyzer = SemanticAnalyzer("lsp.lm", text)
+                analyzer.analyze(ast)
+                self.inlay_hints_data = _collect_inlay_hints(
+                    no_type_vars, analyzer
+                )
+            except LuminaError:
+                # Se o semantic falha, ainda tentamos usar var_type dos
+                # VarDecls que o próprio código já tinha
+                self.inlay_hints_data = []
         except Exception:
-            return []
+            self.semantic_tokens_data = []
+            self.inlay_hints_data = []
 
     # ------------------------------------------------------------------
     # Handlers
@@ -828,6 +920,54 @@ class LuminaLSP:
             })
 
         return {"changes": {self.latest_uri: edits}}
+
+    def get_code_actions(self, params):
+        """Oferece quick fixes para diagnósticos.
+
+        Atualmente: quando a mensagem contém "Você quis dizer 'X'?",
+        oferece "Renomear para 'X'".
+        """
+        context = params.get("context", {})
+        diagnostics = context.get("diagnostics", [])
+        actions = []
+
+        for diag in diagnostics:
+            msg = diag.get("message", "")
+            suggestion = _extract_suggestion(msg)
+            if not suggestion:
+                continue
+
+            original_range = diag.get("range", {})
+            word_range = _expand_range_to_word(self.latest_text, original_range)
+
+            # Extrai o nome original para o título
+            start_line = word_range["start"]["line"]
+            start_char = word_range["start"]["character"]
+            end_char = word_range["end"]["character"]
+            try:
+                original_word = self.latest_text.split('\n')[start_line][start_char:end_char]
+            except Exception:
+                original_word = "?"
+
+            if not original_word or original_word == suggestion:
+                continue
+
+            actions.append({
+                "title": f"Renomear '{original_word}' para '{suggestion}'",
+                "kind": "quickfix",
+                "diagnostics": [diag],
+                "isPreferred": True,
+                "edit": {
+                    "changes": {
+                        self.latest_uri: [{
+                            "range": word_range,
+                            "newText": suggestion,
+                        }],
+                    },
+                },
+            })
+
+        return actions
 
 
 if __name__ == "__main__":

@@ -48,7 +48,13 @@ def usage():
 
 
 def main():
+    """Entry point. Retorna exit code inteiro (0..255)."""
     args = sys.argv[1:]
+
+    # --help / -h / help / sem args → usage + exit 0
+    if not args or args[0] in ("-h", "--help", "help"):
+        usage()
+        return 0
 
     # ---- Extrai flags globais (--error-format) ----
     error_format = "text"
@@ -61,9 +67,9 @@ def main():
     set_error_format(error_format)
     args = filtered
 
-    if len(args) < 1:
+    if not args:
         usage()
-        return
+        return 0
 
     command = args[0]
     args = args[1:]
@@ -71,8 +77,9 @@ def main():
     if command == "new":
         if len(args) < 1:
             error("Uso: lumina new <nome_do_projeto>")
-            return
+            return 1
         cmd_new(args[0])
+        return 0
 
     elif command == "build":
         entry_file = None
@@ -82,29 +89,33 @@ def main():
                 entry_file = arg
             elif arg.startswith('-'):
                 extra_flags.append(arg)
-        cmd_build(entry_file, extra_flags)
+        result = cmd_build(entry_file, extra_flags)
+        return 0 if result else 1
 
     elif command == "check":
         entry_file = args[0] if args and not args[0].startswith('-') else None
-        ok = cmd_check(entry_file)
-        if not ok:
-            sys.exit(1)
+        return 0 if cmd_check(entry_file) else 1
 
     elif command == "test":
         entry_file = args[0] if args and not args[0].startswith('-') else None
-        cmd_test(entry_file)
+        rc = cmd_test(entry_file)
+        return rc if rc else 0
 
     elif command == "clean":
         cmd_clean()
+        return 0
 
     elif command == "run":
         entry_file = args[0] if args and not args[0].startswith('-') else None
         extra_flags = [arg for arg in args if arg.startswith('-')]
-        cmd_run(entry_file, use_jit=False, extra_flags=extra_flags)
+        rc = cmd_run(entry_file, use_jit=False, extra_flags=extra_flags)
+        return rc if rc else 0
 
     elif command == "jit":
         entry_file = args[0] if args and not args[0].startswith('-') else None
-        cmd_run(entry_file, use_jit=True)
+        cli_args = [a for a in args if not a.startswith('-')][1:]
+        rc = cmd_run(entry_file, use_jit=True, cli_args=cli_args)
+        return rc if rc else 0
 
     elif command == "doc":
         output_format = "html"
@@ -115,41 +126,47 @@ def main():
             elif arg.startswith("--output="):
                 output_path = arg.split("=", 1)[1]
         cmd_doc(output_format=output_format, output_path=output_path)
+        return 0
 
     elif command == "install":
         cmd_install()
+        return 0
 
     elif command == "bind":
         if len(args) < 2:
             error("Uso: lumina bind <c_header.h> <nome_modulo>")
-            return
+            return 1
         cmd_bind(args[0], args[1])
+        return 0
 
     elif command == "fmt":
         check_only = "--check" in args
         files = [a for a in args if not a.startswith("--")]
         if not files:
             error("Uso: lumina fmt <arquivo.lm> [--check]")
-            return
+            return 1
         ok = cmd_fmt(files[0], check_only=check_only)
         if check_only and not ok:
-            sys.exit(1)
+            return 1
+        return 0
 
     elif command == "repl":
         cmd_repl()
+        return 0
 
     elif command == "playground":
         port = 8080
         if args and args[0].isdigit():
             port = int(args[0])
         run_playground(port=port)
+        return 0
 
     else:
         error(f"Comando desconhecido: {paint(command, Color.BOLD)}")
         print()
         usage()
-        sys.exit(1)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

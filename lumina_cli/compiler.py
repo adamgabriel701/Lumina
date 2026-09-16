@@ -184,6 +184,7 @@ def check_lumina(filename, on_error=None):
 
 
 def run_jit(llvm_ir, cli_args):
+    """Roda o IR via JIT. Retorna o exit code da função main()."""
     header("Execução JIT (Just-In-Time)")
     try:
         llvm.initialize_native_target()
@@ -208,7 +209,7 @@ def run_jit(llvm_ir, cli_args):
         ctypes.c_int, ctypes.c_int32, ctypes.POINTER(ctypes.c_char_p)
     )(func_ptr)
 
-    full_args = ["lumina_program"] + cli_args
+    full_args = ["lumina_program"] + list(cli_args or [])
     argc = len(full_args)
     argv = [arg.encode('utf-8') for arg in full_args]
 
@@ -217,6 +218,7 @@ def run_jit(llvm_ir, cli_args):
     ctypes.CDLL(None).fflush(None)
     print()
     info(f"[JIT] Programa finalizado com exit code: {paint(str(ret), Color.BOLD + Color.SUCCESS)}")
+    return ret
 
 
 # ============================================================

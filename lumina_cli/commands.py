@@ -79,7 +79,7 @@ def _load_link_config(entry_file=None):
 
     Prioridade:
       1. Se entry_file dado: procura <entry_file sem .lm>.toml (sidecar).
-      2. Senão: procura ./lumina.toml.
+      2. Fallback: procura ./lumina.toml.
 
     Retorna dict com chaves: libs, extra_objects, target, extra_flags.
     Retorna {} (vazio) se não encontrar nada.
@@ -89,9 +89,10 @@ def _load_link_config(entry_file=None):
         sidecar = re.sub(r'\.lm$', '.toml', entry_file)
         if os.path.exists(sidecar):
             config_path = sidecar
-    else:
-        if os.path.exists("lumina.toml"):
+        elif os.path.exists("lumina.toml"):
             config_path = "lumina.toml"
+    elif os.path.exists("lumina.toml"):
+        config_path = "lumina.toml"
 
     if not config_path:
         return {}
@@ -601,6 +602,13 @@ def cmd_check(entry_file=None):
 #  test
 # ============================================================
 def cmd_test(entry_file=None):
+    """Executa a suíte de testes. Retorna o número de falhas (exit code).
+
+    Exit codes:
+      - 0                → todos os testes passaram
+      - N > 0            → N falhas
+      - 1                → erro de compilação/build
+    """
     if not entry_file:
         if os.path.exists("lumina.toml") and tomllib:
             with open("lumina.toml", "rb") as f:
@@ -610,11 +618,11 @@ def cmd_test(entry_file=None):
             entry_file = "main.lm"
         else:
             _report_error("Nenhum arquivo de entrada especificado.")
-            return
+            return 1
 
     if not os.path.exists(entry_file):
         _report_error(f"Arquivo '{entry_file}' não encontrado.")
-        return
+        return 1
 
     step(f"🧪 Iniciando suíte de testes para: {paint(entry_file, Color.BOLD + Color.BRIGHT_CYAN)}")
 
@@ -625,12 +633,12 @@ def cmd_test(entry_file=None):
         ast = parse_module(entry_file)
     except LuminaError as e:
         _report_error(e)
-        return None
+        return 1
 
     test_funcs = [decl for decl in ast if isinstance(decl, Function) and decl.name.startswith("test_")]
     if not test_funcs:
         warn("⚠️ Nenhuma função de teste (ex: `test \"nome\":`) encontrada no código.")
-        return
+        return 0
 
     from lumina.ast import VarDecl, AssignStmt, BinaryExpr
 
@@ -655,7 +663,7 @@ def cmd_test(entry_file=None):
         analyzer.analyze(new_ast)
     except LuminaError as e:
         _report_error(e)
-        return
+        return 1
 
     codegen = LLVMCodegen()
     codegen.escapes = analyzer.escapes
@@ -667,8 +675,21 @@ def cmd_test(entry_file=None):
     with open(ir_file, "w") as f:
         f.write(llvm_ir)
 
+    # NOVO: respeita [link] do lumina.toml (sidecar ou raiz)
+    link_cfg = _load_link_config(entry_file)
+    libs = link_cfg.get("libs", [])
+    extra_objs_src = link_cfg.get("extra_objects", [])
+    link_extra_flags = link_cfg.get("extra_flags", [])
+    extra_obj_paths, has_cpp = _compile_extra_objects(extra_objs_src)
+
     cmd_args = ["clang", "-O0", "-fprofile-instr-generate", "-fcoverage-mapping",
-                ir_file, "-o", binary_name, "-lc", "-lpthread", "-lgc"]
+                ir_file, "-o", binary_name, "-lc", "-lm", "-lpthread", "-lgc"]
+    cmd_args.extend(extra_obj_paths)
+    if has_cpp:
+        cmd_args.append("-lstdc++")
+    for lib in libs:
+        cmd_args.append(f"-l{lib}")
+    cmd_args.extend(link_extra_flags)
 
     try:
         subprocess.run(cmd_args, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -688,17 +709,18 @@ def cmd_test(entry_file=None):
                                 "lumina_test.profraw", "-o", "lumina_test.profdata"],
                                check=True, capture_output=True)
                 header("📊 Relatório de Cobertura de Código")
-                subprocess.run(["llvm-cov", "show", binary_name,
-                                "-instr-profile=lumina_test.profdata"], check=True)
                 subprocess.run(["llvm-cov", "report", binary_name,
                                 "-instr-profile=lumina_test.profdata"], check=True)
             except Exception:
                 warn("⚠️ Ferramentas de cobertura (llvm-cov) não encontradas. Relatório ignorado.")
+            return 0
         else:
-            _report_error("Um ou mais testes falharam (Assertion Failed).")
+            _report_error(f"{result.returncode} teste(s) falharam.")
+            return result.returncode if result.returncode > 0 else 1
 
     except subprocess.CalledProcessError:
         _report_error("Erro durante a compilação da suíte de testes.")
+        return 1
     finally:
         for f in (ir_file, binary_name, "lumina_test.profraw", "lumina_test.profdata"):
             if os.path.exists(f):
@@ -732,7 +754,13 @@ def cmd_clean():
 # ============================================================
 #  run / jit
 # ============================================================
-def cmd_run(entry_file=None, use_jit=False, extra_flags=[]):
+def cmd_run(entry_file=None, use_jit=False, extra_flags=[], cli_args=None):
+    """Compila e executa. Retorna o exit code do programa.
+
+    Exit codes:
+      - exit code do binário compilado (0..255)
+      - 1 se a compilação falhar
+    """
     if not entry_file:
         if os.path.exists("lumina.toml") and tomllib:
             with open("lumina.toml", "rb") as f:
@@ -746,28 +774,29 @@ def cmd_run(entry_file=None, use_jit=False, extra_flags=[]):
             entry_file = "main.lm"
         else:
             _report_error("Nenhum arquivo de entrada especificado.")
-            return
+            return 1
 
     if not os.path.exists(entry_file):
         _report_error(f"Arquivo '{entry_file}' não encontrado.")
-        return
+        return 1
 
     step(f"🚀 Iniciando processo para: {paint(entry_file, Color.BOLD + Color.BRIGHT_CYAN)}")
 
     if use_jit:
         ir_file = "lumina_jit_temp.ll"
-        llvm_ir = compile_lumina(entry_file, output_file=ir_file, on_error=_report_error)
-        if not llvm_ir:
-            return
-        if os.path.exists(ir_file):
-            os.remove(ir_file)
-        run_jit(llvm_ir, [])
-        return
+        try:
+            llvm_ir = compile_lumina(entry_file, output_file=ir_file, on_error=_report_error)
+            if not llvm_ir:
+                return 1
+            return run_jit(llvm_ir, cli_args or [])
+        finally:
+            if os.path.exists(ir_file):
+                os.remove(ir_file)
 
     binary_name = cmd_build(entry_file, extra_flags=extra_flags)
     if not binary_name:
         # cmd_build já reportou o erro
-        return
+        return 1
 
     header("Executando Binário Nativo")
 
@@ -776,7 +805,8 @@ def cmd_run(entry_file=None, use_jit=False, extra_flags=[]):
     else:
         exe_path = f"./{binary_name}"
 
-    subprocess.run([exe_path])
+    result = subprocess.run([exe_path])
+    return result.returncode
 
 
 # ============================================================
@@ -848,9 +878,8 @@ def cmd_fmt(filename, check_only=False):
     já está formatado. Retorna True se OK (ou já formatado), False se
     precisa formatar ou se houve erro.
 
-    Nota: como o auto-formatter trabalha sobre a AST e ainda não
-    preserva comentários, arquivos com comentários sempre falham
-    no --check.
+    Nota: o auto-formatter preserva comentários leading e `@attrs`.
+    Comentários trailing (inline) ainda são descartados.
     """
     if not os.path.exists(filename):
         _report_error(f"Arquivo '{filename}' não encontrado.")
@@ -939,8 +968,10 @@ def cmd_repl():
                     cfunc = ctypes.CFUNCTYPE(
                         ctypes.c_int, ctypes.c_int32, ctypes.POINTER(ctypes.c_char_p)
                     )(func_ptr)
-                    cfunc(0, None)
+                    ret = cfunc(0, None)
                     ctypes.CDLL(None).fflush(None)
+                    if ret != 0:
+                        print(f"=> {ret}")
 
                 except LuminaError as e:
                     print(e)

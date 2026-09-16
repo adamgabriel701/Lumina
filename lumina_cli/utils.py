@@ -2,6 +2,23 @@ import os
 import re
 import hashlib
 from lumina.common.colors import Color, HAS_COLOR
+import sys
+
+# Stream para onde as mensagens de progresso vão.
+# Padrão: stdout. Quando --error-format=json, é redirecionado para stderr
+# (mantendo o stdout exclusivo para o JSON — convenção Unix).
+_PROGRESS_STREAM = sys.stdout
+
+
+def set_progress_stream(stream):
+    """Redireciona mensagens de progresso (step/info/warn/etc)."""
+    global _PROGRESS_STREAM
+    _PROGRESS_STREAM = stream
+
+
+def cprint(*args, color=Color.RESET, end='\n', sep=' '):
+    text = sep.join(str(a) for a in args)
+    print(f"{color}{text}{Color.RESET}", end=end, file=_PROGRESS_STREAM)
 
 LUMINA_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STD_DIR = os.path.join(LUMINA_ROOT, "std")

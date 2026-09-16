@@ -111,6 +111,23 @@ class IndexExpr(Expr):
 
 
 @dataclass
+class SliceExpr(Expr):
+    """`arr[start..end]` com bounds opcionais.
+
+    Campos:
+      - array: expressão que produz o array/string
+      - start: Optional[Expr] — None significa "do início"
+      - end:   Optional[Expr] — None significa "até o fim"
+
+    Substitui `IndexExpr(array, BinaryExpr('..', start, end))`.
+    Destrava `arr[..]`, `arr[a..]`, `arr[..b]`.
+    """
+    array: Expr
+    start: Optional[Expr] = None
+    end: Optional[Expr] = None
+    
+
+@dataclass
 class MemberExpr(Expr):
     obj: Expr
     member: str

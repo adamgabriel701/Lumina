@@ -1,21 +1,31 @@
 import sys
+import os
+
+if __package__ in (None, ""):
+    parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if parent not in sys.path:
+        sys.path.insert(0, parent)
+    __package__ = "lumina_cli"
+
 from .utils import Color, paint, cprint, info, success, warn, error, step, header
 from .commands import (
     cmd_new, cmd_build, cmd_clean, cmd_run, cmd_doc, cmd_install,
-    cmd_bind, cmd_fmt, cmd_repl, cmd_test,
+    cmd_bind, cmd_fmt, cmd_repl, cmd_test, cmd_check,
+    set_error_format,
 )
 from .playground import run_server as run_playground
 
 
 def usage():
     header("🌟 Lumina CLI")
-    info("Uso: lumina <comando> [argumentos]")
+    info("Uso: lumina <comando> [argumentos] [--error-format=text|json]")
     print()
     step("Comandos disponíveis:")
     commands = [
         ("new <nome>",                    "Cria um novo projeto Lumina"),
-        ("build [arquivo] [--no-gc]",     "Compila o projeto para um binário nativo"),
+        ("build [arquivo] [flags]",       "Compila para binário nativo (-O2 padrão)"),
         ("run [arquivo]",                 "Compila e executa o binário nativo"),
+        ("check [arquivo]",               "Só lexer+parser+semantic (rápido, sem codegen)"),
         ("test [arquivo]",                "Compila e executa a suíte de testes nativa"),
         ("jit [arquivo]",                 "Compila e executa via JIT (Just-In-Time)"),
         ("clean",                         "Limpa o cache e os binários gerados"),
@@ -29,16 +39,33 @@ def usage():
     for cmd, desc in commands:
         print(f"  {paint(cmd, Color.BOLD + Color.BRIGHT_CYAN)}  {paint(desc, Color.MUTED)}")
     print()
+    info(f"Flags de build: {paint('--release (-O3)', Color.MUTED)}, "
+         f"{paint('--debug (-O0 + DWARF)', Color.MUTED)}, "
+         f"{paint('--wasm', Color.MUTED)}, "
+         f"{paint('--no-gc', Color.MUTED)}")
     info(f"Exemplo: {paint('lumina new meu_projeto', Color.MUTED)}")
 
 
 def main():
-    if len(sys.argv) < 2:
+    args = sys.argv[1:]
+
+    # ---- Extrai flags globais (--error-format) ----
+    error_format = "text"
+    filtered = []
+    for arg in args:
+        if arg.startswith("--error-format="):
+            error_format = arg.split("=", 1)[1]
+        else:
+            filtered.append(arg)
+    set_error_format(error_format)
+    args = filtered
+
+    if len(args) < 1:
         usage()
         return
 
-    command = sys.argv[1]
-    args = sys.argv[2:]
+    command = args[0]
+    args = args[1:]
 
     if command == "new":
         if len(args) < 1:
@@ -55,6 +82,12 @@ def main():
             elif arg.startswith('-'):
                 extra_flags.append(arg)
         cmd_build(entry_file, extra_flags)
+
+    elif command == "check":
+        entry_file = args[0] if args and not args[0].startswith('-') else None
+        ok = cmd_check(entry_file)
+        if not ok:
+            sys.exit(1)
 
     elif command == "test":
         entry_file = args[0] if args and not args[0].startswith('-') else None

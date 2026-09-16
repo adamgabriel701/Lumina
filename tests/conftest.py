@@ -1,42 +1,80 @@
-"""Fixtures e constantes compartilhadas pelos testes."""
-import os
-import subprocess
+"""Configuração compartilhada dos testes."""
 import sys
+import os
+import pathlib
+import subprocess
+
+# Garante que `lumina` e `lumina_cli` são importáveis
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
+from lumina.lexer import Lexer
+from lumina.parser import Parser
+from lumina.semantic import SemanticAnalyzer
 
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-@pytest.fixture(scope="session")
-def repo_root():
-    return REPO_ROOT
+# ============================================================
+# Fixtures de parsing (usadas por tests/test_*.py)
+# ============================================================
+@pytest.fixture
+def lex():
+    """`lex(src) -> List[Token]`."""
+    def _lex(src):
+        return Lexer(src).tokenize()
+    return _lex
 
 
 @pytest.fixture
-def run_cli():
-    """Executa a CLI como subprocess.
+def parse():
+    """`parse(src) -> List[Stmt]`."""
+    def _parse(src):
+        tokens = Lexer(src).tokenize()
+        return Parser(tokens, "<test>", src).parse()
+    return _parse
 
-    Passa PYTHONPATH=REPO_ROOT pra que lumina_cli seja encontrado
-    mesmo quando cwd é um diretório temporário.
-    """
-    def _run(*args, cwd=None):
-        cmd = [sys.executable, "-m", "lumina_cli.main", *args]
-        env = {**os.environ, "PYTHONPATH": REPO_ROOT}
+
+@pytest.fixture
+def analyze():
+    """`analyze(src) -> List[Stmt]` (roda o semantic)."""
+    def _analyze(src):
+        tokens = Lexer(src).tokenize()
+        ast = Parser(tokens, "<test>", src).parse()
+        SemanticAnalyzer("<test>", src).analyze(ast)
+        return ast
+    return _analyze
+
+
+# ============================================================
+# Fixtures da CLI (usadas por tests/cli/ e tests/features/)
+# ============================================================
+@pytest.fixture
+def repo_root():
+    """Diretório raiz do projeto (contém pyproject.toml)."""
+    return pathlib.Path(__file__).resolve().parent.parent
+
+
+@pytest.fixture
+def run_cli(repo_root):
+    """Executa `python -m lumina_cli <args>` e retorna CompletedProcess."""
+    def _run(*args, check=False, timeout=60, cwd=None):
+        cmd = [sys.executable, "-m", "lumina_cli", *args]
         return subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            cwd=cwd or REPO_ROOT,
-            env=env,
+            cwd=cwd or repo_root,
+            timeout=timeout,
+            check=check,
         )
     return _run
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def expected_feature_lines():
-    """Linhas que DEVEM aparecer no output de uncertain_features.lm."""
+    """Linhas esperadas do teste end-to-end `uncertain_features.lm`.
+
+    Mantidas em sincronia com `run_tests.py` e com o `.lm`.
+    """
     return [
         "1. Slicing: ell",
         "2. Array indexing:",

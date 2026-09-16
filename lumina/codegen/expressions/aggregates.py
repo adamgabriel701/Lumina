@@ -7,6 +7,41 @@ from ...ast import (
 
 class AggregatesMixin:
 
+    # ------------------------------------------------------------------
+    # Helper: coage um valor para o tipo do destino antes de um store.
+    # Mesmo padrão do _coerce_val_to em flow.py, mas local para este mixin.
+    # ------------------------------------------------------------------
+    def _coerce_for_store(self, val, target_ty, name_hint="field"):
+        if val.type == target_ty:
+            return val
+
+        # int ↔ int (sext/zext/trunc)
+        if isinstance(val.type, ir.IntType) and isinstance(target_ty, ir.IntType):
+            if val.type.width < target_ty.width:
+                if val.type.width == 1:
+                    return self.builder.zext(val, target_ty, name=f"{name_hint}_zext")
+                return self.builder.sext(val, target_ty, name=f"{name_hint}_sext")
+            return self.builder.trunc(val, target_ty, name=f"{name_hint}_trunc")
+
+        # ptr ↔ int
+        if isinstance(val.type, ir.PointerType) and isinstance(target_ty, ir.IntType):
+            return self.builder.ptrtoint(val, target_ty, name=f"{name_hint}_ptrtoint")
+        if isinstance(val.type, ir.IntType) and isinstance(target_ty, ir.PointerType):
+            return self.builder.inttoptr(val, target_ty, name=f"{name_hint}_inttoptr")
+
+        # ptr ↔ ptr
+        if isinstance(val.type, ir.PointerType) and isinstance(target_ty, ir.PointerType):
+            return self.builder.bitcast(val, target_ty, name=f"{name_hint}_bitcast")
+
+        # int ↔ float
+        if val.type == self.i64_ty and target_ty == self.f64_ty:
+            return self.builder.sitofp(val, target_ty, name=f"{name_hint}_sitofp")
+        if val.type == self.f64_ty and target_ty == self.i64_ty:
+            return self.builder.fptosi(val, target_ty, name=f"{name_hint}_fptosi")
+
+        # Fallback: retorna como está (o store vai reclamar)
+        return val
+
     def visit_ArrayExpr(self, node):
         elem_ty = self.i64_ty
         if len(node.elements) > 0:
@@ -21,12 +56,7 @@ class AggregatesMixin:
         for i, el in enumerate(node.elements):
             el_ptr = self.builder.gep(ptr, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, i)], name=f"arr_el_{i}")
             val = self.visit(el)
-            if val.type != elem_ty:
-                if isinstance(val.type, ir.PointerType) and isinstance(elem_ty, ir.PointerType):
-                    val = self.builder.bitcast(val, elem_ty, name=f"arr_cast_{i}")
-                elif isinstance(val.type, ir.IntType) and isinstance(elem_ty, ir.IntType):
-                    if val.type.width < elem_ty.width:
-                        val = self.builder.sext(val, elem_ty, name=f"arr_sext_{i}")
+            val = self._coerce_for_store(val, elem_ty, name_hint=f"arr_{i}")
             self.builder.store(val, el_ptr)
         return ptr
 
@@ -44,6 +74,11 @@ class AggregatesMixin:
             elem_index = self.struct_fields[node.struct_name].get(fname, 0)
             elem_ptr = self.builder.gep(ptr, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, elem_index)], name=fname + "_ptr")
             val = self.visit(fexpr)
+
+            # NOVO: coage antes do store (cobre i64→i8* para campos str)
+            target_ty = elem_ptr.type.pointee
+            val = self._coerce_for_store(val, target_ty, name_hint=fname)
+
             self.builder.store(val, elem_ptr)
         return ptr
 

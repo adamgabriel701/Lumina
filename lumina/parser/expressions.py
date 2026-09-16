@@ -2,9 +2,9 @@ from .base import ParserBase
 from ..lexer.tokens import TokenType, Token
 from ..ast import (
     NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr,
-    ArrayExpr, IndexExpr, MemberExpr, AddressOfExpr, DerefExpr, UnaryExpr,
-    PropagateExpr, ComptimeExpr, StructLiteralExpr, CastExpr, LambdaExpr,
-    StructLiteralField, Param, InterpolatedStringExpr,
+    ArrayExpr, IndexExpr, SliceExpr, MemberExpr, AddressOfExpr, DerefExpr,
+    UnaryExpr, PropagateExpr, ComptimeExpr, StructLiteralExpr, CastExpr,
+    LambdaExpr, StructLiteralField, Param, InterpolatedStringExpr,
 )
 from ..errors import LuminaError
 
@@ -282,9 +282,7 @@ class ExpressionParser(ParserBase):
     def parse_postfix(self, node):
         while True:
             if self.match(TokenType.LBRACKET):
-                index_expr = self.parse_expression()
-                self.expect(TokenType.RBRACKET)
-                node = IndexExpr(node, index_expr)
+                node = self._parse_slice_or_index(node)
             elif self.check(TokenType.QUESTION) and self.peek(1) and self.peek(1).type == TokenType.DOT:
                 self.consume()
                 self.consume()
@@ -327,6 +325,43 @@ class ExpressionParser(ParserBase):
             target_type = self.expect(TokenType.IDENT).value
             node = CastExpr(node, target_type)
         return node
+
+    def _parse_slice_or_index(self, base_node):
+        """Chamado após consumir `[`. Decide entre IndexExpr e SliceExpr.
+
+        Suporta:
+          arr[i]         → IndexExpr
+          arr[a..b]      → SliceExpr(a, b)
+          arr[a..]       → SliceExpr(a, None)
+          arr[..b]       → SliceExpr(None, b)
+          arr[..]        → SliceExpr(None, None)
+
+        Usa `parse_additive()` para os bounds (não `parse_expression`),
+        para não consumir o `..` como operador binário.
+        """
+        # Caso: arr[..] ou arr[..end]
+        if self.check(TokenType.DOT_DOT):
+            self.consume()
+            if self.check(TokenType.RBRACKET):
+                self.consume()
+                return SliceExpr(base_node, None, None)
+            end = self.parse_additive()
+            self.expect(TokenType.RBRACKET)
+            return SliceExpr(base_node, None, end)
+
+        # Caso: arr[i], arr[a..], arr[a..b]
+        first = self.parse_additive()
+        if self.check(TokenType.DOT_DOT):
+            self.consume()
+            if self.check(TokenType.RBRACKET):
+                self.consume()
+                return SliceExpr(base_node, first, None)
+            end = self.parse_additive()
+            self.expect(TokenType.RBRACKET)
+            return SliceExpr(base_node, first, end)
+
+        self.expect(TokenType.RBRACKET)
+        return IndexExpr(base_node, first)
 
     def parse_type(self):
         type_name = self.expect(TokenType.IDENT).value

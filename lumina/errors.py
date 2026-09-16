@@ -23,6 +23,23 @@ class LuminaError(Exception):
         # Re-formata para refletir notas adicionadas depois
         Exception.__init__(self, self.format_error())
 
+    def to_dict(self) -> dict:
+        """Retorna o erro como dict estruturado (para JSON, LSP, etc)."""
+        return {
+            "type": "error",
+            "message": self.message,
+            "filename": self.filename,
+            "line": self.line,
+            "col": self.col,
+            "end_col": self.end_col,
+            "notes": list(self.notes),
+        }
+
+    def to_json(self) -> str:
+        """Retorna o erro como JSON de uma linha (ideal para CLI)."""
+        import json
+        return json.dumps(self.to_dict(), ensure_ascii=False)
+
     def format_error(self) -> str:
         C = Colors
 

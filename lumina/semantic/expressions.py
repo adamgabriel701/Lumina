@@ -1,12 +1,12 @@
 from ..ast import (
     NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr,
-    ArrayExpr, IndexExpr, MemberExpr, AddressOfExpr, DerefExpr, UnaryExpr,
-    PropagateExpr, ComptimeExpr, StructLiteralExpr, MatchExpr, CastExpr,
-    LambdaExpr, StructLiteralField,
+    ArrayExpr, IndexExpr, SliceExpr, MemberExpr, AddressOfExpr, DerefExpr,
+    UnaryExpr, PropagateExpr, ComptimeExpr, StructLiteralExpr, MatchExpr,
+    CastExpr, LambdaExpr, StructLiteralField,
 )
 from ..ast.visitor import NodeVisitor
 from ..errors import LuminaError
-from .types import is_assignable  # NOVO
+from .types import is_assignable
 
 
 def get_suggestion(name, possible_names):
@@ -65,8 +65,6 @@ class ExpressionAnalyzer(NodeVisitor):
         right_type = self.visit(node.right)
 
         if node.op in ('==', '!=', '<', '>', '<=', '>='):
-            # NOVO: usa is_assignable para tolerar ptr/int/str/fn entre si.
-            # Antes era comparação estrita e quebrava `ptr == 0`, `ptr == ""`, etc.
             if left_type and right_type and left_type != right_type:
                 if not (is_assignable(left_type, right_type)
                         or is_assignable(right_type, left_type)):
@@ -160,13 +158,14 @@ class ExpressionAnalyzer(NodeVisitor):
                     p_name, p_type = param.name, param.type_ann
                     if p_type in type_params:
                         continue
-                    # NOVO: usa is_assignable em vez de igualdade estrita
                     if arg_type and p_type and not is_assignable(p_type, arg_type):
                         raise LuminaError(
                             f"Tipo inválido para parâmetro '{p_name}': esperado '{p_type}', obteve '{arg_type}'.",
                             self.filename, getattr(node, 'line', 0), getattr(node, 'col', 0), self.source_code,
                         )
-            return None
+            # NÃO retornar aqui — o `for` abaixo precisa visitar os args
+            # para pegar erros em chamadas de builtins (print, len, etc).
+            # Foi essa a causa do `test_block_scope_var_not_visible_outside`.
 
         for arg in node.args:
             self.visit(arg)
@@ -181,6 +180,17 @@ class ExpressionAnalyzer(NodeVisitor):
         self.visit(node.array)
         self.visit(node.index)
         return None
+
+    def visit_SliceExpr(self, node):
+        arr_type = self.visit(node.array)
+        if node.start:
+            self.visit(node.start)
+        if node.end:
+            self.visit(node.end)
+        # Slice de str → str; slice de array → ptr.
+        if arr_type == "str":
+            return "str"
+        return "ptr"
 
     def visit_MemberExpr(self, node):
         current_type = self.visit(node.obj)

@@ -8,7 +8,7 @@ from llvmlite import binding as llvm
 from lumina.ast import (
     Function, VarDecl, AssignStmt, ReturnStmt, IfStmt, WhileStmt, ForStmt,
     NumberExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr,
-    MemberExpr, IndexExpr, ImportStmt, StructDecl, EnumDecl,
+    MemberExpr, SliceExpr, IndexExpr, ImportStmt, StructDecl, EnumDecl,
     TraitDecl, ImplBlock, ExternDecl, DestructureStmt, AddressOfExpr, DerefExpr,
     UnaryExpr, CastExpr, StructLiteralExpr, MatchExpr, LambdaExpr,
     DeferStmt, AssertStmt, BenchStmt, BreakStmt, ContinueStmt,
@@ -84,7 +84,8 @@ def parse_module(filename):
     return resolved_ast
 
 
-def compile_lumina(filename, output_file="output.ll", use_cache=True, is_wasm=False, is_debug=False):
+def compile_lumina(filename, output_file="output.ll", use_cache=True,
+                   is_wasm=False, is_debug=False, on_error=None):
     cache_dir = ".lumina_cache"
     raw_hash = get_cache_hash(filename)
     if is_wasm:
@@ -105,7 +106,10 @@ def compile_lumina(filename, output_file="output.ll", use_cache=True, is_wasm=Fa
     try:
         ast = parse_module(filename)
     except LuminaError as e:
-        error(e)
+        if on_error:
+            on_error(e)
+        else:
+            error(e)
         return None
 
     header("2. Análise Semântica")
@@ -115,7 +119,10 @@ def compile_lumina(filename, output_file="output.ll", use_cache=True, is_wasm=Fa
     try:
         analyzer.analyze(ast)
     except LuminaError as e:
-        error(e)
+        if on_error:
+            on_error(e)
+        else:
+            error(e)
         return None
 
     header("3. Geração de Código LLVM IR")
@@ -134,6 +141,42 @@ def compile_lumina(filename, output_file="output.ll", use_cache=True, is_wasm=Fa
             f.write(llvm_ir)
 
     return llvm_ir
+
+
+def check_lumina(filename, on_error=None):
+    """Roda apenas lexer + parser + semantic. Sem codegen.
+
+    Retorna True se o arquivo está OK, False se há erros.
+    Aceita `on_error` para customizar o report de erros (ex: JSON).
+    """
+    header("1. Análise Léxica e Sintática")
+    try:
+        ast = parse_module(filename)
+    except LuminaError as e:
+        if on_error:
+            on_error(e)
+        else:
+            error(e)
+        return False
+
+    header("2. Análise Semântica")
+    try:
+        with open(filename, "r") as f:
+            source_code = f.read()
+    except Exception:
+        source_code = ""
+
+    analyzer = SemanticAnalyzer(filename, source_code)
+    try:
+        analyzer.analyze(ast)
+    except LuminaError as e:
+        if on_error:
+            on_error(e)
+        else:
+            error(e)
+        return False
+
+    return True
 
 
 def run_jit(llvm_ir, cli_args):
@@ -401,6 +444,14 @@ def format_node(node, indent_level=0):
         if indent_level > 0:
             return f"{indent}{obj}{op}{node.member}\n"
         return f"{obj}{op}{node.member}"
+
+    elif isinstance(node, SliceExpr):
+        arr = format_node(node.array, 0)
+        start = format_node(node.start, 0) if node.start else ""
+        end = format_node(node.end, 0) if node.end else ""
+        if indent_level > 0:
+            return f"{indent}{arr}[{start}..{end}]\n"
+        return f"{arr}[{start}..{end}]"
 
     elif isinstance(node, IndexExpr):
         arr = format_node(node.array, 0)

@@ -15,9 +15,10 @@ var decls dentro desses blocos não eram registradas no escopo.
 from ..ast import (
     VarDecl, DestructureStmt, AssignStmt, ReturnStmt, IfStmt, WhileStmt,
     ForStmt, MatchStmt, ContinueStmt, DeferStmt, BreakStmt, AssertStmt,
-    BenchStmt, CallExpr, MemberExpr, DerefExpr, IndexExpr, VariableExpr,
-    StringExpr, NumberExpr, BoolExpr, BinaryExpr, StructLiteralExpr,
-    ArrayExpr, AddressOfExpr, PropagateExpr, LambdaExpr, ErrorNode,
+    BenchStmt, CallExpr, MemberExpr, DerefExpr, SliceExpr, IndexExpr,
+    VariableExpr, StringExpr, NumberExpr, BoolExpr, BinaryExpr,
+    StructLiteralExpr, ArrayExpr, AddressOfExpr, PropagateExpr, LambdaExpr,
+    ErrorNode,
 )
 from ..errors import LuminaError
 from .types import is_assignable
@@ -46,6 +47,19 @@ class StatementAnalyzer:
             f"{context} deve ser 'bool' ou 'int', obteve '{cond_type}'.",
             self.filename, line, col, self.source_code,
         )
+
+    def _find_enum_of_variant(self, variant_name):
+        """Retorna o nome do enum que contém `variant_name`, ou None.
+
+        Usado para inferir o tipo de `let p = Dois(1, 2)` → "Par".
+        """
+        for enum_name, enum_def in self.struct_defs.items():
+            if not hasattr(enum_def, 'variants'):
+                continue
+            for v in enum_def.variants:
+                if v[0] == variant_name:
+                    return enum_name
+        return None
 
     def analyze_stmt(self, node):
         if isinstance(node, ErrorNode):
@@ -82,11 +96,12 @@ class StatementAnalyzer:
                     node.var_type = "int"
                 elif isinstance(node.value, PropagateExpr):
                     node.var_type = "int"
+                elif isinstance(node.value, SliceExpr):
+                    # arr[a..b] sempre produz ptr
+                    node.var_type = "ptr"
                 elif isinstance(node.value, IndexExpr):
-                    if isinstance(node.value.index, BinaryExpr) and node.value.index.op == '..':
-                        node.var_type = "ptr"
-                    else:
-                        node.var_type = "int"
+                    # Index normal: elemento é int (por padrão)
+                    node.var_type = "int"
                 elif isinstance(node.value, CallExpr):
                     func_name = getattr(node.value.callee, 'name', None) if hasattr(node.value, 'callee') else getattr(node.value, 'name', None)
 
@@ -102,11 +117,17 @@ class StatementAnalyzer:
                                 else:
                                     node.var_type = "int"
                     else:
+                        # 1) Função normal (não-genérica): usa o return_type
+                        # 2) Função genérica: infere pelo primeiro arg que casa com T
+                        # 3) Construtor de enum: pega o nome do enum
+                        # 4) Fallback: "int"
                         if func_name in self.function_defs:
                             fn_def = self.function_defs[func_name]
                             ret_t = fn_def.return_type
                             type_params = getattr(fn_def, 'type_params', None) or []
+
                             if ret_t in type_params:
+                                # Infere pelo primeiro arg que casa com o type_param
                                 inferred = "int"
                                 for arg_node, param in zip(node.value.args, fn_def.params):
                                     if param.type_ann == ret_t:
@@ -118,7 +139,11 @@ class StatementAnalyzer:
                             else:
                                 node.var_type = ret_t
                         else:
-                            node.var_type = "int"
+                            enum_name = self._find_enum_of_variant(func_name)
+                            if enum_name is not None:
+                                node.var_type = enum_name
+                            else:
+                                node.var_type = "int"
 
             if isinstance(node.value, CallExpr) and getattr(node.value.callee, 'name', None) == "alloc":
                 self.heap_allocs.add(node.name)

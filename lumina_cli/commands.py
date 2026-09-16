@@ -28,6 +28,46 @@ from .utils import (
 )
 from .compiler import compile_lumina, run_jit, format_node
 
+# ============================================================
+#  Formato de erro global (text ou json)
+# ============================================================
+ERROR_FORMAT = "text"
+
+
+def set_error_format(fmt: str):
+    """Define o formato de erro global.
+
+    Valores: 'text' (padrão) ou 'json'.
+    Em modo JSON, todo progresso vai para stderr; stdout fica exclusivo
+    para a linha JSON — assim `... | jq .` funciona direto.
+    """
+    global ERROR_FORMAT
+    if fmt not in ("text", "json"):
+        fmt = "text"
+    ERROR_FORMAT = fmt
+
+    from .utils import set_progress_stream
+    if fmt == "json":
+        set_progress_stream(sys.stderr)
+    else:
+        set_progress_stream(sys.stdout)
+
+
+def _report_error(e):
+    """Reporta um LuminaError respeitando ERROR_FORMAT.
+
+    Em modo 'json', emite uma linha JSON. Em modo 'text', usa o
+    formatador colorido padrão.
+    """
+    if ERROR_FORMAT == "json":
+        try:
+            payload = e.to_dict()
+        except AttributeError:
+            # Não é LuminaError — embrulha numa forma mínima
+            payload = {"type": "error", "message": str(e)}
+        print(json.dumps(payload, ensure_ascii=False), flush=True)
+    else:
+        error(e)
 
 # ============================================================
 #  Helpers de [link]
@@ -273,7 +313,14 @@ def cmd_build(entry_file=None, extra_flags=[]):
 
     if entry_file:
         entry = entry_file
-        project_name = entry_file.replace('.lm', '')
+        # Normaliza o nome do binário:
+        #   - paths relativos:  "examples/main"  (como está)
+        #   - paths absolutos:  "/tmp/slice"     (como está — não remover o /)
+        #   - remove .lm do final, sem quebrar paths
+        if entry_file.endswith(".lm"):
+            project_name = entry_file[:-3]
+        else:
+            project_name = entry_file
     else:
         if not os.path.exists("lumina.toml"):
             error("❌ Erro: Nenhum arquivo 'lumina.toml' encontrado no diretório atual.")
@@ -314,7 +361,8 @@ def cmd_build(entry_file=None, extra_flags=[]):
     # Conteúdo do cache inclui a flag de otimização
     cache_use = not (is_wasm or is_debug)
 
-    llvm_ir = compile_lumina(entry, use_cache=cache_use, is_wasm=is_wasm, is_debug=is_debug)
+    llvm_ir = compile_lumina(entry, use_cache=cache_use, is_wasm=is_wasm,
+                             is_debug=is_debug, on_error=_report_error)
     if not llvm_ir:
         return None
 
@@ -409,7 +457,9 @@ def cmd_build(entry_file=None, extra_flags=[]):
     try:
         subprocess.run(cmd_args, check=True)
         output_path = f"{project_name}.wasm" if is_wasm else project_name
-        success(f"✅ Build concluído: {paint('./' + output_path, Color.BOLD + Color.SUCCESS)}")
+        # Não prefixa `./` se já for absoluto
+        display_path = output_path if os.path.isabs(output_path) else f"./{output_path}"
+        success(f"✅ Build concluído: {paint(display_path, Color.BOLD + Color.SUCCESS)}")
 
         os.makedirs(".lumina_cache", exist_ok=True)
         cache_subdir = os.path.dirname(hash_obj_file)
@@ -424,6 +474,36 @@ def cmd_build(entry_file=None, extra_flags=[]):
     except subprocess.CalledProcessError:
         error("❌ Erro durante a linkagem com o clang.")
         return None
+
+
+# ============================================================
+#  check — só lexer + parser + semantic (rápido, sem codegen)
+# ============================================================
+def cmd_check(entry_file=None):
+    if not entry_file:
+        if os.path.exists("lumina.toml") and tomllib:
+            with open("lumina.toml", "rb") as f:
+                config = tomllib.load(f)
+                entry_file = config.get("package", {}).get("entry", "main.lm")
+        elif os.path.exists("main.lm"):
+            entry_file = "main.lm"
+        else:
+            error("❌ Erro: Nenhum arquivo de entrada especificado.")
+            return False
+
+    if not os.path.exists(entry_file):
+        error(f"❌ Erro: Arquivo '{paint(entry_file, Color.BOLD)}' não encontrado.")
+        return False
+
+    step(f"🔍 Verificando: {paint(entry_file, Color.BOLD + Color.BRIGHT_CYAN)}")
+
+    from .compiler import check_lumina
+
+    ok = check_lumina(entry_file, on_error=_report_error)
+
+    if ok:
+        success(f"✅ {paint(entry_file, Color.BOLD)} — sem erros")
+    return ok
 
 
 # ============================================================
@@ -575,7 +655,7 @@ def cmd_run(entry_file=None, use_jit=False, extra_flags=[]):
 
     if use_jit:
         ir_file = "lumina_jit_temp.ll"
-        llvm_ir = compile_lumina(entry_file, output_file=ir_file)
+        llvm_ir = compile_lumina(entry_file, output_file=ir_file, on_error=_report_error)
         if not llvm_ir:
             error("❌ Falha na compilação.")
             return
@@ -590,7 +670,15 @@ def cmd_run(entry_file=None, use_jit=False, extra_flags=[]):
         return
 
     header("Executando Binário Nativo")
-    subprocess.run([f"./{binary_name}"])
+
+    # Se `binary_name` for absoluto (começa com /), usa direto.
+    # Senão, prefixa com ./ (assumindo cwd = raiz do projeto).
+    if os.path.isabs(binary_name):
+        exe_path = binary_name
+    else:
+        exe_path = f"./{binary_name}"
+
+    subprocess.run([exe_path])
 
 
 # ============================================================

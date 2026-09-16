@@ -2,41 +2,39 @@
 # Python
 # ============================================
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
 *.egg-info/
 .pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.tox/
 
 # ============================================
-# Lumina Build Artifacts
+# Lumina: artefatos de build
 # ============================================
 *.ll
 *.wasm
 *.o
 .lumina_cache/
-output.ll
+*.profraw
+*.profdata
+lumina_test_bin
 
 # ============================================
-# Binários nativos gerados
-# Padrão geral: ignora tudo em examples/ e tests/
-# que não seja código fonte (.lm) ou doc (.md)
+# examples/ — rastreia só fontes e config
 # ============================================
 /examples/*
 !/examples/*.lm
 !/examples/*.md
+!/examples/*.toml
+!/examples/*.cpp
+!/examples/*.h
 !/examples/MeuBanco/
-
-/tests/*
-!/tests/*.lm
-!/tests/*.py
-!/tests/*.md
-
-# Binários específicos da raiz
-/main
-/tests_lumina
+!/examples/MeuBanco/**
 
 # ============================================
-# Benchmarks (binários compilados + runtime)
+# benchmarks/ — rastreia só fontes
 # ============================================
 /benchmarks/*
 !/benchmarks/*.lm
@@ -49,41 +47,42 @@ output.ll
 !/benchmarks/*.md
 
 # ============================================
-# lumina_core (bootstrapping) - ignora binários
+# lumina_core/ — só .lm
 # ============================================
 /lumina_core/*
 !/lumina_core/*.lm
 
 # ============================================
-# Dados de teste temporários
+# Logs e dados temporários (explicitado, não global)
 # ============================================
+log.txt
+baseline.txt
+pytest_baseline.txt
 lumina_db.txt
 teste_async.txt
-log.txt
-*.txt
-!requirements-dev.txt
 
 # ============================================
-# Dependências baixadas
+# Dependências externas
 # ============================================
 lumina_modules/
 
 # ============================================
-# Extensão VS Code
+# VS Code extension
 # ============================================
 lumina-vscode/node_modules/
 lumina-vscode/*.vsix
 
 # ============================================
-# Configurações locais / IDE
+# IDE / OS
 # ============================================
 .vscode/
 .idea/
 *.swp
 *~
+.DS_Store
 
 # ============================================
-# Cache de outros compiladores
+# Coverage de C/C++
 # ============================================
 *.gcda
-*.gcnovgcore.*
+*.gcno

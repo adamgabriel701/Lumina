@@ -27,8 +27,12 @@ class MembersMixin:
         if ptr:
             return self.builder.load(ptr, name=node.name + "_load")
 
-        # NOVO: top-level `let X = <literal>` vira constante inline.
-        # Sem isso, `MAP_INITIAL_CAP` usado dentro de funções retorna 0.
+        # NOVO: globais mutáveis → carrega da GlobalVariable LLVM.
+        gv = getattr(self, 'global_mut_vars', {}).get(node.name)
+        if gv is not None:
+            return self.builder.load(gv, name=f"g_{node.name}_load")
+
+        # Top-level `let X = <literal>` vira constante inline.
         global_node = getattr(self, 'global_var_decls', {}).get(node.name)
         if global_node is not None:
             return self.visit(global_node.value)

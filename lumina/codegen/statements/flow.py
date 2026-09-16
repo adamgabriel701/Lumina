@@ -98,6 +98,14 @@ class FlowMixin:
 
         # Assign a variável
         if hasattr(node.target, 'name'):
+            # NOVO: global mutável → store direto na GlobalVariable.
+            gv = getattr(self, 'global_mut_vars', {}).get(node.target.name)
+            if gv is not None:
+                target_ty = gv.type.pointee
+                val = self._coerce_val_to(val, target_ty, name=node.target.name)
+                self.builder.store(val, gv)
+                return
+
             ptr = self.symbol_table.get(node.target.name)
             if ptr:
                 target_ty = ptr.type.pointee

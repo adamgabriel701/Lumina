@@ -37,6 +37,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         self.symbol_table = {}
         self.var_types = {}
         self.global_var_decls = {}   # NOVO: top-level constants
+        self.global_mut_vars = {}    # NOVO: nome → GlobalVariable
 
         self.string_counter = 0
         self.lambda_counter = 0
@@ -94,6 +95,69 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         )
         self.strncpy = ir.Function(self.module, strncpy_ty, name="strncpy")
 
+    def _emit_mutable_global(self, decl):
+        """Emite uma GlobalVariable LLVM para `mut X = <literal>` no topo.
+
+        Suporta inicializadores constantes: NumberExpr, BoolExpr.
+        Inicializadores complexos (StringExpr, CallExpr, etc.) caem
+        para inline (comportamento antigo — não reatribuível).
+        """
+        from ..ast import NumberExpr, BoolExpr
+
+        name = decl.name
+
+        # Determina tipo
+        var_type = decl.var_type
+        if var_type is None:
+            v = decl.value
+            if isinstance(v, NumberExpr):
+                var_type = "float" if v.is_float else "int"
+            elif isinstance(v, BoolExpr):
+                var_type = "bool"
+            else:
+                # Não suportado como global mutável — cai para inline
+                self.global_var_decls[name] = decl
+                return
+
+        llvm_ty = self.get_llvm_type(var_type)
+        if isinstance(llvm_ty, ir.VoidType) or isinstance(llvm_ty, ir.PointerType):
+            # void ou ptr (str) — cai para inline
+            self.global_var_decls[name] = decl
+            return
+
+        gv = ir.GlobalVariable(self.module, llvm_ty, name=f"g_{name}")
+
+        initial = None
+        if isinstance(decl.value, NumberExpr):
+            if isinstance(llvm_ty, ir.DoubleType):
+                initial = ir.Constant(llvm_ty, float(decl.value.value))
+            else:
+                try:
+                    initial = ir.Constant(llvm_ty, int(decl.value.value, 0))
+                except (ValueError, TypeError):
+                    initial = ir.Constant(llvm_ty, 0)
+        elif isinstance(decl.value, BoolExpr):
+            initial = ir.Constant(llvm_ty, 1 if decl.value.value else 0)
+
+        if initial is None:
+            initial = ir.Constant(llvm_ty, 0)
+
+        gv.initializer = initial
+        gv.linkage = "internal"
+        self.global_mut_vars[name] = gv
+
+    def _const_from_literal(self, node, llvm_ty):
+        """Avalia um literal como constante LLVM. Retorna None se não
+        for literal."""
+        from ..ast import NumberExpr, BoolExpr
+        if isinstance(node, NumberExpr):
+            if isinstance(llvm_ty, ir.DoubleType):
+                return ir.Constant(llvm_ty, float(node.value))
+            return ir.Constant(llvm_ty, int(node.value, 0))
+        if isinstance(node, BoolExpr):
+            return ir.Constant(llvm_ty, 1 if node.value else 0)
+        return None
+
     def _resolve_trait_defaults(self, ast):
         """Copia métodos default do trait para o ImplBlock que não os sobrescreve.
 
@@ -131,14 +195,21 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
                 decl.methods.append(default_method)
 
     def generate_module(self, ast):
-        # 0. Coleta VarDecls de topo (globais) para inlining.
-        # Top-level `let X = <literal>` é tratado como constante em
-        # tempo de compilação — o codegen inlineia o valor em cada uso
-        # em vez de emitir uma global LLVM.
+        # 0. Coleta VarDecls de topo.
+        #
+        #   - `let X = <literal>` (imutável) → inline como constante
+        #   - `mut X = <literal>` (mutável)  → GlobalVariable LLVM
+        #
+        # Top-level `let` continua inline para performance; mutáveis
+        # precisam de endereço real (podem ser reatribuídos em runtime).
         self.global_var_decls = {}
+        self.global_mut_vars = {}
         for decl in ast:
             if type(decl).__name__ == 'VarDecl' and getattr(decl, 'value', None) is not None:
-                self.global_var_decls[decl.name] = decl
+                if getattr(decl, 'is_mutable', False):
+                    self._emit_mutable_global(decl)
+                else:
+                    self.global_var_decls[decl.name] = decl
 
         # 1. Pré-registra todas as structs e enums
         for decl in ast:

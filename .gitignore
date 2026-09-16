@@ -93,3 +93,8 @@ lumina-vscode/*.vsix
 /tests/features/*_bin
 /examples/*/  # já coberto, mas por garantia
 /std/async_fs
+
+# ============================================
+# Documentação gerada
+# ============================================
+/docs/

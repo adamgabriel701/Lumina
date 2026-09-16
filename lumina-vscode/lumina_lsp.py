@@ -7,6 +7,7 @@ Implementa o subconjunto de LSP necessário para o VS Code:
   - textDocument/references
   - textDocument/prepareRename + textDocument/rename
   - textDocument/documentSymbol
+  - textDocument/semanticTokens/full
   - textDocument/publishDiagnostics
 
 Protocolo: JSON-RPC 2.0 sobre stdio.
@@ -15,6 +16,7 @@ NOTA: usa I/O em modo binário (`sys.stdin.buffer`). O `Content-Length`
 é sempre em BYTES (spec LSP), e o Python em modo texto lê CARACTERES,
 o que quebra com UTF-8 multi-byte (acentos, emojis).
 """
+import bisect
 import sys
 import json
 import re
@@ -24,6 +26,7 @@ from lumina.ast import (
     IfStmt, WhileStmt, ForStmt, MatchStmt, DeferStmt, BenchStmt,
 )
 from lumina.lexer import Lexer
+from lumina.lexer.tokens import TokenType
 from lumina.parser import Parser
 from lumina.semantic import SemanticAnalyzer
 from lumina.errors import LuminaError
@@ -42,6 +45,53 @@ SK_INTERFACE = 11
 SK_FUNCTION = 12
 SK_VARIABLE = 13
 SK_CONSTANT = 14
+
+
+# ============================================================
+# Semantic token types (índices no legend)
+# https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#semanticTokenTypes
+# ============================================================
+TT_NAMESPACE = 0
+TT_TYPE = 1
+TT_CLASS = 2
+TT_ENUM = 3
+TT_INTERFACE = 4
+TT_STRUCT = 5
+TT_TYPE_PARAMETER = 6
+TT_PARAMETER = 7
+TT_VARIABLE = 8
+TT_PROPERTY = 9
+TT_ENUM_MEMBER = 10
+TT_EVENT = 11
+TT_FUNCTION = 12
+TT_METHOD = 13
+TT_MACRO = 14
+TT_KEYWORD = 15
+TT_MODIFIER = 16
+TT_COMMENT = 17
+TT_STRING = 18
+TT_NUMBER = 19
+TT_REGEXP = 20
+TT_OPERATOR = 21
+
+SEMANTIC_TOKEN_TYPES = [
+    "namespace", "type", "class", "enum", "interface",
+    "struct", "typeParameter", "parameter", "variable", "property",
+    "enumMember", "event", "function", "method", "macro",
+    "keyword", "modifier", "comment", "string", "number",
+    "regexp", "operator",
+]
+
+# Modifiers (bitmask)
+TM_DECLARATION = 1  # 1 << 0
+TM_DEFINITION = 2   # 1 << 1
+TM_READONLY = 4     # 1 << 2
+
+SEMANTIC_TOKEN_MODIFIERS = [
+    "declaration", "definition", "readonly", "static",
+    "deprecated", "abstract", "async", "modification",
+    "documentation", "defaultLibrary",
+]
 
 
 # ============================================================
@@ -117,6 +167,22 @@ def find_word_range(text, line, char):
     return (start, end)
 
 
+def _build_line_starts(source):
+    """Retorna uma lista com o offset (byte) do início de cada linha."""
+    starts = [0]
+    for i, c in enumerate(source):
+        if c == '\n':
+            starts.append(i + 1)
+    return starts
+
+
+def _offset_to_linecol(starts, offset):
+    """Converte um offset absoluto em (line, col), 0-based."""
+    line = bisect.bisect_right(starts, offset) - 1
+    col = offset - starts[line]
+    return line, col
+
+
 # ============================================================
 # AST helpers
 # ============================================================
@@ -158,7 +224,6 @@ def _walk_stmts(stmts, callback):
             _walk_stmts(stmt.body, callback)
         elif isinstance(stmt, MatchStmt):
             for case in stmt.cases:
-                # 4-tuple: (variant, bindings, guard, body)
                 if len(case) >= 4:
                     _walk_stmts(case[3], callback)
             if stmt.default:
@@ -322,7 +387,6 @@ def validate_and_extract_symbols(code):
         analyzer = SemanticAnalyzer("lsp.lm", code)
         analyzer.analyze(ast)
 
-        # Atualiza types de top-level vars com info do semantic
         for name, info in symbol_details.items():
             if info["kind"] == SK_VARIABLE:
                 var_info = analyzer.get_var_info(name) if hasattr(analyzer, 'get_var_info') else None
@@ -337,7 +401,6 @@ def validate_and_extract_symbols(code):
                 name = stmt.name
                 line = getattr(stmt, 'line', 0) or 0
                 col = getattr(stmt, 'col', 0) or 0
-                # Não sobrescreve símbolos top-level
                 if name not in symbol_details:
                     symbol_details[name] = {
                         "kind": SK_VARIABLE,
@@ -357,7 +420,6 @@ def validate_and_extract_symbols(code):
                 for m in decl.methods:
                     _walk_stmts(m.body, _register_local)
 
-        # Aplica inferência do semantic nas vars locais
         for name, info in symbol_details.items():
             if info["kind"] == SK_VARIABLE and ": inferred" in info["detail"]:
                 var_info = analyzer.get_var_info(name) if hasattr(analyzer, 'get_var_info') else None
@@ -383,6 +445,101 @@ def validate_and_extract_symbols(code):
 
 
 # ============================================================
+# Semantic tokens
+# ============================================================
+def _build_name_to_type(ast, symbol_details):
+    """Constrói o mapa `nome → token type LSP`.
+
+    Top-level symbols vêm de `symbol_details`. Params e vars locais
+    são extraídos da AST (params têm precedência sobre globais).
+    """
+    mapping = {}
+
+    # Top-level symbols
+    for name, info in symbol_details.items():
+        kind = info.get('kind')
+        if kind == SK_FUNCTION:
+            mapping[name] = TT_FUNCTION
+        elif kind == SK_METHOD:
+            mapping[name] = TT_METHOD
+        elif kind == SK_CLASS:
+            mapping[name] = TT_CLASS
+        elif kind == SK_ENUM:
+            mapping[name] = TT_ENUM
+        elif kind == SK_INTERFACE:
+            mapping[name] = TT_INTERFACE
+        elif kind == SK_VARIABLE:
+            mapping[name] = TT_VARIABLE
+
+    # Variants de enum
+    for decl in ast:
+        if isinstance(decl, EnumDecl):
+            for vname, _payloads in decl.variants:
+                mapping[vname] = TT_ENUM_MEMBER
+
+    # Params (precedência sobre o resto)
+    def _collect_params(methods):
+        for m in methods:
+            for p in m.params:
+                pname = p.name if hasattr(p, 'name') else p[0]
+                mapping[pname] = TT_PARAMETER
+
+    for decl in ast:
+        if isinstance(decl, Function):
+            for p in decl.params:
+                pname = p.name if hasattr(p, 'name') else p[0]
+                mapping[pname] = TT_PARAMETER
+        elif isinstance(decl, ImplBlock):
+            _collect_params(decl.methods)
+
+    return mapping
+
+
+def _collect_semantic_tokens(code, tokens, ast, symbol_details):
+    """Retorna a lista de inteiros no formato LSP de semantic tokens.
+
+    Cada token é uma tupla de 5 inteiros:
+      [deltaLine, deltaStartChar, length, tokenType, tokenModifiers]
+    """
+    name_to_type = _build_name_to_type(ast, symbol_details)
+
+    starts = _build_line_starts(code)
+
+    result = []
+    prev_line = 0
+    prev_col = 0
+
+    for tok in tokens:
+        if tok.type != TokenType.IDENT:
+            continue
+
+        tt = name_to_type.get(tok.value)
+        if tt is None:
+            continue
+
+        # Deriva a posição inicial do token a partir do offset bruto.
+        # O lexer salva `offset = self.pos` (após consumir o token),
+        # então a posição inicial é `offset - len(value)`.
+        start_offset = tok.offset - len(tok.value)
+        if start_offset < 0:
+            continue
+
+        try:
+            line, col = _offset_to_linecol(starts, start_offset)
+        except Exception:
+            continue
+
+        delta_line = line - prev_line
+        delta_col = col - prev_col if delta_line == 0 else col
+
+        result.extend([delta_line, delta_col, len(tok.value), tt, 0])
+        prev_line = line
+        prev_col = col
+
+    return result
+
+
+# ============================================================
 # Servidor LSP
 # ============================================================
 class LuminaLSP:
@@ -394,13 +551,13 @@ class LuminaLSP:
         self.document_symbols = []
         self.references = {}
         self.latest_uri = ""
+        self.semantic_tokens_data = []
 
     def run(self):
         while True:
             try:
                 msg = read_message()
             except Exception as e:
-                # Nunca deixa o servidor crashar — apenas loga e continua.
                 sys.stderr.write(f"[lumina-lsp] read_message error: {e}\n")
                 continue
 
@@ -427,6 +584,13 @@ class LuminaLSP:
                                 "referencesProvider": True,
                                 "renameProvider": {"prepareProvider": True},
                                 "documentSymbolProvider": True,
+                                "semanticTokensProvider": {
+                                    "legend": {
+                                        "tokenTypes": SEMANTIC_TOKEN_TYPES,
+                                        "tokenModifiers": SEMANTIC_TOKEN_MODIFIERS,
+                                    },
+                                    "full": True,
+                                },
                             }
                         }
                     })
@@ -449,6 +613,9 @@ class LuminaLSP:
                     self.symbol_details = details
                     self.document_symbols = doc_syms
                     self.references = refs
+
+                    # Recalcula semantic tokens uma vez por mudança
+                    self.semantic_tokens_data = self._recompute_semantic_tokens()
 
                     write_message({
                         "jsonrpc": "2.0",
@@ -501,6 +668,12 @@ class LuminaLSP:
                         "result": self.document_symbols,
                     })
 
+                elif method == "textDocument/semanticTokens/full":
+                    write_message({
+                        "jsonrpc": "2.0", "id": msg_id,
+                        "result": {"data": self.semantic_tokens_data},
+                    })
+
                 elif method == "shutdown":
                     write_message({"jsonrpc": "2.0", "id": msg_id, "result": None})
 
@@ -514,6 +687,23 @@ class LuminaLSP:
                         "jsonrpc": "2.0", "id": msg_id,
                         "error": {"code": -32603, "message": str(e)},
                     })
+
+    # ------------------------------------------------------------------
+    # Recalcula semantic tokens sob demanda
+    # ------------------------------------------------------------------
+    def _recompute_semantic_tokens(self):
+        if not self.latest_text:
+            return []
+        try:
+            lexer = Lexer(self.latest_text)
+            tokens = lexer.tokenize()
+            parser = Parser(tokens, "lsp.lm", self.latest_text)
+            ast = parser.parse()
+            return _collect_semantic_tokens(
+                self.latest_text, tokens, ast, self.symbol_details
+            )
+        except Exception:
+            return []
 
     # ------------------------------------------------------------------
     # Handlers

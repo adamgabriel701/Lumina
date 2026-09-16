@@ -1,11 +1,27 @@
-# Exemplos que NÃO devem ser executados no modo --run do check_examples.sh.
-# Motivo: abrem sockets, threads, ou produzem output não determinístico.
+# Exemplos que NÃO devem ser executados no modo --run.
+# Motivo: abrem janela gráfica, sockets, threads, ou têm
+# output não-determinístico / loop infinito.
 
-gc_test.lm            # output de GC depende da implementação
-http_framework.lm     # abre servidor HTTP (bloqueia)
+# Servidores e I/O bloqueante
+http_framework.lm     # abre servidor HTTP
+proxy.lm              # abre proxy reverso
+serve.lm              # abre servidor
+server.lm             # abre servidor
+api.lm                # abre servidor HTTP
+app.lm                # abre servidor HTTP
+async_server.lm       # servidor assíncrono
+coroutines.lm         # swapcontext pode bloquear
+
+# Gráficos / jogos (abrem janela)
+engine.lm             # Raylib precisa de DISPLAY
+chip8.lm              # emulador gráfico, segfault headless
+
+# WASM-only
+wasm_js_interop.lm    # não roda nativo
+
+# Não-determinístico / loop infinito / segfault
+gc_test.lm            # output de GC varia
 json_parser.lm        # output muito grande para comparar
-proxy.lm              # abre proxy reverso (bloqueia)
-serve.lm              # abre servidor (bloqueia)
-server.lm             # abre servidor (bloqueia)
 threads.lm            # output depende do scheduler
-wasm_js_interop.lm    # WASM-only, não roda nativo
+bootstrap_lexer.lm    # loop infinito
+database.lm           # segfault (I/O de arquivo)

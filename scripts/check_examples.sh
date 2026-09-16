@@ -25,10 +25,9 @@ for arg in "$@"; do
 done
 
 SKIP_FILE="tests/features/skip.txt"
-# Adiciona os skips específicos de --run
-RUN_SKIP_MAP=""
+# Skips específicos do modo --run
+declare -A RUN_SKIP_MAP
 if [ -f "tests/features/run_skip.txt" ] && [ "$RUN_MODE" = "1" ]; then
-    declare -A RUN_SKIP_MAP
     while IFS= read -r line; do
         [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
         name=$(echo "$line" | awk '{print $1}')

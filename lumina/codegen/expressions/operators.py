@@ -110,6 +110,39 @@ class OperatorsMixin:
     # Binários
     # ------------------------------------------------------------------
     def visit_BinaryExpr(self, node):
+        # Short-circuit: avalia `left` e decide se avalia `right`.
+        if node.op in ('and', 'or'):
+            left = self.visit(node.left)
+            if not (isinstance(left.type, ir.IntType) and left.type.width == 1):
+                left = self.builder.icmp_signed(
+                    "!=", left, ir.Constant(left.type, 0), name="to_bool_l"
+                )
+
+            rhs_bb = self.builder.append_basic_block(name=f"{node.op}_rhs")
+            end_bb = self.builder.append_basic_block(name=f"{node.op}_end")
+            pred_bb = self.builder.block
+
+            if node.op == 'and':
+                self.builder.cbranch(left, rhs_bb, end_bb)
+            else:
+                self.builder.cbranch(left, end_bb, rhs_bb)
+
+            self.builder.position_at_end(rhs_bb)
+            right = self.visit(node.right)
+            if not (isinstance(right.type, ir.IntType) and right.type.width == 1):
+                right = self.builder.icmp_signed(
+                    "!=", right, ir.Constant(right.type, 0), name="to_bool_r"
+                )
+            rhs_end_bb = self.builder.block
+            self.builder.branch(end_bb)
+
+            self.builder.position_at_end(end_bb)
+            phi = self.builder.phi(ir.IntType(1), name=f"{node.op}_result")
+            default = ir.Constant(ir.IntType(1), 0 if node.op == 'and' else 1)
+            phi.add_incoming(default, pred_bb)
+            phi.add_incoming(right, rhs_end_bb)
+            return phi
+
         left = self.visit(node.left)
         right = self.visit(node.right)
 

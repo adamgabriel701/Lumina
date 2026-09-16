@@ -48,6 +48,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
 
         self.setup_libc_functions()
         self.alias_methods = set()   # NOVO: nomes curtos de trait methods
+        self.loop_stack = []  # [(continue_bb, break_bb), ...]
 
     def setup_libc_functions(self):
         printf_ty = ir.FunctionType(ir.IntType(32), [self.i8_ty.as_pointer()], var_arg=True)
@@ -446,6 +447,9 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         self.symbol_table = {}
         self.var_types = {}
 
+        old_defer_stack = getattr(self, 'defer_stack', None)
+        self.defer_stack = []
+
         for i, p in enumerate(node.params):
             p_name, p_type = p.name, p.type_ann
             p_ty = self.get_llvm_param_type(p_type)
@@ -467,6 +471,10 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
                 self.builder.ret(ir.Constant(func_type.return_type, None))
             else:
                 self.builder.ret(ir.Constant(func_type.return_type, 0))
+
+        if not self.builder.block.is_terminated:
+            self._emit_defers()
+        self.defer_stack = old_defer_stack
 
         self.symbol_table = old_symtab
         self.var_types = old_var_types

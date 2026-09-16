@@ -190,14 +190,15 @@ class FlowMixin:
 
         ret_ty = self.functions_table[self.current_func_name][1].return_type
 
-        # NOVO: função void — avalia valores por efeitos colaterais e descarta
         if ret_ty == self.void_ty:
             for v in node.values:
                 self.visit(v)
+            self._emit_defers()
             self.builder.ret_void()
             return
 
         if not node.values:
+            self._emit_defers()
             self.builder.ret_void()
             return
 
@@ -218,6 +219,8 @@ class FlowMixin:
             elif isinstance(val.type, ir.PointerType) and isinstance(val.type.pointee, ir.IdentifiedStructType):
                 if val.type.pointee == ret_ty:
                     val = self.builder.load(val, name="ret_struct_load")
+
+        self._emit_defers()
         self.builder.ret(val)
 
     def visit_DestructureStmt(self, node):
@@ -231,18 +234,63 @@ class FlowMixin:
                 self.symbol_table[name] = var_ptr
 
     def visit_DeferStmt(self, node):
-        for stmt in node.body:
-            self.visit(stmt)
+        if not hasattr(self, 'defer_stack'):
+            self.defer_stack = []
+        self.defer_stack.append(list(node.body))
 
     def visit_AssertStmt(self, node):
-        self.visit(node.condition)
+        cond = self.visit(node.condition)
+        if cond.type != ir.IntType(1):
+            cond = self.builder.icmp_signed("!=", cond, ir.Constant(cond.type, 0), name="assert_cond")
+
+        ok_bb   = self.builder.append_basic_block(name="assert_ok")
+        fail_bb = self.builder.append_basic_block(name="assert_fail")
+
+        self.builder.cbranch(cond, ok_bb, fail_bb)
+
+        self.builder.position_at_end(fail_bb)
+
+        # 1. Flush de TODOS os streams abertos (stdout incluso).
+        #    Sem isso, o output buffered do programa morre com o processo.
+        fflush_fn = self.module.globals.get("fflush")
+        if fflush_fn is None:
+            fflush_ty = ir.FunctionType(ir.IntType(32), [self.i8_ty.as_pointer()])
+            fflush_fn = ir.Function(self.module, fflush_ty, name="fflush")
+        self.builder.call(fflush_fn, [ir.Constant(self.i8_ty.as_pointer(), None)])
+
+        # 2. abort() → SIGABRT (exit code 134 no Linux).
+        abort_fn = self.module.globals.get("abort")
+        if abort_fn is None:
+            abort_ty = ir.FunctionType(ir.VoidType(), [])
+            abort_fn = ir.Function(self.module, abort_ty, name="abort")
+        self.builder.call(abort_fn, [])
+        self.builder.unreachable()
+
+        self.builder.position_at_end(ok_bb)
 
     def visit_BenchStmt(self, node):
         for stmt in node.body:
             self.visit(stmt)
 
     def visit_BreakStmt(self, node):
-        pass
+        if not getattr(self, 'loop_stack', None):
+            return
+        _, break_bb = self.loop_stack[-1]
+        self.builder.branch(break_bb)
 
     def visit_ContinueStmt(self, node):
-        pass
+        if not getattr(self, 'loop_stack', None):
+            return
+        continue_bb, _ = self.loop_stack[-1]
+        self.builder.branch(continue_bb)
+
+    def _emit_defers(self):
+        stack = getattr(self, 'defer_stack', None)
+        if not stack:
+            return
+        for body in reversed(stack):
+            for stmt in body:
+                if self.builder.block.is_terminated:
+                    return
+                self.visit(stmt)
+        self.defer_stack = []

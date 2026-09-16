@@ -6,7 +6,7 @@
 [![Status](https://img.shields.io/badge/Status-Alpha%20%2F%20Active-green.svg)](#)
 [![Language](https://img.shields.io/badge/Language-Lumina-6A0DAD.svg)](#)
 [![Features](https://img.shields.io/badge/features-28%2F28-success.svg)](#-status-de-implementação)
-[![Tests](https://img.shields.io/badge/tests-153%20passed%20%2B%201%20skip-brightgreen.svg)](#-testes-automatizados)
+[![Tests](https://img.shields.io/badge/tests-162%20passed%20%2B%201%20skip-brightgreen.svg)](#-testes-automatizados)
 [![Examples](https://img.shields.io/badge/examples-69%2F69%20%2B%201%20skip-success.svg)](#)
 [![Cross-compile](https://img.shields.io/badge/cross--compile-aarch64%20%7C%20armv7%20%7C%20riscv64%20%7C%20wasm-blueviolet.svg)](#-cross-compilação)
 
@@ -76,7 +76,7 @@ Todas as features estão funcionando e validadas por CI local:
 | 9 | Sintaxe curta (`:=`) | ✅ |
 | 10 | Escopo de bloco lexical | ✅ |
 | 11 | `defer` | ✅ |
-| 12 | `assert` | ✅ |
+| 12 | `assert` (aborta em runtime) | ✅ |
 | 13 | F-strings com múltiplas variáveis | ✅ |
 | 14 | Generics + monomorphization | ✅ |
 | 15 | Nested structs + member chain | ✅ |
@@ -92,7 +92,7 @@ Todas as features estão funcionando e validadas por CI local:
 | 25 | `Option<T>` + `NoneExpr` | ✅ |
 | 26 | `comptime` (constant folding) | ✅ |
 | 27 | `SliceExpr` dedicado | ✅ |
-| 28 | Auto-formatter preserva comentários | ✅ |
+| 28 | Auto-formatter preserva comentários e `@attrs` | ✅ |
 | 29 | Operator Overloading (`__add__`, `__eq__`) | ✅ |
 | 30 | `@derive(Eq, PartialEq, Debug, Display, Clone, Default)` | ✅ |
 | 31 | `std/vector`, `std/map`, `std/set`, `std/deque` (com crescimento) | ✅ |
@@ -103,6 +103,22 @@ Todas as features estão funcionando e validadas por CI local:
 | 36 | LSP completo (hover, rename, references, outline) | ✅ |
 | 37 | Semantic tokens no LSP | ✅ |
 | 38 | Cross-compile (`--target`) | ✅ |
+| 39 | `break` / `continue` reais em loops | ✅ |
+| 40 | Short-circuit em `and` / `or` | ✅ |
+
+---
+
+## 🐛 Bugs corrigidos
+
+Os bugs abaixo eram **silenciosos** — passavam pelo CI porque os testes originais só exercitavam o parser/semantic, não o runtime. Foram corrigidos e cobertos por `tests/test_runtime_bugs.py`.
+
+| Bug | Sintoma original | Correção |
+|---|---|---|
+| `break` / `continue` no-op | `for i in 0..100: if i == 5: break` continuava até 100 | Codegen emite `branch` para `end_bb` / `inc_bb` com `loop_stack` |
+| `assert` sem efeito | `assert(1 == 2)` imprimia a linha seguinte e saía com código 0 | Codegen emite `fflush(NULL)` + `abort()` + `unreachable` |
+| `defer` inline | `defer print("b")` rodava imediatamente, não no fim | Codegen mantém `defer_stack` por função e emite antes de cada `ret` |
+| `and` / `or` sem short-circuit | `x != 0 and 10/x > 1` causava SIGFPE | Codegen emite basic blocks `*_rhs` / `*_end` + `phi i1` |
+| Formatter apagava `@derive` | `@derive(Eq, Debug)` era removido silenciosamente | `_format_attrs()` emite os atributos anexados pelo parser |
 
 ---
 
@@ -120,13 +136,14 @@ pytest tests/ -v
 | `test_parser.py` | 35 | Declarações, expressões, slices, fluxo |
 | `test_semantic.py` | 19 (1 skip) | Escopo, exaustividade, traits |
 | `test_types.py` | 24 | Validação de tipo |
-| `test_codegen_bugs.py` | 20 | Regressão no codegen |
-| `test_semantic_bugs.py` | 15 | Regressão no semantic |
+| `test_codegen_bugs.py` | 19 | Regressão no codegen (IR + runtime) |
+| `test_semantic_bugs.py` | 13 | Regressão no semantic |
+| `test_runtime_bugs.py` | 9 | **Runtime end-to-end** (break, assert, defer, short-circuit, fmt) |
 | `test_fmt_comments.py` | 8 | Formatter com comentários |
 | `cli/` | 3 | Integração da CLI |
 | `features/` | 2 | Smoke + uncertain_features |
 
-**Total:** `153 passed, 1 skipped`.
+**Total:** `162 passed, 1 skipped`.
 
 ### 2. Script standalone (~5s)
 
@@ -152,7 +169,7 @@ Valida 28 linhas do `tests/features/uncertain_features.lm`:
 Compila todos os 69 exemplos e, no modo `--run`, executa cada binário. Compara com `examples/*.expected` quando existir:
 
 ```
-📊 PASS: 69    ⏭️  SKIP: 1    ❌ FAIL: 0
+📊 PASS: 54    ⏭️  SKIP: 17    ❌ FAIL: 0  (modo: run)
 ```
 
 ### 4. `lumina check` (rápido, sem codegen)
@@ -669,6 +686,7 @@ Lumina/
 ├── tests/
 │   ├── test_lexer.py, test_parser.py, test_semantic.py
 │   ├── test_types.py, test_codegen_bugs.py, test_semantic_bugs.py
+│   ├── test_runtime_bugs.py    # End-to-end em runtime
 │   ├── test_fmt_comments.py
 │   ├── cli/, features/, fixtures/
 ├── run_tests.py                # Suite standalone (28 validações)
@@ -724,6 +742,7 @@ Para ativar cores semânticas em temas que não suportam por padrão, adicione e
 * **Validação de tipo por campo:** `P { x: "texto", y: 2 }` com `x: int` só detecta campos ausentes.
 * **`arr[a..]` sem `end`:** em arrays, assume length 0.
 * **`comptime`:** literais + aritmética/comparações. Sem chamadas de função.
+* **`defer`:** roda no fim da **função**, não do bloco. `defer` dentro de um `if` não tomado ainda executa.
 * **LSP `references`/`rename`:** varredura léxica (não distingue escopos).
 * **LSP `documentSymbol`:** só símbolos de topo + métodos de `impl`.
 * **Cross-compile:** `libgc` precisa ser cross-compilada ou usar `--no-gc`.
@@ -739,13 +758,18 @@ Para ativar cores semânticas em temas que não suportam por padrão, adicione e
 - [x] Validação de tipo, `[link]`, `-O0/-O2/-O3`
 - [x] `SliceExpr`, `Option<T>`, `comptime`
 - [x] `lumina check`, `--error-format=json`, `fmt --check`, `doc --format`
-- [x] Formatter com comentários
+- [x] Formatter com comentários e `@attrs`
 - [x] `std/iter`, `std/vector`, `std/map`, `std/set`, `std/deque`
 - [x] `std/test`, `std/log`
 - [x] `@derive(Eq, PartialEq, Debug, Display, Clone, Default)`
 - [x] Globais mutáveis
 - [x] LSP (hover, references, rename, outline, semantic tokens)
 - [x] Cross-compile (`--target`)
+- [x] `break` / `continue` funcionais
+- [x] `assert` com abort em runtime
+- [x] `defer` no fim do escopo de função
+- [x] Short-circuit em `and` / `or`
+- [ ] `defer` com escopo de bloco (não de função)
 - [ ] Self-hosting (bootstrapping)
 - [ ] Macros (quasiquote)
 - [ ] Package registry

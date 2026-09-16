@@ -1,8 +1,8 @@
 """Testes de regressão dos bugs latentes no codegen.
 
 Cobrem:
-  - `and`/`or` são gerados como `and`/`or` no IR (antes caíam no fallback
-    que retornava 0).
+  - `and`/`or` geram basic blocks de curto-circuito + phi (antes caíam no
+    fallback que retornava 0).
   - `alloc_bytes` cria `i8*` (não `i64*`), e `arr[i]` normaliza o `i8`
     de volta para `i64` via sext.
   - Retorno de operador binário em structs copia o resultado para um
@@ -63,8 +63,15 @@ def _run(src):
 
 # ============================================================
 # and / or
+#
+# NOTA: desde o patch de short-circuit, o codegen NÃO emite mais
+# `and i1` / `or i1`. Em vez disso, gera basic blocks `*_rhs` /
+# `*_end` + uma `phi i1` para combinar. Os testes abaixo checam
+# essa estrutura (que é o que o short-circuit exige). O
+# comportamento em runtime é coberto por
+# `test_and_short_circuit_logic` e `test_or_short_circuit_logic`.
 # ============================================================
-def test_and_generates_and_instruction():
+def test_and_generates_short_circuit_blocks():
     src = (
         'fn main() -> int:\n'
         '    let x = 1\n'
@@ -74,11 +81,15 @@ def test_and_generates_and_instruction():
         '    return 0\n'
     )
     ir = _build(src)
-    # Deve ter `and i1` no IR (não um fallback com 0)
-    assert " and i1 " in ir or "\"and\"" in ir
+    # Normaliza espaçamento (llvmlite imprime "phi  i1" com 2 espaços)
+    norm = " ".join(ir.split())
+
+    assert "and_rhs:" in norm, f"Bloco 'and_rhs' ausente:\n{ir}"
+    assert "and_end:" in norm, f"Bloco 'and_end' ausente:\n{ir}"
+    assert "phi i1" in norm, f"phi i1 ausente — sem combinação de ramos:\n{ir}"
 
 
-def test_or_generates_or_instruction():
+def test_or_generates_short_circuit_blocks():
     src = (
         'fn main() -> int:\n'
         '    let x = 0\n'
@@ -88,7 +99,11 @@ def test_or_generates_or_instruction():
         '    return 0\n'
     )
     ir = _build(src)
-    assert " or i1 " in ir or "\"or\"" in ir
+    norm = " ".join(ir.split())
+
+    assert "or_rhs:" in norm, f"Bloco 'or_rhs' ausente:\n{ir}"
+    assert "or_end:" in norm, f"Bloco 'or_end' ausente:\n{ir}"
+    assert "phi i1" in norm, f"phi i1 ausente — sem combinação de ramos:\n{ir}"
 
 
 def test_and_short_circuit_logic():

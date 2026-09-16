@@ -17,16 +17,30 @@ class ControlMixin:
 
         self.builder.position_at_end(then_bb)
         for stmt in node.then_body:
+            if self.builder.block.is_terminated:
+                break
             self.visit(stmt)
-        if not self.builder.block.is_terminated:
+        then_term = self.builder.block.is_terminated
+        if not then_term:
             self.builder.branch(end_bb)
 
         self.builder.position_at_end(else_bb)
         if node.else_body:
             for stmt in node.else_body:
+                if self.builder.block.is_terminated:
+                    break
                 self.visit(stmt)
-        if not self.builder.block.is_terminated:
+        else_term = self.builder.block.is_terminated
+        if not else_term:
             self.builder.branch(end_bb)
+
+        if then_term and else_term:
+            # Ambos os ramos terminam (break/continue/return).
+            # end_bb vira inalcançável — marca como unreachable para
+            # sinalizar aos callers que o if inteiro é um terminator.
+            self.builder.position_at_end(end_bb)
+            self.builder.unreachable()
+            return
 
         self.builder.position_at_end(end_bb)
 
@@ -44,8 +58,12 @@ class ControlMixin:
         self.builder.cbranch(cond_val, body_bb, end_bb)
 
         self.builder.position_at_end(body_bb)
+        self.loop_stack.append((cond_bb, end_bb))
         for stmt in node.body:
+            if self.builder.block.is_terminated:
+                break
             self.visit(stmt)
+        self.loop_stack.pop()
 
         if not self.builder.block.is_terminated:
             self.builder.branch(cond_bb)
@@ -73,22 +91,34 @@ class ControlMixin:
 
         cond_bb = self.builder.append_basic_block(name="for_cond")
         body_bb = self.builder.append_basic_block(name="for_body")
-        end_bb = self.builder.append_basic_block(name="for_end")
+        inc_bb  = self.builder.append_basic_block(name="for_inc")
+        end_bb  = self.builder.append_basic_block(name="for_end")
 
         self.builder.branch(cond_bb)
 
+        # Condição
         self.builder.position_at_end(cond_bb)
         current_val = self.builder.load(var_ptr, name="for_curr")
         cond = self.builder.icmp_signed("<", current_val, end_val, name="for_cond")
         self.builder.cbranch(cond, body_bb, end_bb)
 
+        # Corpo
         self.builder.position_at_end(body_bb)
+        self.loop_stack.append((inc_bb, end_bb))  # continue → inc_bb
         for stmt in node.body:
+            if self.builder.block.is_terminated:
+                break
             self.visit(stmt)
+        self.loop_stack.pop()
 
         if not self.builder.block.is_terminated:
-            next_val = self.builder.add(current_val, ir.Constant(self.i64_ty, 1), name="for_next")
-            self.builder.store(next_val, var_ptr)
-            self.builder.branch(cond_bb)
+            self.builder.branch(inc_bb)
+
+        # Incremento
+        self.builder.position_at_end(inc_bb)
+        cur2 = self.builder.load(var_ptr, name="for_curr_inc")
+        next_val = self.builder.add(cur2, ir.Constant(self.i64_ty, 1), name="for_next")
+        self.builder.store(next_val, var_ptr)
+        self.builder.branch(cond_bb)
 
         self.builder.position_at_end(end_bb)

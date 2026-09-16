@@ -237,15 +237,36 @@ def _fmt_params(params):
     return ", ".join(out)
 
 
+def _format_attrs(node, indent):
+    """Emite os `@nome`/`@nome(args)` anexados ao nó pelo parser."""
+    attrs = getattr(node, 'attrs', None)
+    if not attrs:
+        return ""
+    out = ""
+    for item in attrs:
+        if isinstance(item, tuple):
+            name = item[0]
+            args = item[1] if len(item) > 1 else []
+        else:
+            name, args = item, []
+        if args:
+            out += f"{indent}@{name}({', '.join(args)})\n"
+        else:
+            out += f"{indent}@{name}\n"
+    return out
+
+
 def format_node(node, indent_level=0):
-    """Formata um nó, emitindo comentários leading se houver."""
+    """Formata um nó, emitindo comentários leading e @attrs se houver."""
     indent = "    " * indent_level
 
-    # Comentários leading (anexados pelo parser)
     prefix = ""
+
     leading = getattr(node, 'leading_comments', None) or []
     for c in leading:
         prefix += _format_comment(c, indent)
+
+    prefix += _format_attrs(node, indent)
 
     return prefix + _format_node_impl(node, indent_level)
 

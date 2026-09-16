@@ -235,6 +235,16 @@ class OperatorsMixin:
                 elif left.type == self.i64_ty and isinstance(right.type, ir.PointerType):
                     right = self.builder.ptrtoint(right, self.i64_ty, name="cmp_ptrtoint_r")
 
+            # NOVO: comparar strings (i8*) por conteúdo via strcmp,
+            # não por ponteiro.
+            if node.op in ('==', '!=') and left.type == self.voidptr_ty and right.type == self.voidptr_ty:
+                cmp = self.builder.call(self.strcmp, [left, right], name="strcmp_call")
+                zero = ir.Constant(ir.IntType(32), 0)
+                if node.op == '==':
+                    return self.builder.icmp_signed("==", cmp, zero, name="str_eq")
+                else:
+                    return self.builder.icmp_signed("!=", cmp, zero, name="str_ne")
+
             if left.type == self.f64_ty or right.type == self.f64_ty:
                 left = self.to_float_if_needed(left)
                 right = self.to_float_if_needed(right)

@@ -85,6 +85,9 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         atoi_ty = ir.FunctionType(ir.IntType(64), [self.i8_ty.as_pointer()])
         self.atoi = ir.Function(self.module, atoi_ty, name="atoi")
 
+        strcmp_ty = ir.FunctionType(ir.IntType(32), [self.i8_ty.as_pointer(), self.i8_ty.as_pointer()])
+        self.strcmp = ir.Function(self.module, strcmp_ty, name="strcmp")
+
         strncpy_ty = ir.FunctionType(
             self.i8_ty.as_pointer(),
             [self.i8_ty.as_pointer(), self.i8_ty.as_pointer(), ir.IntType(64)],

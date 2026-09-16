@@ -611,10 +611,20 @@ def cmd_test(entry_file=None):
         warn("⚠️ Nenhuma função de teste (ex: `test \"nome\":`) encontrada no código.")
         return
 
+    from lumina.ast import VarDecl, AssignStmt, BinaryExpr
+
     new_ast = [decl for decl in ast if not (isinstance(decl, Function) and decl.name == "main")]
 
-    test_calls = [CallExpr(VariableExpr(func.name, 0, 0), []) for func in test_funcs]
-    new_main = Function("main", [], "int", test_calls + [ReturnStmt([NumberExpr("0")])])
+    # Synthetic main que soma os retornos de cada teste.
+    # Exit code = total de falhas.
+    total_var = "_total_failures"
+    body = [VarDecl(total_var, "int", NumberExpr("0"), True)]
+    for func in test_funcs:
+        call = CallExpr(VariableExpr(func.name, 0, 0), [])
+        add = BinaryExpr("+", VariableExpr(total_var, 0, 0), call)
+        body.append(AssignStmt(VariableExpr(total_var, 0, 0), add))
+    body.append(ReturnStmt([VariableExpr(total_var, 0, 0)]))
+    new_main = Function("main", [], "int", body)
     new_ast.append(new_main)
 
     try:

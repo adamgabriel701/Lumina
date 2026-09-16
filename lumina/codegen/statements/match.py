@@ -159,10 +159,9 @@ class MatchStmtMixin:
 
         Cada case é testado em sequência; se nenhum casar, cai no default.
         """
-        # Declara strcmp sob demanda
-        if not hasattr(self, 'strcmp_fn'):
-            strcmp_ty = ir.FunctionType(ir.IntType(32), [self.voidptr_ty, self.voidptr_ty])
-            self.strcmp_fn = ir.Function(self.module, strcmp_ty, name="strcmp")
+        # Usa o strcmp já declarado em setup_libc_functions.
+        # (Ver `LLVMCodegen.setup_libc_functions`.)
+        strcmp_fn = self.strcmp
 
         next_bb = self.builder.append_basic_block(name="match_str_next_0")
         self.builder.branch(next_bb)
@@ -191,7 +190,7 @@ class MatchStmtMixin:
                 case_str = self.visit(variant)
 
             cmp_result = self.builder.call(
-                self.strcmp_fn, [cond_val, case_str], name=f"strcmp_{i}"
+                strcmp_fn, [cond_val, case_str], name=f"strcmp_{i}"
             )
             is_eq = self.builder.icmp_signed(
                 "==", cmp_result, ir.Constant(ir.IntType(32), 0), name=f"str_eq_{i}"

@@ -1,0 +1,14 @@
+# Arquivos gerados — não contam como "código" no GitHub
+*.ll      linguist-generated=true
+*.wasm    linguist-generated=true
+*.o       linguist-generated=true
+
+# Arquivos de terceiros
+lumina-vscode/node_modules/**  linguist-vendored=true
+
+# Linguagem principal do repo
+*.py      linguist-language=Python
+*.lm      linguist-language=Lumina
+
+# Normaliza fim de linha
+* text=auto eol=lf

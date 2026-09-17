@@ -150,9 +150,13 @@ def test_tco_no_call_in_tail_position():
     )
 
 
-def test_tco_preserves_defer_semantics():
-    """`defer` é uma limitação: NÃO roda em tail calls.
-    Este teste documenta o comportamento atual."""
+def test_tco_emits_defers_per_iteration():
+    """`defer` roda a cada iteração de uma tail call.
+
+    Antes (limitação documentada): defer não rodava em TCO.
+    Agora (Sprint 8d): cada iteração encerra o frame virtualmente
+    e emite os defers pendentes.
+    """
     src = (
         'fn loop(n: int) -> int:\n'
         '    defer print("cleanup")\n'
@@ -166,8 +170,46 @@ def test_tco_preserves_defer_semantics():
         '    return 0\n'
     )
     out, rc = _run(src)
-    # Limitação conhecida: "cleanup" não aparece (defer é pulado em
-    # tail calls). "done 0" aparece. Documenta o comportamento atual.
-    # Se um dia TCO+defer for implementado corretamente, este teste
-    # muda para verificar que "cleanup" aparece.
+    # Esperado: 3 cleanups (n=3, n=2, n=1), depois "done 0"
+    # Nota: n=0 usa `return 0` (não tail call), então emite defer
+    # via visit_ReturnStmt normal → 4 iterações contam!
+    cleanups = out.count("cleanup")
+    assert cleanups == 4, f"cleanup count={cleanups}, out={out!r}"
     assert "done 0" in out
+
+
+def test_tco_defer_ordering():
+    """A ordem dos defers é do mais interno ao mais externo."""
+    src = (
+        'fn rec(n: int) -> int:\n'
+        '    defer print("exit")\n'
+        '    if n == 0:\n'
+        '        return 0\n'
+        '    return rec(n - 1)\n'
+        '\n'
+        'fn main() -> int:\n'
+        '    rec(2)\n'
+        '    return 0\n'
+    )
+    out, rc = _run(src)
+    # 3 "exit" (n=2, n=1, n=0)
+    assert out.count("exit") == 3, f"out={out!r}"
+
+# ============================================================
+# Defer em TCO
+# ============================================================
+def test_tco_emits_defers():
+    """defer em self-recursion tail-call roda a cada iteração."""
+    src = (
+        'fn count(n: int) -> int:\n'
+        '    defer print("tick")\n'
+        '    if n == 0:\n'
+        '        return 0\n'
+        '    return count(n - 1)\n'
+        '\n'
+        'fn main() -> int:\n'
+        '    count(3)\n'
+        '    return 0\n'
+    )
+    out, rc = _run(src)
+    assert out.count("tick") == 4, f"tick count, out={out!r}"

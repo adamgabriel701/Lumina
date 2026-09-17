@@ -299,9 +299,9 @@ class FlowMixin:
     def _try_tail_call(self, node):
         """TCO para self-recursion direta.
 
-        NOTA: tail calls NÃO emitem defers pendentes (limitação
-        conhecida). Se o usuário precisa de defer, evite TCO manual
-        com um `let` intermediário.
+        Emite os defers pendentes antes do branch de volta ao
+        body_bb — mesma semântica de `return` normal (Sprint 8b).
+        O corpo re-executa e re-empilha seus defers a cada iteração.
         """
         from ...ast import CallExpr as _CallExpr, VariableExpr as _VarExpr
         if len(node.values) != 1:
@@ -339,6 +339,16 @@ class FlowMixin:
             if ptr is None:
                 return False
             self.builder.store(arg_vals[i], ptr)
+
+        # NOVO (Sprint 8d): emite defers pendentes antes do branch de
+        # TCO. Eles representam "o frame está sendo encerrado"
+        # semanticamente — mesma regra de `return self(...)` sem TCO.
+        # Limpa a pilha para que a próxima iteração comece com estado
+        # fresco (o corpo re-executa `defer ...` que re-empilha).
+        self._emit_all_defers()
+        if self.builder.block.is_terminated:
+            # defer fez return/abort — já terminou o bloco.
+            return True
 
         self.builder.branch(body_bb)
         return True

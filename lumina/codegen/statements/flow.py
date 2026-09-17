@@ -1,4 +1,5 @@
 from llvmlite import ir
+from ...ast import CallExpr, VariableExpr
 
 
 class FlowMixin:
@@ -184,12 +185,70 @@ class FlowMixin:
 
                 self.builder.store(val, elem_ptr)
 
+    def _try_tail_call(self, node):
+        """Se `node.values[0]` é `self(args)`, emite TCO e retorna True.
+
+        Requisitos:
+          - 1 valor de retorno
+          - É uma CallExpr cujo callee é VariableExpr == current_func_name
+          - Existe um `current_body_bb` (definido por generate_function_body)
+        """
+        if len(node.values) != 1:
+            return False
+        val = node.values[0]
+        if not isinstance(val, CallExpr):
+            return False
+        if not isinstance(val.callee, VariableExpr):
+            return False
+        if val.callee.name != getattr(self, 'current_func_name', None):
+            return False
+        body_bb = getattr(self, 'current_body_bb', None)
+        if body_bb is None:
+            return False
+
+        fn_def = self.function_defs.get(self.current_func_name)
+        if fn_def is None:
+            return False
+
+        func, func_type = self.functions_table[self.current_func_name]
+
+        if len(val.args) != len(fn_def.params):
+            return False
+
+        # 1. Avalia cada arg num valor temporário ANTES de escrever
+        #    nos slots dos params (que podem ser referenciados pelos
+        #    próprios args, ex: `f(x + 1, acc + x)`).
+        arg_vals = []
+        for i, arg_node in enumerate(val.args):
+            v = self.visit(arg_node)
+            expected = func_type.args[i] if i < len(func_type.args) else None
+            if expected is not None and v.type != expected:
+                v = self._coerce_arg(v, expected, suffix=f"_tco{i}")
+            arg_vals.append(v)
+
+        # 2. Sobrescreve os slots dos params.
+        for i, p in enumerate(fn_def.params):
+            ptr = self.symbol_table.get(p.name)
+            if ptr is None:
+                # Slot sumiu — não dá para fazer TCO.
+                return False
+            self.builder.store(arg_vals[i], ptr)
+
+        # 3. Salta de volta pro body_bb. Sem `ret` — sem novo frame.
+        self.builder.branch(body_bb)
+        return True
+
     def visit_ReturnStmt(self, node):
         if self.builder.block.is_terminated:
             return
 
         ret_ty = self.functions_table[self.current_func_name][1].return_type
 
+        # TCO: tenta interceptar `return self(...)` antes de tudo.
+        if ret_ty != self.void_ty and self._try_tail_call(node):
+            return
+
+        # NOVO: função void — avalia valores por efeitos colaterais e descarta
         if ret_ty == self.void_ty:
             for v in node.values:
                 self.visit(v)

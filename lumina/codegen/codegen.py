@@ -418,6 +418,9 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         self.var_types = {}
         self.current_func_name = mangled
 
+        old_body_bb_gen = getattr(self, 'current_body_bb', None)
+        body_bb_gen = func.append_basic_block(name=f"{mangled}_body")
+
         for i, p in enumerate(gen_def.params):
             p_name = p.name
             p_ty = func_type.args[i]
@@ -426,7 +429,13 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
             self.symbol_table[p_name] = ptr
             self.var_types[p_name] = self._llvm_ty_to_str(p_ty)
 
+        self.builder.branch(body_bb_gen)
+        self.builder.position_at_end(body_bb_gen)
+        self.current_body_bb = body_bb_gen
+
         for stmt in gen_def.body:
+            if self.builder.block.is_terminated:
+                break
             self.visit(stmt)
 
         if not self.builder.block.is_terminated:
@@ -436,6 +445,8 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
                 self.builder.ret(ir.Constant(func_type.return_type, None))
             else:
                 self.builder.ret(ir.Constant(func_type.return_type, 0))
+
+        self.current_body_bb = old_body_bb_gen
 
         self.builder = old_builder
         self.symbol_table = old_symtab
@@ -451,9 +462,14 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
 
         old_symtab = self.symbol_table
         old_var_types = self.var_types
+        old_body_bb = getattr(self, 'current_body_bb', None)
 
-        block = func.append_basic_block(name=f"{node.name}_entry")
-        self.builder = ir.IRBuilder(block)
+        # entry_bb: alloca + store dos args + branch para body_bb.
+        # body_bb: onde o corpo é emitido. TCO salta de volta para cá.
+        entry_bb = func.append_basic_block(name=f"{node.name}_entry")
+        body_bb = func.append_basic_block(name=f"{node.name}_body")
+
+        self.builder = ir.IRBuilder(entry_bb)
         self.symbol_table = {}
         self.var_types = {}
 
@@ -465,12 +481,18 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
             self.symbol_table[p_name] = ptr
             self.var_types[p_name] = p_type
 
-        # Injeta GC_init() no topo de main, antes de qualquer alocação
-        # do usuário. Garante que a GC está pronta quando o programa começa.
         if self.use_gc and node.name == "main":
             self.builder.call(self.gc_init, [], name="gc_init_call")
 
+        self.builder.branch(body_bb)
+
+        # Corpo fica em body_bb. Salva para TCO saber onde voltar.
+        self.builder.position_at_end(body_bb)
+        self.current_body_bb = body_bb
+
         for stmt in node.body:
+            if self.builder.block.is_terminated:
+                break
             self.visit(stmt)
 
         if not self.builder.block.is_terminated:
@@ -484,6 +506,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
             else:
                 self.builder.ret(ir.Constant(func_type.return_type, 0))
 
+        self.current_body_bb = old_body_bb
         self.symbol_table = old_symtab
         self.var_types = old_var_types
 

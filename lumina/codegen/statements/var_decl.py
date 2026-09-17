@@ -1,5 +1,5 @@
 from llvmlite import ir
-from ...ast import CallExpr, ArrayExpr
+from ...ast import CallExpr, ArrayExpr, LambdaExpr, VariableExpr
 
 
 class VarDeclMixin:
@@ -227,10 +227,27 @@ class VarDeclMixin:
             except Exception:
                 pass
 
-        # NOVO: registra tamanho de array literal para `for x in arr`.
-        # É aqui porque `visit_ArrayExpr` retorna um `i64*` (alloca do
-        # `ArrayType`), e o `pointee` do slot é `i64`, não `ArrayType`.
-        # Sem este registro, `for x in arr` não sabe o N.
+        # NOVO: registra closures. Uma variável é "closure" se veio de
+        # uma lambda com free_vars, ou se herdou de outra closure.
+        if isinstance(node.value, LambdaExpr) and getattr(node.value, 'free_vars', None):
+            self.closure_vars.add(node.name)
+        elif isinstance(node.value, VariableExpr) and node.value.name in self.closure_vars:
+            self.closure_vars.add(node.name)
+
+        # NOVO: registra tamanho para `for x in arr` quando o array vem
+        # de `alloc(N)` com N literal. Sem isso, `let arr = alloc(5);
+        # for x in arr` cai em loop vazio.
+        if isinstance(node.value, CallExpr):
+            callee_name_v = getattr(node.value.callee, 'name', None)
+            if callee_name_v in ('alloc', 'alloc_bytes') and node.value.args:
+                from ...ast import NumberExpr
+                arg0 = node.value.args[0]
+                if isinstance(arg0, NumberExpr) and not arg0.is_float:
+                    try:
+                        self.array_lengths[node.name] = int(arg0.value, 0)
+                    except (ValueError, TypeError):
+                        pass
+
         if isinstance(node.value, ArrayExpr):
             self.array_lengths[node.name] = len(node.value.elements)
 

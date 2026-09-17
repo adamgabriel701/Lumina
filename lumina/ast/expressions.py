@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Union, Optional, Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -172,6 +172,10 @@ class LambdaExpr(Expr):
     params: List[Param]
     return_type: str
     body: List[Any]
+    # NOVO: nomes das variáveis livres (capturadas do escopo externo).
+    # Populado pelo semantic; usado pelo codegen para decidir se emite
+    # uma closure (env + fn ptr) ou um fn ptr cru.
+    free_vars: List[str] = field(default_factory=list)
 
 
 @dataclass

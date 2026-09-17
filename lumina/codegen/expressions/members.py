@@ -27,18 +27,8 @@ class MembersMixin:
         if ptr:
             return self.builder.load(ptr, name=node.name + "_load")
 
-        # Globais mutáveis → carrega da GlobalVariable LLVM.
-        gv = getattr(self, 'global_mut_vars', {}).get(node.name)
-        if gv is not None:
-            return self.builder.load(gv, name=f"g_{node.name}_load")
-
-        # Top-level `let X = <literal>` vira constante inline.
-        global_node = getattr(self, 'global_var_decls', {}).get(node.name)
-        if global_node is not None:
-            return self.visit(global_node.value)
-
-        # NOVO: variante de enum sem payload usada bare (ex: `Stop`).
-        # Constrói o enum com tag correta e zero payloads.
+        # NOVO: variante de enum bare (ex: `Red`, `Stop`) DEVE vir antes
+        # do check de functions_table, porque variantes são registradas lá.
         lookup = self._find_enum_variant(node.name)
         if lookup is not None:
             enum_name, variant_idx = lookup
@@ -49,7 +39,22 @@ class MembersMixin:
                 payloads = v[1] if len(v) > 1 else []
                 if not payloads:
                     return self._construct_enum(enum_name, variant_idx, [])
-                break  # tem payload — só via `Name(args)`
+                break
+
+        # Nome de função usado como valor (fn pointer).
+        if node.name in self.functions_table:
+            func, _ = self.functions_table[node.name]
+            return self.builder.bitcast(func, self.voidptr_ty, name=node.name + "_fnptr")
+
+        # Globais mutáveis.
+        gv = getattr(self, 'global_mut_vars', {}).get(node.name)
+        if gv is not None:
+            return self.builder.load(gv, name=f"g_{node.name}_load")
+
+        # Top-level `let X = <literal>` vira constante inline.
+        global_node = getattr(self, 'global_var_decls', {}).get(node.name)
+        if global_node is not None:
+            return self.visit(global_node.value)
 
         return ir.Constant(self.i64_ty, 0)
 

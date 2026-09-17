@@ -82,6 +82,8 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
 
         self.freed_vars = set()   # populado pelo compile_lumina
 
+        self.closure_vars = set()   # variáveis que seguram closures
+
     # ==================================================================
     # Setup de funções libc/GC
     # ==================================================================
@@ -857,7 +859,9 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         old_body_bb = getattr(self, 'current_body_bb', None)
         old_defer_stack = getattr(self, 'defer_stack', None)
         old_safe = getattr(self, '_safe_mode', False)
+        old_closure_vars = self.closure_vars          # NOVO
         self.defer_stack = []
+        self.closure_vars = set()                     # NOVO
 
         # Sprint 9a: ativa modo @safe se a função tem @safe
         attrs = getattr(node, 'attrs', None) or []
@@ -917,6 +921,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         self.symbol_table = old_symtab
         self.var_types = old_var_types
         self._safe_mode = old_safe
+        self.closure_vars = old_closure_vars          # NOVO
 
     # ==================================================================
     # API de baixo nível

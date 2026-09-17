@@ -2,12 +2,64 @@ from ..ast import (
     NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr,
     ArrayExpr, IndexExpr, SliceExpr, MemberExpr, AddressOfExpr, DerefExpr,
     UnaryExpr, PropagateExpr, ComptimeExpr, NoneExpr, StructLiteralExpr,
-    MatchExpr, CastExpr, LambdaExpr, StructLiteralField, NilExpr,
+    MatchExpr, CastExpr, LambdaExpr, StructLiteralField, NilExpr, VarDecl,
+    ForStmt, 
 )
 from ..ast.visitor import NodeVisitor
 from ..errors import LuminaError
 from .types import is_assignable, unify_type, substitute_generic
 
+def _collect_var_refs(node, into):
+    """Coleta todos os `VariableExpr` referenciados em `node`.
+
+    Não recursiona em lambdas aninhadas (os params/locais delas
+    não são "nossos").
+    """
+    if node is None:
+        return
+    if isinstance(node, (list, tuple)):
+        for x in node:
+            _collect_var_refs(x, into)
+        return
+    if isinstance(node, VariableExpr):
+        into.add(node.name)
+        return
+    if isinstance(node, LambdaExpr):
+        # Aninhada: só o body é nosso, os params são dela.
+        _collect_var_refs(node.body, into)
+        return
+    if hasattr(node, '__dataclass_fields__'):
+        for fname in node.__dataclass_fields__:
+            if fname in ('line', 'col'):
+                continue
+            _collect_var_refs(getattr(node, fname, None), into)
+
+
+def _collect_declared(node, into):
+    """Coleta nomes declarados (VarDecl / ForStmt) dentro de `node`.
+
+    Não recursiona em lambdas aninhadas.
+    """
+    if node is None:
+        return
+    if isinstance(node, (list, tuple)):
+        for x in node:
+            _collect_declared(x, into)
+        return
+    if isinstance(node, VarDecl):
+        into.add(node.name)
+        return
+    if isinstance(node, ForStmt):
+        into.add(node.var_name)
+        _collect_declared(node.body, into)
+        return
+    if isinstance(node, LambdaExpr):
+        return
+    if hasattr(node, '__dataclass_fields__'):
+        for fname in node.__dataclass_fields__:
+            if fname in ('line', 'col'):
+                continue
+            _collect_declared(getattr(node, fname, None), into)
 
 def get_suggestion(name, possible_names):
     """Calcula a distância de Levenshtein para sugerir nomes parecidos."""
@@ -62,15 +114,24 @@ class ExpressionAnalyzer(NodeVisitor):
     def visit_VariableExpr(self, node):
         info = self.get_var_info(node.name)
         if not info:
-            # NOVO: variante de enum sem payload pode ser usada bare
-            # (ex: `Stop`, `None`, `Zero`). Constrói o enum
-            # implicitamente. Variantes COM payload (ex: `Some`)
-            # continuam exigindo chamada: `Some(42)`.
+            # Variante sem payload (ex: `Red`, `Stop`) → constrói.
             enum_name = self._find_enum_of_variant(
                 node.name, require_no_payload=True
             )
             if enum_name is not None:
                 return enum_name
+
+            # NOVO: variante COM payload usada bare (ex: `Some`) → erro.
+            if node.name in self.functions:
+                # Se é variante de enum com payload, exige chamada.
+                if self._find_enum_of_variant(node.name) is not None:
+                    raise LuminaError(
+                        f"Variante '{node.name}' espera payload. "
+                        f"Use `{node.name}(...)`.",
+                        self.filename, node.line, node.col, self.source_code,
+                    )
+                # Nome de função usado como valor (fn pointer).
+                return "fn"
 
             available_vars = [k for scope in self.scopes for k in scope.keys()]
             suggestion = get_suggestion(node.name, available_vars)
@@ -511,6 +572,31 @@ class ExpressionAnalyzer(NodeVisitor):
         return node.target_type
 
     def visit_LambdaExpr(self, node):
+        # 1) Encontra variáveis livres (antes de entrar no escopo da lambda).
+        refs = set()
+        for stmt in node.body:
+            _collect_var_refs(stmt, refs)
+
+        declared = {p.name for p in node.params}
+        for stmt in node.body:
+            _collect_declared(stmt, declared)
+
+        free = []
+        for name in sorted(refs):
+            if name in declared:
+                continue
+            # Visível no escopo externo?
+            visible = False
+            for scope in reversed(self.scopes):
+                if name in scope:
+                    visible = True
+                    break
+            if visible:
+                free.append(name)
+
+        node.free_vars = free
+
+        # 2) Análise normal do body.
         self.push_scope()
         for param in node.params:
             self.declare_var(param.name, param.type_ann, True)

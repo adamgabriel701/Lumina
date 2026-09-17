@@ -50,6 +50,40 @@ class CallsMixin:
             return ir.Constant(ty, 0)
         return ir.Constant(ty, 0)
 
+    def _call_closure(self, name, node):
+        """Desempacota `{fn_ptr, env_ptr}` e chama com env como primeiro arg.
+
+        ABI: `i64 fn(i8* env, i64 a1, ..., i64 aN)`.
+        """
+        slot = self.symbol_table[name]
+        closure_raw = self.builder.load(slot, name=f"{name}_closure")
+        closure_i8pp = self.builder.bitcast(
+            closure_raw, self.voidptr_ty.as_pointer(), name=f"{name}_c8pp",
+        )
+        fn_raw = self.builder.load(closure_i8pp, name=f"{name}_fn")
+        env_slot = self.builder.gep(
+            closure_i8pp, [ir.Constant(self.i64_ty, 1)], name=f"{name}_env_slot",
+        )
+        env_raw = self.builder.load(env_slot, name=f"{name}_env")
+
+        n = len(node.args)
+        fn_ty = ir.FunctionType(self.i64_ty, [self.voidptr_ty] + [self.i64_ty] * n)
+        fn_ptr = self.builder.bitcast(fn_raw, fn_ty.as_pointer(), name=f"{name}_cast")
+
+        call_args = [env_raw]
+        for arg_node in node.args:
+            a = self.visit(arg_node)
+            if a.type != self.i64_ty:
+                if isinstance(a.type, ir.IntType):
+                    a = self.builder.sext(a, self.i64_ty, name=f"{name}_arg_sext")
+                elif a.type == self.f64_ty:
+                    a = self.builder.fptosi(a, self.i64_ty, name=f"{name}_arg_fptosi")
+                elif isinstance(a.type, ir.PointerType):
+                    a = self.builder.ptrtoint(a, self.i64_ty, name=f"{name}_arg_ptr")
+            call_args.append(a)
+
+        return self.builder.call(fn_ptr, call_args, name=f"{name}_call")
+
     def codegen_user_call(self, node, func_name):
         # 0. Macro (@macro) → expande AST no call site
         if func_name in getattr(self, 'macros', {}):
@@ -61,10 +95,20 @@ class CallsMixin:
         if (func_name not in self.functions_table
                 and func_name not in self.builtin_functions
                 and func_name in self.symbol_table):
+            # NOVO: descobre N antes de montar a assinatura
+            n_args = len(node.args)
+
+            # 1a. Closure com env: desempacota {fn_ptr, env_ptr}.
+            if func_name in getattr(self, 'closure_vars', set()):
+                return self._call_closure(func_name, node)
+
+            # 1b. Function pointer cru.
             fn_slot = self.symbol_table[func_name]
             fn_ptr_raw = self.builder.load(fn_slot, name=f"{func_name}_load")
 
-            fn_ty = ir.FunctionType(self.i64_ty, [self.i64_ty])
+            # NOVO: N args em vez de 1
+            fn_ty = ir.FunctionType(self.i64_ty, [self.i64_ty] * n_args)
+
             if fn_ptr_raw.type != fn_ty.as_pointer():
                 if fn_ptr_raw.type == self.voidptr_ty:
                     fn_ptr = self.builder.bitcast(fn_ptr_raw, fn_ty.as_pointer(), name=f"{func_name}_cast")

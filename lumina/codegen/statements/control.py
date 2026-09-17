@@ -154,6 +154,101 @@ class ControlMixin:
              elemento `i8`.
           4. Outros tipos: loop vazio (N=0) — não crasha.
         """
+
+        # --- Caso 0: `for i, x in arr` — índice + valor ---
+        if "," in node.var_name:
+            idx_name, val_name = node.var_name.split(",", 1)
+            idx_name = idx_name.strip()
+            val_name = val_name.strip()
+
+            lengths = getattr(self, 'array_lengths', {})
+            if isinstance(node.iterable, VariableExpr) and node.iterable.name in lengths:
+                n = lengths[node.iterable.name]
+                arr_val = self.visit(node.iterable)
+                len_val = ir.Constant(self.i64_ty, n)
+                elem_ty = self.i64_ty
+                use_array_gep = False
+            else:
+                arr_val = self.visit(node.iterable)
+                if (isinstance(arr_val.type, ir.PointerType)
+                        and isinstance(arr_val.type.pointee, ir.ArrayType)):
+                    n = arr_val.type.pointee.count
+                    elem_ty = arr_val.type.pointee.element
+                    len_val = ir.Constant(self.i64_ty, n)
+                    use_array_gep = True
+                elif arr_val.type == self.voidptr_ty:
+                    len_val = self.builder.call(self.strlen, [arr_val], name="forin_strlen")
+                    elem_ty = self.i8_ty
+                    use_array_gep = False
+                else:
+                    len_val = ir.Constant(self.i64_ty, 0)
+                    elem_ty = self.i64_ty
+                    use_array_gep = False
+
+            idx_ptr = self.builder.alloca(self.i64_ty, name=f"__for_idx_{idx_name}")
+            self.builder.store(ir.Constant(self.i64_ty, 0), idx_ptr)
+
+            elem_ptr = self.builder.alloca(elem_ty, name=val_name)
+            self.symbol_table[val_name] = elem_ptr
+            self.var_types[val_name] = self._llvm_ty_to_str(elem_ty)
+
+            # O índice é o próprio idx_ptr.
+            idx_slot = self.builder.alloca(self.i64_ty, name=idx_name)
+            self.symbol_table[idx_name] = idx_slot
+            self.var_types[idx_name] = "int"
+
+            cond_bb = self.builder.append_basic_block(name="forin_cond")
+            body_bb = self.builder.append_basic_block(name="forin_body")
+            inc_bb  = self.builder.append_basic_block(name="forin_inc")
+            end_bb  = self.builder.append_basic_block(name="forin_end")
+
+            self.builder.branch(cond_bb)
+
+            self.builder.position_at_end(cond_bb)
+            cur = self.builder.load(idx_ptr, name="forin_cur")
+            self.builder.store(cur, idx_slot)
+            cond = self.builder.icmp_signed("<", cur, len_val, name="forin_cond")
+            self.builder.cbranch(cond, body_bb, end_bb)
+
+            self.builder.position_at_end(body_bb)
+            if use_array_gep:
+                ep = self.builder.gep(
+                    arr_val, [ir.Constant(self.i32_ty, 0), cur],
+                    name="forin_ep",
+                )
+            else:
+                ep = self.builder.gep(arr_val, [cur], name="forin_ep")
+            raw = self.builder.load(ep, name="forin_elem")
+            raw = self._normalize_loaded(raw, name_hint="forin")
+            if raw.type != elem_ty:
+                if isinstance(raw.type, ir.IntType) and isinstance(elem_ty, ir.IntType):
+                    if raw.type.width > elem_ty.width:
+                        raw = self.builder.trunc(raw, elem_ty, name="forin_trunc")
+                    elif raw.type.width < elem_ty.width:
+                        raw = self.builder.zext(raw, elem_ty, name="forin_zext")
+            self.builder.store(raw, elem_ptr)
+
+            start = self._begin_scope()
+            self.loop_stack.append((inc_bb, end_bb, start))
+            for stmt in node.body:
+                if self.builder.block.is_terminated:
+                    break
+                self.visit(stmt)
+            self.loop_stack.pop()
+            if not self.builder.block.is_terminated:
+                self._end_scope(start)
+            if not self.builder.block.is_terminated:
+                self.builder.branch(inc_bb)
+
+            self.builder.position_at_end(inc_bb)
+            cur2 = self.builder.load(idx_ptr, name="forin_cur_inc")
+            nxt = self.builder.add(cur2, ir.Constant(self.i64_ty, 1), name="forin_next")
+            self.builder.store(nxt, idx_ptr)
+            self.builder.branch(cond_bb)
+
+            self.builder.position_at_end(end_bb)
+            return
+
         # --- Caso 1: variável com array literal registrado ---
         if isinstance(node.iterable, VariableExpr):
             lengths = getattr(self, 'array_lengths', {})

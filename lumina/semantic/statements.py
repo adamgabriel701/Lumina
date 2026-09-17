@@ -368,7 +368,13 @@ class StatementAnalyzer:
                 self.visit(node.start)
                 self.visit(node.end)
             self.push_scope()
-            self.declare_var(node.var_name, "int", False)
+            # NOVO: `for i, x in arr:` — declara ambos os nomes.
+            if "," in node.var_name:
+                idx_name, val_name = node.var_name.split(",", 1)
+                self.declare_var(idx_name.strip(), "int", False)
+                self.declare_var(val_name.strip(), "int", False)
+            else:
+                self.declare_var(node.var_name, "int", False)
             for stmt in node.body:
                 self.analyze_stmt(stmt)
             self.pop_scope()

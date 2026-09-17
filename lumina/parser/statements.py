@@ -236,7 +236,13 @@ class StatementParser(PatternParser):
 
     def parse_for(self):
         self.consume(TokenType.FOR)
-        var_name = self.expect(TokenType.IDENT).value
+        first = self.expect(TokenType.IDENT).value
+        # NOVO: `for i, x in arr:` — índice + valor.
+        second = None
+        if self.check(TokenType.COMMA):
+            self.consume()
+            second = self.expect(TokenType.IDENT).value
+
         self.expect(TokenType.IN)
         start = None
         end = None
@@ -248,6 +254,7 @@ class StatementParser(PatternParser):
             end = self.parse_additive()
         else:
             iterable = first_expr
+
         self.expect(TokenType.COLON)
         self.expect(TokenType.NEWLINE)
         while self.check(TokenType.NEWLINE):
@@ -261,7 +268,10 @@ class StatementParser(PatternParser):
             if stmt is not None:
                 body.append(stmt)
         self.expect(TokenType.DEDENT)
-        return ForStmt(var_name, start, end, iterable, body)
+
+        if second is not None:
+            return ForStmt(f"{first},{second}", start, end, iterable, body)
+        return ForStmt(first, start, end, iterable, body)
 
     def parse_defer(self):
         self.consume(TokenType.DEFER)

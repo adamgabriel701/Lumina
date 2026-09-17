@@ -375,7 +375,22 @@ class ExpressionAnalyzer(NodeVisitor):
                     f"Campo '{field.name}' não existe na Struct '{node.struct_name}'.",
                     self.filename, getattr(node, 'line', 0), getattr(node, 'col', 0), self.source_code,
                 )
-            self.visit(field.value)
+
+            # NOVO: valida tipo do valor contra o tipo declarado do campo.
+            field_decl_type = struct_def.fields[field.name]
+            value_type = self.visit(field.value)
+
+            if value_type is not None and not is_assignable(field_decl_type, value_type):
+                raise LuminaError(
+                    f"Tipo inválido para campo '{field.name}' de "
+                    f"'{node.struct_name}': esperado '{field_decl_type}', "
+                    f"obteve '{value_type}'.",
+                    self.filename,
+                    getattr(field.value, 'line', 0) or getattr(node, 'line', 0),
+                    getattr(field.value, 'col', 0) or getattr(node, 'col', 0),
+                    self.source_code,
+                )
+
             passed_fields.add(field.name)
 
         missing = defined_fields - passed_fields
@@ -385,7 +400,7 @@ class ExpressionAnalyzer(NodeVisitor):
                 self.filename, getattr(node, 'line', 0), getattr(node, 'col', 0), self.source_code,
             )
         return node.struct_name
-
+    
     def visit_MatchExpr(self, node):
         self.visit(node.condition)
 

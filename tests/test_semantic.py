@@ -129,19 +129,15 @@ def test_struct_field_access(analyze):
 
 def test_struct_field_wrong_type(analyze):
     src = (
-        "struct P:\n"
-        "    x: int\n"
-        "    y: int\n"
-        "\n"
-        "fn main() -> int:\n"
-        "    let p = P { x: \"texto\", y: 2 }\n"
-        "    return 0\n"
+        'struct P:\n'
+        '    x: int\n'
+        '    y: int\n'
+        '\n'
+        'fn main() -> int:\n'
+        '    let p = P { x: "texto", y: 2 }\n'
+        '    return 0\n'
     )
-    # Hoje o semantic não valida tipo dos campos — só existência
-    # Este teste documenta o comportamento atual.
-    # Quando implementarmos validação de tipo por campo, este teste muda.
-    _check_ok(analyze, src) if False else None  # skip por enquanto
-    pytest.skip("Validação de tipo por campo ainda não implementada")
+    _check_fails(analyze, src, match="Tipo inválido para campo 'x'")
 
 
 # ============================================================

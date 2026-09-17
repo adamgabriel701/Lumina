@@ -747,7 +747,19 @@ Para ativar cores semânticas em temas que não suportam por padrão, adicione e
 * **LSP `documentSymbol`:** só símbolos de topo + métodos de `impl`.
 * **Cross-compile:** `libgc` precisa ser cross-compilada ou usar `--no-gc`.
 * **`std/iter` callbacks:** assinatura `i64 -> i64` (limitado pelo codegen de chamada indireta).
-
+* **Genéricos aninhados (`Box<T>` como parâmetro):** o semantic
+  aceita `identidade<T>(x: T)` e `Box<int>` como variável local, mas
+  **não** `fn put<T>(b: Box<T>, val: T)`. A monomorphization só cobre
+  type params diretos. Genéricos aninhados virão em release futura.
+* **Null real para structs:** `?.` (safe navigation) funciona em
+  ponteiros de struct válidos, mas não há como construir um `Usuario`
+  que seja nullptr. `none` constrói `Option::None` (struct alocada),
+  não null pointer. Use `?.` para campos opcionais — em breve teremos
+  sintaxe para null real.
+* **TCO:** ainda **não implementado**. `sum_rec(1000000, 0)` estoura
+  stack. Use `N <= 10000` (default 8MB) ou converta para loop. O
+  exemplo `tco_test.lm` reflete essa limitação.
+  
 ---
 
 ## 🗺️ Roadmap

@@ -1,18 +1,28 @@
-# Struct Genérica: Pode guardar qualquer tipo de ponteiro
+# Função Genérica: identidade, aceita e retorna qualquer tipo
+fn identidade<T>(x: T) -> T:
+    return x
+
+# Struct Genérica: caixa que guarda um valor T
 struct Box<T>:
     data: T
 
-# Função Genérica: Recebe qualquer ponteiro e retorna o mesmo
-fn put<T>(b: Box, val: T):
-    b.data = val
-
 fn main() -> int:
-    # Cria uma Box
-    mut b: Box
-    
-    # Guarda um inteiro (convertido para ponteiro genérico)
-    let x = 42
-    put(b, &x)
-    print("Box armazena um ponteiro para o inteiro 42!")
-    
+    print("=== identidade<int> ===")
+    let a = identidade(42)
+    print(a)
+
+    print("=== identidade<float> ===")
+    let b = identidade(3.14)
+    print(b)
+
+    print("=== Box<int> como variável local ===")
+    mut box_i: Box<int>
+    box_i.data = 100
+    print(box_i.data)
+
+    print("=== Box<float> como variável local ===")
+    mut box_f: Box<float>
+    box_f.data = 2.71
+    print(box_f.data)
+
     return 0

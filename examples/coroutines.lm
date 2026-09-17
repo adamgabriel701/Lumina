@@ -1,34 +1,34 @@
 import "std/async"
 
-# NOVO: Variável global! Não vive na Stack, então não é resetada pelo swapcontext.
-mut resumed = 0
+# Buffers de contexto (ucontext_t tem ~1KB em x86_64 Linux).
+# Não vivem na stack porque swapcontext pode retornar aqui a qualquer momento.
+let CTX_SIZE = 1024
 
-# Contextos de CPU (opacos). Precisam existir no escopo global para
-# serem passados para getcontext/swapcontext.
-mut scheduler_ctx = 0
-mut main_ctx = 0
+mut main_ctx      = alloc_bytes(CTX_SIZE)
+mut scheduler_ctx = alloc_bytes(CTX_SIZE)
+
+# Flag global: swapcontext salva o estado, então variáveis locais
+# podem ser restauradas a qualquer valor. Globais são confiáveis.
+mut resumed = 0
 
 fn task_a():
     mut i = 0
     while i < 3:
         print("Task A:", i)
         i += 1
-        # Cede a CPU de volta para a main
         swapcontext(scheduler_ctx, main_ctx)
 
 fn main() -> int:
     print("Iniciando Green Threads...")
-    
-    # Salva o contexto atual (main_ctx). 
-    # Quando o swapcontext for chamado, a CPU voltará para esta exata linha!
+
+    # Salva o contexto atual em main_ctx
     getcontext(main_ctx)
-    
-    # Se voltou aqui via swapcontext, resumed será 1 (porque é global)
+
     if resumed == 0:
         resumed = 1
         print("Iniciando Task A...")
         task_a()
-        
-    print("Task A concluida ou cedeu CPU. Continuando na main...")
+
+    print("Task A concluída ou cedeu CPU. Continuando na main...")
     print("Fim do escalonador.")
     return 0

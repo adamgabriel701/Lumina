@@ -1,13 +1,19 @@
-# Soma recursiva de 1 até N (Tail Recursive)
+# Soma recursiva de 1 até N (não é tail-call optimizada ainda).
+#
+# Limitação conhecida: sem TCO no codegen, o stack cresce linearmente
+# com N. N=10000 é seguro em Linux x86_64 (default 8MB stack).
+# N=100000+ pode estourar.
+#
+# Quando TCO for implementado, este teste pode ir para N=1000000.
 fn sum_rec(n: int, acc: int) -> int:
     if n == 0:
         return acc
-    # A chamada de cauda é o retorno direto da função
     return sum_rec(n - 1, acc + n)
 
 fn main() -> int:
-    print("Iniciando TCO Test...")
-    # 1 milhão de recursões! Sem TCO, isso derrubaria a pilha.
-    let res = sum_rec(1000000, 0)
-    print("Soma 1 até 1M:", res)
+    print("Iniciando TCO Test (N=10000)...")
+    let res = sum_rec(10000, 0)
+    # Soma 1..N = N * (N+1) / 2
+    # 10000 * 10001 / 2 = 50005000
+    print("Soma 1 até 10k:", res)
     return 0

@@ -106,10 +106,12 @@ class MatchStmtMixin:
 
         # --- body_bb: corpo ---
         self.builder.position_at_end(body_bb)
+        start = self._begin_scope()
         for stmt in body:
             if self.builder.block.is_terminated:
                 break
             self.visit(stmt)
+        self._end_scope(start)
         if not self.builder.block.is_terminated:
             self.builder.branch(end_bb)
 

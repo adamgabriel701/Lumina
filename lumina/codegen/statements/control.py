@@ -15,29 +15,39 @@ class ControlMixin:
 
         self.builder.cbranch(cond_val, then_bb, else_bb)
 
+        # Branch then — com escopo de defer próprio
         self.builder.position_at_end(then_bb)
+        start_then = self._begin_scope()
         for stmt in node.then_body:
             if self.builder.block.is_terminated:
                 break
             self.visit(stmt)
+        if not self.builder.block.is_terminated:
+            self._end_scope(start_then)
+        else:
+            # Terminou (return/break) antes dos defers — descarta
+            del self.defer_stack[start_then:]
         then_term = self.builder.block.is_terminated
         if not then_term:
             self.builder.branch(end_bb)
 
+        # Branch else — idem
         self.builder.position_at_end(else_bb)
         if node.else_body:
+            start_else = self._begin_scope()
             for stmt in node.else_body:
                 if self.builder.block.is_terminated:
                     break
                 self.visit(stmt)
+            if not self.builder.block.is_terminated:
+                self._end_scope(start_else)
+            else:
+                del self.defer_stack[start_else:]
         else_term = self.builder.block.is_terminated
         if not else_term:
             self.builder.branch(end_bb)
 
         if then_term and else_term:
-            # Ambos os ramos terminam (break/continue/return).
-            # end_bb vira inalcançável — marca como unreachable para
-            # sinalizar aos callers que o if inteiro é um terminator.
             self.builder.position_at_end(end_bb)
             self.builder.unreachable()
             return
@@ -58,13 +68,18 @@ class ControlMixin:
         self.builder.cbranch(cond_val, body_bb, end_bb)
 
         self.builder.position_at_end(body_bb)
-        self.loop_stack.append((cond_bb, end_bb))
+        start = self._begin_scope()
+        # continue target = cond_bb (não precisa de bloco separado)
+        self.loop_stack.append((cond_bb, end_bb, start))
+
         for stmt in node.body:
             if self.builder.block.is_terminated:
                 break
             self.visit(stmt)
         self.loop_stack.pop()
 
+        if not self.builder.block.is_terminated:
+            self._end_scope(start)
         if not self.builder.block.is_terminated:
             self.builder.branch(cond_bb)
 
@@ -96,15 +111,16 @@ class ControlMixin:
 
         self.builder.branch(cond_bb)
 
-        # Condição
         self.builder.position_at_end(cond_bb)
         current_val = self.builder.load(var_ptr, name="for_curr")
         cond = self.builder.icmp_signed("<", current_val, end_val, name="for_cond")
         self.builder.cbranch(cond, body_bb, end_bb)
 
-        # Corpo
         self.builder.position_at_end(body_bb)
-        self.loop_stack.append((inc_bb, end_bb))  # continue → inc_bb
+        start = self._begin_scope()
+        # continue target = inc_bb
+        self.loop_stack.append((inc_bb, end_bb, start))
+
         for stmt in node.body:
             if self.builder.block.is_terminated:
                 break
@@ -112,9 +128,10 @@ class ControlMixin:
         self.loop_stack.pop()
 
         if not self.builder.block.is_terminated:
+            self._end_scope(start)
+        if not self.builder.block.is_terminated:
             self.builder.branch(inc_bb)
 
-        # Incremento
         self.builder.position_at_end(inc_bb)
         cur2 = self.builder.load(var_ptr, name="for_curr_inc")
         next_val = self.builder.add(cur2, ir.Constant(self.i64_ty, 1), name="for_next")

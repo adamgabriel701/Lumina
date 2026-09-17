@@ -155,12 +155,17 @@ class MatchStmtMixin:
     # Match em str (i8*)  ← NOVO
     # ------------------------------------------------------------------
     def _codegen_match_str(self, node, cond_val, end_bb):
-        """Compara strings com strcmp e ramifica.
+        """Match sobre string (i8*).
 
-        Cada case é testado em sequência; se nenhum casar, cai no default.
+        Estrutura por case (4 blocos):
+            test_bb: strcmp (pattern_match)
+            bind_bb: bind do nome do case (self-binding)
+            body_bb: corpo
+            next_bb: próximo case
+
+        O binding acontece ANTES do guard — necessário para
+        `case s if s.contains("...")`.
         """
-        # Usa o strcmp já declarado em setup_libc_functions.
-        # (Ver `LLVMCodegen.setup_libc_functions`.)
         strcmp_fn = self.strcmp
 
         next_bb = self.builder.append_basic_block(name="match_str_next_0")
@@ -174,27 +179,42 @@ class MatchStmtMixin:
                 guard = None
 
             test_bb = self.builder.append_basic_block(name=f"match_str_test_{i}")
+            bind_bb = self.builder.append_basic_block(name=f"match_str_bind_{i}")
             body_bb = self.builder.append_basic_block(name=f"match_str_body_{i}")
             next_next_bb = self.builder.append_basic_block(name=f"match_str_next_{i + 1}")
 
             self.builder.position_at_end(next_bb)
             self.builder.branch(test_bb)
 
+            # --- test_bb: strcmp ---
             self.builder.position_at_end(test_bb)
 
-            # `variant` veio do parser como string literal Python
-            # (ex: 'run') ou como expressão (VariableExpr).
-            if isinstance(variant, str):
-                case_str = self.create_global_string(variant)
+            if variant is None:
+                pattern_match = ir.Constant(ir.IntType(1), 1)
             else:
-                case_str = self.visit(variant)
+                if isinstance(variant, str):
+                    case_str = self.create_global_string(variant)
+                else:
+                    case_str = self.visit(variant)
 
-            cmp_result = self.builder.call(
-                strcmp_fn, [cond_val, case_str], name=f"strcmp_{i}"
-            )
-            is_eq = self.builder.icmp_signed(
-                "==", cmp_result, ir.Constant(ir.IntType(32), 0), name=f"str_eq_{i}"
-            )
+                cmp_result = self.builder.call(
+                    strcmp_fn, [cond_val, case_str], name=f"strcmp_{i}"
+                )
+                pattern_match = self.builder.icmp_signed(
+                    "==", cmp_result, ir.Constant(ir.IntType(32), 0),
+                    name=f"str_eq_{i}",
+                )
+
+            self.builder.cbranch(pattern_match, bind_bb, next_next_bb)
+
+            # --- bind_bb: extrai bindings ---
+            self.builder.position_at_end(bind_bb)
+            if binding:
+                names = binding if isinstance(binding, list) else [binding]
+                for name in names:
+                    var_ptr = self.builder.alloca(self.voidptr_ty, name=name)
+                    self.builder.store(cond_val, var_ptr)
+                    self.symbol_table[name] = var_ptr
 
             if guard:
                 guard_val = self.visit(guard)
@@ -203,23 +223,15 @@ class MatchStmtMixin:
                         "!=", guard_val, ir.Constant(guard_val.type, 0),
                         name=f"guard_cond_{i}",
                     )
-                final_cond = self.builder.and_(is_eq, guard_val, name=f"match_and_{i}")
+                self.builder.cbranch(guard_val, body_bb, next_next_bb)
             else:
-                final_cond = is_eq
+                self.builder.branch(body_bb)
 
-            self.builder.cbranch(final_cond, body_bb, next_next_bb)
-
+            # --- body_bb ---
             self.builder.position_at_end(body_bb)
-
-            # Binding: em match sobre str, `case x` sem guard vira self-binding
-            if binding:
-                names = binding if isinstance(binding, list) else [binding]
-                for name in names:
-                    var_ptr = self.builder.alloca(self.voidptr_ty, name=name)
-                    self.builder.store(cond_val, var_ptr)
-                    self.symbol_table[name] = var_ptr
-
             for stmt in body:
+                if self.builder.block.is_terminated:
+                    break
                 self.visit(stmt)
             if not self.builder.block.is_terminated:
                 self.builder.branch(end_bb)
@@ -230,6 +242,8 @@ class MatchStmtMixin:
         self.builder.position_at_end(next_bb)
         if node.default:
             for stmt in node.default:
+                if self.builder.block.is_terminated:
+                    break
                 self.visit(stmt)
         if not self.builder.block.is_terminated:
             self.builder.branch(end_bb)
@@ -248,8 +262,15 @@ class MatchStmtMixin:
         )
 
     def _coerce_self_binding(self, variant, binding, cond_val):
-        """Se `variant` é string que não é número E não estamos
-        num match de enum, converte em self-binding.
+        """Converte `case foo if ...:` (variant=str, binding=None) em
+        self-binding (variant=None, binding=[foo]).
+
+        `variant` pode ser:
+          - `str`          → nome de variante ou self-binding
+          - `StringExpr`   → string literal (`case \"build\":`)
+          - `NumberExpr`   → já consumido como str no parser atual
+          - nó AST         → variável/expressão
+        Só converte `str` não-numérico em self-binding.
         """
         if not isinstance(variant, str) or not variant:
             return variant, binding
@@ -367,6 +388,7 @@ class MatchStmtMixin:
             # ============================================================
             else:
                 if variant is None:
+                    # Self-binding: sempre casa; o guard decide
                     pattern_match = ir.Constant(ir.IntType(1), 1)
                 elif cond_val.type == self.i64_ty:
                     if isinstance(variant, str):
@@ -382,6 +404,21 @@ class MatchStmtMixin:
                         pattern_match = self.builder.icmp_signed(
                             "==", cond_val, case_val, name=f"match_eq_{i}",
                         )
+                elif cond_val.type == self.voidptr_ty:
+                    # NOVO: strings precisam de strcmp — antes caíam
+                    # no `else` final e viravam sempre-verdadeiro.
+                    if isinstance(variant, str):
+                        case_str = self.create_global_string(variant)
+                    else:
+                        case_str = self.visit(variant)
+                    cmp_result = self.builder.call(
+                        self.strcmp, [cond_val, case_str],
+                        name=f"match_str_cmp_{i}",
+                    )
+                    pattern_match = self.builder.icmp_signed(
+                        "==", cmp_result, ir.Constant(ir.IntType(32), 0),
+                        name=f"match_str_eq_{i}",
+                    )
                 else:
                     pattern_match = ir.Constant(ir.IntType(1), 1)
 

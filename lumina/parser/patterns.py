@@ -25,7 +25,10 @@ class PatternParser(ExpressionParser):
         if self.check(TokenType.NUMBER):
             variant = self.consume().value
         elif self.check(TokenType.STRING):
-            variant = self.consume().value
+            # Envolve em StringExpr para que o codegen saiba que é
+            # um literal (comparação por igualdade) e não um
+            # self-binding (`case s if ...`).
+            variant = StringExpr(self.consume().value)
         elif self.check(TokenType.IDENT):
             first_ident = self.expect(TokenType.IDENT).value
             variant = first_ident
@@ -94,7 +97,16 @@ class PatternParser(ExpressionParser):
                         body.append(stmt)
                 self.expect(TokenType.DEDENT)
                 binding = bindings[0] if isinstance(bindings, list) and bindings else bindings
-                cases.append((VariableExpr(variant or binding or "_", 0, 0), body[0] if body else NumberExpr("0", False)))
+                # `variant` pode ser StringExpr (literal) — extrai o texto
+                # para o VariableExpr que o MatchExpr usa.
+                if isinstance(variant, StringExpr):
+                    variant_name = variant.value
+                else:
+                    variant_name = variant or binding or "_"
+                cases.append((
+                    VariableExpr(variant_name, 0, 0),
+                    body[0] if body else NumberExpr("0", False),
+                ))
             elif self.check(TokenType.ELSE):
                 self.consume()
                 self.expect(TokenType.FAT_ARROW)

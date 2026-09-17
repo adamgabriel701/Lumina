@@ -7,6 +7,64 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ---
 
+## [Unreleased — 0.4.0]
+
+### Adicionado
+
+#### Linguagem
+- **Closures** (captura por valor): `let offset = 10; let add = fn(x: int) -> int: x + offset`. O codegen detecta variáveis livres em `LambdaExpr`, gera um bloco `{fn_ptr, env_ptr}` no heap, e emite uma função `i64 __closure_N(i8* env, i64 a1, ..., i64 aN)` que lê os campos do env. Lambda sem captura continua sendo fn pointer cru (compatível com FFI). Suporta lambda aninhada, captura dentro de loop, e chamada com N argumentos.
+- **`for i, x in arr`** — índice + valor no mesmo loop. Parser aceita `IDENT COMMA IDENT` após `for`; o `ForStmt` guarda `"i,x"` em `var_name`; o semantic declara ambos; o codegen emite slot para o índice e para o valor.
+- **`std/sort`** — `sort(arr, n)` (crescente) e `sort_by(arr, n, cmp)` (comparator). Insertion sort para `n ≤ 16`, quicksort acima. `is_sorted(arr, n)` verifica.
+- **`fn_name` como valor** — `sort(arr, n, _cmp_asc)` passa função por nome. Semantic retorna `"fn"`, codegen bitcast para `voidptr`.
+- **Indirect call com N args** — `fn_ty = i64 (i64) * n_args` em vez de `i64 (i64)`. `cmp(a, b)` agora passa ambos.
+- **Variante com payload usada bare** agora é erro: `let x = Some` falha com mensagem clara em vez de compilar silenciosamente.
+
+#### `std`
+- `std/sort.lm` — `_cmp_asc`, `_insertion_sort`, `_partition`, `_quicksort_rec`, `sort`, `sort_by`, `is_sorted`.
+- `std/string.lm` — `StringBuilder` com `push_char`, `push_str`, `finish`, `clear`, `size`.
+- `std/result.lm` — `unwrap`, `unwrap_or` (renomeado `default` → `fallback`), `is_ok`, `is_err`, `is_ok_and`, `expect`, `map`, `and_then`.
+
+### Corrigido
+
+- `visit_VariableExpr` (semantic + codegen) checava `functions` antes de variantes de enum. Como variantes são adicionadas em `functions` no `analyze()`, `Red` bare virava `"fn"` em vez de `"Color"`. **Fix:** ordem invertida (variante antes de função).
+- `for x in arr` com `N` variável (não-literal) caía em loop vazio. Agora `array_lengths` também registra `alloc(NumberExpr)`.
+- `parse_for` declarava `from ..ast import ForStmt` dentro do método, sombreando o import do topo do arquivo → `UnboundLocalError`.
+- `chr` e `atoi` sem branch de codegen (retornavam `0`). Adicionados em `calls.py`.
+- `SliceExpr` inferido como `ptr` no `VarDecl`, fazendo `s[..3] == "abc"` comparar endereços. Agora infere pela fonte (`str` → `str`, array → `ptr`).
+- `bool` → `int` usava `sext` (`true` virava `-1`). Agora `zext` quando origem é `i1`.
+- `read_file()` dava segfault se o arquivo não existia. Agora retorna `""` via `phi` com `fopen == NULL`.
+- `free()` rejeitava `i64*` (`TypeError: i8* != i64*`). Bitcast antes do call.
+- `impl Box<T>` chamado em `Box<int>` gerava `%"Box"* != %"Box_int_"*`. Bitcast no `codegen_method_call` quando cai no fallback.
+- `std/result::unwrap_or` usava `default` (keyword reservada). Renomeado para `fallback`.
+- `and_then` retornava `int` para function pointers, falhando em `_require_assignable`. Agora retorna `None` (tipo desconhecido).
+- `lumina lint` estourava `RecursionError` por recursão mútua entre `_collect_vars` e `_collect_exprs`. Reescrito como `_collect` única.
+
+### Adicionado (tests)
+
+- `tests/test_closures.py` (10 testes).
+- `tests/test_sort.py` (10 testes, 1 xfail).
+- `tests/test_lint.py` (14 testes, do 0.3.0).
+- `tests/test_forin.py` (9 testes).
+- `tests/test_tuples.py` (7 testes).
+- `tests/test_generic_impl.py` (6 testes).
+- `tests/test_std_result.py` (9 testes).
+- `tests/test_escape_analysis.py` (4 testes).
+
+**Total: 344 passed, 1 xfailed** (antes 325 passed, do 0.3.0).
+
+O `1 xfailed` é `test_sort_closure_captures` — closures com captura passadas como callback ainda não funcionam (o tipo `fn` é `voidptr` e não distingue raw fn ptr de `{fn, env}`). Próximo passo: introduzir um tipo `Fn` distinto.
+
+### Mudado
+
+- `lumina/semantic/expressions.py::visit_VariableExpr` reordena os checks: variante → `fn` → variável.
+- `lumina/codegen/expressions/members.py::visit_VariableExpr` idem, e adiciona bitcast para fn ptr.
+- `lumina/codegen/expressions/calls.py` — `_call_closure` (desempacota `{fn, env}`) + indirect call com N args.
+- `lumina/codegen/expressions/aggregates.py` — `_emit_lambda_plain` (fn ptr) e `_emit_lambda_closure` (bloco `{fn, env}`).
+- `lumina/codegen/statements/var_decl.py` — `closure_vars` registra quais variáveis seguram closures.
+- `lumina/codegen/statements/control.py::_visit_for_iterable` — caso "índice + valor" quando `var_name` contém `,`.
+
+---
+
 ## [Unreleased — 0.3.0]
 
 ### Adicionado
@@ -59,18 +117,18 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 #### Linguagem
 - **TCO para mutual recursion (SCC dispatcher)**: SCCs (strongly connected components) do grafo de tail calls viram um dispatcher único. Cada membro vira um bloco dentro do dispatcher; tail calls a outros membros viram store de args + set de `current_id` + branch de volta. `is_even` / `is_odd` com 1M iterações rodam em stack constante.
 - **Defers emitidos em tail calls**: `return self(...)` em TCO emite os defers pendentes antes do branch de volta. Cada iteração da recursão re-executa o corpo, re-empilhando seus defers.
-- **`@safe`** — null check opt-in em `MemberExpr` e `IndexExpr`: funções anotadas com `@safe` ganham null check silencioso em `u.id` e `arr[i]`. Sem anotação, comportamento C-style (SIGSEGV rápido). `?.` continua funcionando em ambos os modos.
-- **`@macro`** — expansão de AST em compile-time: funções anotadas com `@macro` não são registradas como funções normais. No call site, o corpo (`return <expr>`) é substituído por um deep-copy com `VariableExpr(param) → arg`. Macros podem chamar outras macros.
+- **`@safe`** — null check opt-in em `MemberExpr` e `IndexExpr`.
+- **`@macro`** — expansão de AST em compile-time.
 
 #### Bugs corrigidos (parser/codegen)
-- **`@attrs` sobrescritos como tuples**: `parser/parser.py::parse` sobrescrevia `decl.attrs` **depois** de cada `parse_*` ter setado. `parse_function` passava `['safe']` (strings); `parse()` sobrescrevia com `[('safe', [])]`. Resultado: `'safe' in attrs` e `'macro' in attrs` retornavam False. **Fix**: removido o override.
-- **Macros malformadas não falhavam**: `_validate_macro(fn)` chamada em `generate_module` na coleta — fonte inválida falha em compile-time mesmo se nunca chamada.
-- **SCC dispatcher sem `defer_stack`**: `_materialize_scc_dispatcher` não inicializava `self.defer_stack`. **Fix**: init no entry + reset por membro + restore no final.
+- **`@attrs` sobrescritos como tuples**.
+- **Macros malformadas não falhavam**.
+- **SCC dispatcher sem `defer_stack`**.
 
 ### Mudado
 
-- **`codegen/codegen.py`**: novos métodos `_compute_tail_call_sccs`, `_can_dispatcher`, `_materialize_scc_dispatcher`, `_validate_macro`, `_infer_arg_type_lumina`, `_infer_type_map_lumina`. Novo módulo `codegen/expressions/macros.py` com `MacrosMixin`.
-- **`codegen/expressions/members.py`**: `visit_MemberExpr` e `visit_IndexExpr` ganharam branch `_safe_mode`. `_load_index` extraído para reuso.
+- **`codegen/codegen.py`**: novos métodos `_compute_tail_call_sccs`, `_can_dispatcher`, `_materialize_scc_dispatcher`, `_validate_macro`, `_infer_arg_type_lumina`, `_infer_type_map_lumina`. Novo módulo `codegen/expressions/macros.py`.
+- **`codegen/expressions/members.py`**: `visit_MemberExpr` e `visit_IndexExpr` ganharam branch `_safe_mode`.
 - **`parser/parser.py`**: removido o override `decl.attrs = attrs` em `parse()`.
 
 ---
@@ -80,13 +138,13 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 ### Adicionado
 
 #### Linguagem
-- **Genéricos aninhados** (`Box<T>` como parâmetro): `fn put<T>(b: Box<T>, val: T)` compila e funciona.
-- **`nil`** — literal novo que produz null pointer C-style, semanticamente distinto de `none`.
-- **`defer` com escopo de bloco** (breaking change): cada bloco `if`/`while`/`for`/`match` tem seu próprio escopo. `return`/`break`/`continue` emitem TODOS os defers pendentes.
-- **Multi-pattern** em `match`: `case 1 | 2 | 3:` cai no mesmo corpo.
-- **Wildcard `_`**: `case _:` casa sem bindar.
-- **Variantes bare de enum**: `let x = Stop`.
-- **TCO (Tail Call Optimization)** para self-recursion direta.
+- **Genéricos aninhados** (`Box<T>` como parâmetro).
+- **`nil`** — null pointer C-style.
+- **`defer` com escopo de bloco** (breaking change).
+- **Multi-pattern** em `match`: `case 1 | 2 | 3:`.
+- **Wildcard `_`**.
+- **Variantes bare de enum**.
+- **TCO (Tail Call Optimization)** para self-recursion.
 - **Type check em campos de struct literal**.
 - **Match guard em enum e string**.
 - **`break` / `continue`** reais.

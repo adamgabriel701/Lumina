@@ -431,10 +431,11 @@ def cmd_build(entry_file=None, extra_flags=[]):
             filtered_flags.append(f)
     extra_flags = filtered_flags
 
-    is_no_gc = "--no-gc" in extra_flags
     is_wasm = "--wasm" in extra_flags
     is_debug = "--debug" in extra_flags
     is_release = "--release" in extra_flags
+    # WebAssembly não tem libgc — desabilita GC no codegen também.
+    is_no_gc = ("--no-gc" in extra_flags) or is_wasm
 
     if is_debug:
         opt_flag = "-O0"
@@ -449,7 +450,8 @@ def cmd_build(entry_file=None, extra_flags=[]):
     cache_use = not (is_wasm or is_debug)
 
     llvm_ir = compile_lumina(entry, use_cache=cache_use, is_wasm=is_wasm,
-                             is_debug=is_debug, on_error=_report_error,
+                             is_debug=is_debug, is_no_gc=is_no_gc,
+                             on_error=_report_error,
                              target_triple=target_triple)
     if not llvm_ir:
         return None
@@ -468,11 +470,6 @@ def cmd_build(entry_file=None, extra_flags=[]):
 
     if is_wasm:
         warn("⚠️ Compilando para WebAssembly: Garbage Collector nativo desativado.")
-        with open(ir_file, "r") as f:
-            ir_code = f.read()
-        ir_code = ir_code.replace("GC_malloc", "malloc")
-        with open(ir_file, "w") as f:
-            f.write(ir_code)
 
         export_names = []
         with open(entry, "r") as f:
@@ -931,6 +928,16 @@ def cmd_repl():
     if lib_c_path:
         llvm.load_library_permanently(lib_c_path)
 
+    # Tenta carregar libgc — se disponível, o JIT usa GC.
+    gc_path = ctypes.util.find_library('gc')
+    repl_use_gc = False
+    if gc_path:
+        try:
+            llvm.load_library_permanently(gc_path)
+            repl_use_gc = True
+        except Exception:
+            repl_use_gc = False
+
     buffer = []
     while True:
         try:
@@ -953,7 +960,7 @@ def cmd_repl():
                     analyzer = SemanticAnalyzer("repl.lm", code)
                     analyzer.analyze(ast)
 
-                    codegen = LLVMCodegen()
+                    codegen = LLVMCodegen(use_gc=repl_use_gc)
                     llvm_ir = codegen.generate_module(ast)
 
                     mod = llvm.parse_assembly(llvm_ir)

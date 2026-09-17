@@ -10,17 +10,16 @@ from ..ast import Function as AstFunction, Param, TraitDecl
 
 
 class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCodegen):
-    def __init__(self, target_triple=None):
+    def __init__(self, target_triple=None, use_gc=True):
         self.module = ir.Module(name="lumina_module")
 
-        # Consistência com o triple do alvo (ou do host, se não
-        # especificado). Evita o warning "overriding the module
-        # target triple" do clang e é essencial para cross-compile.
         try:
             from llvmlite.binding import get_default_triple
             self.module.triple = target_triple or get_default_triple()
         except Exception:
             pass
+
+        self.use_gc = use_gc
 
         self.i64_ty = ir.IntType(64)
         self.i32_ty = ir.IntType(32)
@@ -54,11 +53,22 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         printf_ty = ir.FunctionType(ir.IntType(32), [self.i8_ty.as_pointer()], var_arg=True)
         self.printf = ir.Function(self.module, printf_ty, name="printf")
 
+        # Alocador: GC_malloc quando use_gc, malloc (libc) caso contrário.
+        # Ambos têm assinatura `i8* (i64)`.
         malloc_ty = ir.FunctionType(self.i8_ty.as_pointer(), [ir.IntType(64)])
-        self.malloc = ir.Function(self.module, malloc_ty, name="malloc")
+        if self.use_gc:
+            self.malloc = ir.Function(self.module, malloc_ty, name="GC_malloc")
 
-        free_ty = ir.FunctionType(ir.VoidType(), [self.i8_ty.as_pointer()])
-        self.free = ir.Function(self.module, free_ty, name="free")
+            gc_init_ty = ir.FunctionType(ir.VoidType(), [])
+            self.gc_init = ir.Function(self.module, gc_init_ty, name="GC_init")
+
+            free_ty = ir.FunctionType(ir.VoidType(), [self.i8_ty.as_pointer()])
+            self.free = ir.Function(self.module, free_ty, name="GC_free")
+        else:
+            self.malloc = ir.Function(self.module, malloc_ty, name="malloc")
+
+            free_ty = ir.FunctionType(ir.VoidType(), [self.i8_ty.as_pointer()])
+            self.free = ir.Function(self.module, free_ty, name="free")
 
         strcpy_ty = ir.FunctionType(self.i8_ty.as_pointer(), [self.i8_ty.as_pointer(), self.i8_ty.as_pointer()])
         self.strcpy = ir.Function(self.module, strcpy_ty, name="strcpy")
@@ -447,9 +457,6 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         self.symbol_table = {}
         self.var_types = {}
 
-        old_defer_stack = getattr(self, 'defer_stack', None)
-        self.defer_stack = []
-
         for i, p in enumerate(node.params):
             p_name, p_type = p.name, p.type_ann
             p_ty = self.get_llvm_param_type(p_type)
@@ -457,6 +464,11 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
             self.builder.store(func.args[i], ptr)
             self.symbol_table[p_name] = ptr
             self.var_types[p_name] = p_type
+
+        # Injeta GC_init() no topo de main, antes de qualquer alocação
+        # do usuário. Garante que a GC está pronta quando o programa começa.
+        if self.use_gc and node.name == "main":
+            self.builder.call(self.gc_init, [], name="gc_init_call")
 
         for stmt in node.body:
             self.visit(stmt)
@@ -471,10 +483,6 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
                 self.builder.ret(ir.Constant(func_type.return_type, None))
             else:
                 self.builder.ret(ir.Constant(func_type.return_type, 0))
-
-        if not self.builder.block.is_terminated:
-            self._emit_defers()
-        self.defer_stack = old_defer_stack
 
         self.symbol_table = old_symtab
         self.var_types = old_var_types

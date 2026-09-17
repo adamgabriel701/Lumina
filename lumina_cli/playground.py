@@ -22,6 +22,16 @@ lib_c_path = ctypes.util.find_library('c')
 if lib_c_path:
     llvm.load_library_permanently(lib_c_path)
 
+# libgc é opcional: se disponível, o playground usa GC.
+_PLAYGROUND_USE_GC = False
+_gc_path = ctypes.util.find_library('gc')
+if _gc_path:
+    try:
+        llvm.load_library_permanently(_gc_path)
+        _PLAYGROUND_USE_GC = True
+    except Exception:
+        _PLAYGROUND_USE_GC = False
+
 
 def _find_playground_html():
     """Procura playground.html no diretório atual e no raiz do projeto."""
@@ -73,7 +83,7 @@ class PlaygroundHandler(http.server.BaseHTTPRequestHandler):
                 analyzer = SemanticAnalyzer("playground.lm", full_code)
                 analyzer.analyze(ast)
 
-                codegen = LLVMCodegen()
+                codegen = LLVMCodegen(use_gc=_PLAYGROUND_USE_GC)
                 llvm_ir = codegen.generate_module(ast)
 
                 mod = llvm.parse_assembly(llvm_ir)

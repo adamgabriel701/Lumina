@@ -367,13 +367,6 @@ class StatementAnalyzer:
         elif isinstance(node, MatchStmt):
             cond_type = self.visit(node.condition)
 
-            # Tipo do binding:
-            #   - `case s if cond`: variant_name is None → binding é
-            #     self-binding. O PARSER sempre empacota como lista
-            #     (`binding = [first_ident]`), então `isinstance(...,list)`
-            #     é True. Tipo = cond_type.
-            #   - `case X(v):`        → payload de enum (i64) → "int"
-            #   - `case X(a, b):`     → múltiplos payloads (i64) → "int"
             for case in node.cases:
                 variant_name, var_name, guard, body = case
                 self.push_scope()
@@ -381,7 +374,7 @@ class StatementAnalyzer:
                 if var_name:
                     names = var_name if isinstance(var_name, list) else [var_name]
                     if variant_name is None:
-                        # Self-binding: herda o tipo do cond
+                        # Self-binding: herda tipo do cond
                         binding_type = cond_type or "int"
                     else:
                         # Payload de variante de enum

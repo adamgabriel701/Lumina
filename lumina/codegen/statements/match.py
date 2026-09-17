@@ -144,12 +144,36 @@ class MatchStmtMixin:
     def _compute_pattern_match(self, kind, cond_val, variant, variant_map, i):
         """Retorna um valor i1: True se o pattern do case casa.
 
-        Casos:
-          - variant is None  → self-binding (sempre casa)
-          - kind == 'int'    → icmp eq contra o literal
-          - kind == 'enum'   → icmp eq do tag contra o índice da variante
-          - kind == 'str'    → strcmp == 0
+        `variant` pode ser:
+          - `None`             → wildcard ou self-binding (sempre casa)
+          - `str` / `StringExpr` → single pattern
+          - `list`             → multi-pattern (`case 1 | 2:`), OR dos testes
+
+        Para list, avalia cada alternativa e combina com `or`.
         """
+        if isinstance(variant, list):
+            if len(variant) == 0:
+                return ir.Constant(ir.IntType(1), 0)
+            # Avalia cada alternativa; OR incremental
+            result = self._compute_pattern_match_single(
+                kind, cond_val, variant[0], variant_map, f"{i}_0"
+            )
+            for j, v in enumerate(variant[1:], start=1):
+                r = self._compute_pattern_match_single(
+                    kind, cond_val, v, variant_map, f"{i}_{j}"
+                )
+                result = self.builder.or_(
+                    result, r, name=f"match_or_{i}_{j}"
+                )
+            return result
+
+        return self._compute_pattern_match_single(
+            kind, cond_val, variant, variant_map, str(i)
+        )
+
+    def _compute_pattern_match_single(self, kind, cond_val, variant,
+                                       variant_map, suffix):
+        """Um único pattern (não-lista)."""
         if variant is None:
             return ir.Constant(ir.IntType(1), 1)
 
@@ -158,16 +182,15 @@ class MatchStmtMixin:
                 try:
                     case_val = ir.Constant(self.i64_ty, int(variant))
                 except (ValueError, TypeError):
-                    # Não é número — não casa nada
                     return ir.Constant(ir.IntType(1), 0)
             else:
                 case_val = self.visit(variant)
                 if case_val.type != self.i64_ty:
                     case_val = self._coerce_arg(
-                        case_val, self.i64_ty, suffix=f"_match{i}"
+                        case_val, self.i64_ty, suffix=f"_match{suffix}"
                     )
             return self.builder.icmp_signed(
-                "==", cond_val, case_val, name=f"match_eq_{i}"
+                "==", cond_val, case_val, name=f"match_eq_{suffix}"
             )
 
         if kind == "enum":
@@ -176,13 +199,13 @@ class MatchStmtMixin:
             tag_ptr = self.builder.gep(
                 cond_val,
                 [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 0)],
-                name=f"match_tag_ptr_{i}",
+                name=f"match_tag_ptr_{suffix}",
             )
-            tag_val = self.builder.load(tag_ptr, name=f"match_tag_{i}")
+            tag_val = self.builder.load(tag_ptr, name=f"match_tag_{suffix}")
             return self.builder.icmp_signed(
                 "==", tag_val,
                 ir.Constant(self.i32_ty, variant_map[variant]),
-                name=f"match_tag_eq_{i}",
+                name=f"match_tag_eq_{suffix}",
             )
 
         if kind == "str":
@@ -191,28 +214,25 @@ class MatchStmtMixin:
             else:
                 case_str = self.visit(variant)
             cmp_result = self.builder.call(
-                self.strcmp, [cond_val, case_str], name=f"match_strcmp_{i}"
+                self.strcmp, [cond_val, case_str],
+                name=f"match_strcmp_{suffix}",
             )
             return self.builder.icmp_signed(
                 "==", cmp_result, ir.Constant(ir.IntType(32), 0),
-                name=f"match_str_eq_{i}",
+                name=f"match_str_eq_{suffix}",
             )
 
-        # unknown
         return ir.Constant(ir.IntType(1), 0)
 
     # ==================================================================
     # Bindings (kind-specific)
     # ==================================================================
     def _emit_bindings(self, kind, cond_val, variant, binding):
-        """Popula `symbol_table` com os bindings do case.
-
-        - `kind == 'enum'` e `variant != None`: payload da variante.
-          Um slot i64 por binding (índices 1, 2, ... no struct).
-        - `variant is None`: self-binding. O binding recebe o próprio
-          `cond_val` (int → i64; str → i8*).
-        """
         if not binding:
+            return
+
+        # Multi-pattern com binding é rejeitado no parser; salvaguarda
+        if isinstance(variant, list):
             return
 
         names = binding if isinstance(binding, list) else [binding]
@@ -244,22 +264,10 @@ class MatchStmtMixin:
         return self._classify_match_kind(cond_val) == "enum"
 
     def _coerce_self_binding(self, variant, binding, cond_val):
-        """Converte `case foo:` (variant=str, binding=None, sem guard)
-        em self-binding quando `foo` NÃO é número nem variante de enum.
-
-        Esta é uma heurística do codegen porque o parser não distingue
-        `case <var>` (comparar por valor) de `case <nome> if <guard>`
-        (self-binding) quando o guard está ausente.
-
-        LIMITAÇÃO CONHECIDA: `let x = 42; match y: case x: ...` faz
-        self-binding em vez de comparar `y == x`. Veja Notas no README.
-
-        `variant` pode ser:
-          - `str`          → nome de variante ou self-binding
-          - `StringExpr`   → literal string (`case "build":`)
-          - `NumberExpr`   → literal numérico (não ocorre: parser usa str)
-          - outro nó AST   → expressão
-        """
+        # Multi-pattern: não tenta converter (variantes são literais)
+        if isinstance(variant, list):
+            return variant, binding
+        
         if not isinstance(variant, str) or not variant:
             return variant, binding
 

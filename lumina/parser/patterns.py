@@ -11,27 +11,94 @@ class PatternParser(ExpressionParser):
 
     def _parse_case_pattern(self):
         """Lê o padrão de um `case`:
-            `X`, `X(v)`, `X(a, b)`, `n if cond`, `"literal"`, `1`
 
-        Retorna `(variant, bindings, guard)`:
-          - variant: str (nome) ou None (self-binding)
+            `X`, `X(v)`, `X(a, b)`, `1 | 2 | 3`, `_`, `n if cond`,
+            `"literal"`, `1`, `"a" | "b"`
+
+        Retorna `(variants, bindings, guard)`:
+          - variants: `None` (wildcard/self-binding), `str`/`StringExpr`
+            (single), ou `list` (multi-pattern via `|`)
           - bindings: None, [name] ou [name1, name2, ...]
           - guard: Expr ou None
-        """
-        variant = None
-        bindings = None
-        first_ident = None
 
+        Multi-pattern com bindings é rejeitado: em `case A(x) | B(x):`
+        os bindings seriam ambíguos (x tem sentido diferente em cada
+        variante). Use cases separados nesse caso.
+        """
+        # Primeiro padrão
+        variants = [self._parse_single_pattern()]
+
+        # Alternativas via `|`
+        while self.check(TokenType.PIPE):
+            # Não consumir `|>` (pipe operator) como separador
+            next_tok = self.peek(1)
+            if next_tok and next_tok.type == TokenType.GT:
+                break
+            self.consume()  # PIPE
+            variants.append(self._parse_single_pattern())
+
+        # Se algum padrão tem binding, tratamos como single (não-multi)
+        # — caso contrário, `case X(a, b):` seria interpretado como
+        # multi-pattern com 1 elemento.
+        bindings = None
+        for i, v in enumerate(variants):
+            if isinstance(v, tuple):
+                variant_val, variant_binding = v
+                variants[i] = variant_val
+                if variant_binding is not None:
+                    if bindings is not None or len(variants) > 1:
+                        # Multi-pattern com bindings
+                        t = self.current_token()
+                        raise LuminaError(
+                            "Multi-pattern com binding não é suportado "
+                            "(ex: `case A(x) | B(x):`). Use cases separados.",
+                            self.filename, t.line, t.col, self.source_code,
+                        )
+                    bindings = variant_binding
+
+        # Heurística de self-binding: `case n if cond:` → n vira binding
+        # (só quando há 1 variante e ela é um identificador não-numérico)
+        if (len(variants) == 1
+                and isinstance(variants[0], str)
+                and variants[0] not in ("_",)):
+            try:
+                int(variants[0])
+            except (ValueError, TypeError):
+                if self.check(TokenType.IF) and bindings is None:
+                    bindings = [variants[0]]
+                    variants = [None]
+
+        # Wildcard: `case _:` vira variant=None, binding=None
+        if len(variants) == 1 and variants[0] == "_":
+            variants = [None]
+
+        # Guard
+        guard = None
+        if self.check(TokenType.IF):
+            self.consume()
+            guard = self.parse_expression()
+
+        # Unwrap single; mantém lista em multi
+        variant = variants[0] if len(variants) == 1 else variants
+        return variant, bindings, guard
+
+    def _parse_single_pattern(self):
+        """Parse um único padrão (sem considerar `|`).
+
+        Retorna `(variant, binding)`:
+          - variant: str (nome ou número), StringExpr, ou None (wildcard)
+          - binding: None, [names], ou lista de nomes
+        """
         if self.check(TokenType.NUMBER):
-            variant = self.consume().value
-        elif self.check(TokenType.STRING):
-            # Envolve em StringExpr para que o codegen saiba que é
-            # um literal (comparação por igualdade) e não um
-            # self-binding (`case s if ...`).
-            variant = StringExpr(self.consume().value)
-        elif self.check(TokenType.IDENT):
-            first_ident = self.expect(TokenType.IDENT).value
-            variant = first_ident
+            return self.consume().value, None
+
+        if self.check(TokenType.STRING):
+            return StringExpr(self.consume().value), None
+
+        if self.check(TokenType.IDENT):
+            name = self.expect(TokenType.IDENT).value
+            if name == "_":
+                return None, None
             if self.check(TokenType.LPAREN):
                 self.consume()
                 bindings = []
@@ -40,24 +107,16 @@ class PatternParser(ExpressionParser):
                     if not self.match(TokenType.COMMA):
                         break
                 self.expect(TokenType.RPAREN)
-        else:
-            t = self.current_token()
-            raise LuminaError(
-                f"Esperado NUMBER, STRING ou IDENT após 'case', mas encontrei {t.type.name} ('{t.value}')",
-                filename=self.filename, line=t.line, col=t.col, source_code=self.source_code,
-            )
+                return name, bindings
+            return name, None
 
-        # Self-binding: `case n if n > 10:` → n é binding (não variante)
-        if first_ident is not None and self.check(TokenType.IF) and bindings is None:
-            bindings = [first_ident]
-            variant = None
-
-        guard = None
-        if self.check(TokenType.IF):
-            self.consume()
-            guard = self.parse_expression()
-
-        return variant, bindings, guard
+        t = self.current_token()
+        raise LuminaError(
+            f"Esperado NUMBER, STRING ou IDENT após 'case', mas encontrei "
+            f"{t.type.name} ('{t.value}')",
+            filename=self.filename, line=t.line, col=t.col,
+            source_code=self.source_code,
+        )
 
     def parse_match_expr(self):
         self.consume(TokenType.MATCH)

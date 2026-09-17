@@ -413,16 +413,29 @@ def _format_node_impl(node, indent_level=0):
     elif isinstance(node, MatchStmt):
         cond = format_node(node.condition, 0)
         s = f"{indent}match {cond}:\n"
+
+        def _fmt_variant(v):
+            if v is None:
+                return "_"
+            if isinstance(v, str):
+                return v
+            return format_node(v, 0)
+
         for case in node.cases:
-            # Compatível com 3-tuple (legado) e 4-tuple (variant, binding, guard, body)
             if len(case) == 4:
                 variant_name, var_name, guard, body = case
             else:
                 variant_name, var_name, body = case
                 guard = None
+
+            if isinstance(variant_name, list):
+                variant_str = " | ".join(_fmt_variant(v) for v in variant_name)
+            else:
+                variant_str = _fmt_variant(variant_name)
+
             bind = f"({var_name})" if var_name else ""
             guard_str = f" if {format_node(guard, 0)}" if guard else ""
-            s += f"{indent}    case {variant_name}{bind}{guard_str}:\n"
+            s += f"{indent}    case {variant_str}{bind}{guard_str}:\n"
             for stmt in body:
                 s += format_node(stmt, indent_level + 2)
         if node.default:

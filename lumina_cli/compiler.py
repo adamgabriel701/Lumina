@@ -12,6 +12,7 @@ from lumina.ast import (
     TraitDecl, ImplBlock, ExternDecl, DestructureStmt, AddressOfExpr, DerefExpr,
     UnaryExpr, CastExpr, StructLiteralExpr, MatchExpr, LambdaExpr,
     DeferStmt, AssertStmt, BenchStmt, BreakStmt, ContinueStmt, NoneExpr,
+    NilExpr, 
 )
 
 from lumina.ast.expressions import ArrayExpr, BoolExpr, PropagateExpr
@@ -469,6 +470,11 @@ def _format_node_impl(node, indent_level=0):
         if indent_level > 0:
             return f"{indent}none\n"
         return "none"
+
+    elif isinstance(node, NilExpr):
+        if indent_level > 0:
+            return f"{indent}nil\n"
+        return "nil"
 
     elif isinstance(node, NumberExpr):
         if indent_level > 0:

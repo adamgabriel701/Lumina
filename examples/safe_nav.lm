@@ -2,28 +2,22 @@ struct Usuario:
     id: int
 
 fn main() -> int:
-    # Cria um usuário válido
+    # Usuário válido
     mut u: Usuario
     u.id = 42
-
-    # Acesso normal (se `u` fosse nullptr, isso crasharia)
     let id1 = u.id
     print("ID normal:", id1)
 
-    # Acesso seguro (?.) — o codegen faz null check e retorna 0
-    # se o ponteiro for null. Aqui `u` é válido, então retorna 42.
     let id2 = u?.id
     print("ID seguro (u?.id):", id2)
 
-    # NOTA (limitação atual): construir um `Usuario` que é null pointer
-    # REAL ainda não é possível em Lumina.
-    #
-    #   - `let u_nulo: Usuario = none` constrói Option::None (struct
-    #     alocada), não null pointer.
-    #   - `let u_nulo: ptr = none` compila, mas `?.` não funciona em
-    #     `ptr` (só em structs).
-    #
-    # O null check do codegen está pronto — falta uma sintaxe para
-    # criar structs null. Veja README > Notas e Limitações.
+    # Usuário NULL (nil) — null pointer real
+    let u_nulo: Usuario = nil
+
+    if u_nulo == nil:
+        print("u_nulo é nil")
+
+    let id3 = u_nulo?.id
+    print("ID seguro (nulo?.id):", id3)
 
     return 0

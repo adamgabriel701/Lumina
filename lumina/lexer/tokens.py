@@ -44,6 +44,7 @@ class TokenType(Enum):
     TRUE = auto()
     FALSE = auto()
     NONE = auto()
+    NIL = auto()
     NOT = auto()
 
     # Operadores Aritméticos e Lógicos
@@ -159,6 +160,7 @@ KEYWORDS: Dict[str, TokenType] = {
     "true": TokenType.TRUE,
     "false": TokenType.FALSE,
     "none": TokenType.NONE,
+    "nil": TokenType.NIL,
     "and": TokenType.AND,
     "or": TokenType.OR,
     "not": TokenType.NOT,

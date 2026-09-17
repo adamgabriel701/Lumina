@@ -21,7 +21,7 @@ from ..ast import (
     BenchStmt, CallExpr, MemberExpr, DerefExpr, SliceExpr, IndexExpr,
     VariableExpr, StringExpr, NumberExpr, BoolExpr, BinaryExpr,
     StructLiteralExpr, ArrayExpr, AddressOfExpr, PropagateExpr, LambdaExpr,
-    NoneExpr, ComptimeExpr, ErrorNode,
+    NoneExpr, ComptimeExpr, ErrorNode, NilExpr
 )
 from ..errors import LuminaError
 from .types import is_assignable
@@ -135,6 +135,8 @@ class StatementAnalyzer:
                     node.var_type = self._infer_binary_type(node.value)
                 elif isinstance(node.value, NoneExpr):
                     node.var_type = "Option"
+                elif isinstance(node.value, NilExpr):
+                    node.var_type = "ptr"
                 elif isinstance(node.value, ComptimeExpr):
                     folded = self._constant_fold(node.value.expr)
                     if folded is not None:

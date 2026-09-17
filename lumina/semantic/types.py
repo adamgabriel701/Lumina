@@ -71,11 +71,18 @@ def is_assignable(target: str, value: str) -> bool:
     if target == "array" and value == "ptr":
         return True
 
-    # null é compatível com ponteiros, str, fn, structs e Option
+    # `none` (Option::None) é compatível com Option, ptr, fn, str e structs
     if value in ("none", "None", "null"):
         return (
             target in ("ptr", "fn", "str", "Option")
             or target.startswith("Option")
+            or _base(target) not in PRIMITIVES
+        )
+
+    # `nil` (null pointer C-style) NÃO é Option; só ptr/str/fn/struct
+    if value == "nil":
+        return (
+            target in ("ptr", "fn", "str")
             or _base(target) not in PRIMITIVES
         )
 

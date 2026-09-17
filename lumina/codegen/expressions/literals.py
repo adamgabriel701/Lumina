@@ -1,7 +1,7 @@
 from llvmlite import ir
 from ...ast import (
     NumberExpr, BoolExpr, StringExpr, InterpolatedStringExpr, ComptimeExpr,
-    NoneExpr,
+    NoneExpr, NilExpr, 
 )
 
 
@@ -27,6 +27,14 @@ class LiteralsMixin:
         if "Option" in self.struct_types:
             return self._construct_enum("Option", 1, [])
         return ir.Constant(self.i64_ty, 0)
+
+    def visit_NilExpr(self, node):
+        """`nil` produz um null pointer (i8* null).
+
+        O VarDecl/AssignStmt/coerção faz o bitcast para o tipo
+        do alvo (ex: Usuario*). Se ficar i8*, print mostra "(null)".
+        """
+        return ir.Constant(self.voidptr_ty, None)
 
     def visit_InterpolatedStringExpr(self, node):
         return self.codegen_fstring(node.parts)

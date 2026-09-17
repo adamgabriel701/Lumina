@@ -258,15 +258,17 @@ class OperatorsMixin:
 
         # Comparações
         if node.op in ('==', '!=', '<', '>', '<=', '>='):
-            # NOVO: normaliza antes de comparar
             if left.type != right.type:
                 left, right = self._normalize_ints(left, right)
             if left.type != right.type:
-                # Última tentativa: ptrtoint se um é ponteiro e o outro é int
                 if isinstance(left.type, ir.PointerType) and right.type == self.i64_ty:
                     left = self.builder.ptrtoint(left, self.i64_ty, name="cmp_ptrtoint_l")
                 elif left.type == self.i64_ty and isinstance(right.type, ir.PointerType):
                     right = self.builder.ptrtoint(right, self.i64_ty, name="cmp_ptrtoint_r")
+                elif isinstance(left.type, ir.PointerType) and isinstance(right.type, ir.PointerType):
+                    # ptr de tipos diferentes (ex: Usuario* vs i8* de `nil`)
+                    # → bitcast de um para o tipo do outro
+                    right = self.builder.bitcast(right, left.type, name="cmp_ptr_bitcast")
 
             # NOVO: comparar strings (i8*) por conteúdo via strcmp,
             # não por ponteiro.

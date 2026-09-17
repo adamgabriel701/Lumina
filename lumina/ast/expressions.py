@@ -213,6 +213,19 @@ class NoneExpr(Expr):
 
 
 @dataclass
+class NilExpr(Expr):
+    """Literal `nil` — null pointer (C-style).
+
+    Diferente de `NoneExpr`:
+      - `none` constrói Option::None (struct alocada)
+      - `nil`  produz null pointer (i8* null)
+
+    Compatível com `ptr`, `str`, `fn` e tipos struct via
+    is_assignable. `u?.campo` faz null check.
+    """
+    pass
+
+@dataclass
 class ComptimeExpr(Expr):
     expr: Expr
     folded: Optional[Expr] = None   # preenchido pelo semantic

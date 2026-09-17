@@ -2,7 +2,7 @@ from ..ast import (
     NumberExpr, BoolExpr, StringExpr, VariableExpr, BinaryExpr, CallExpr,
     ArrayExpr, IndexExpr, SliceExpr, MemberExpr, AddressOfExpr, DerefExpr,
     UnaryExpr, PropagateExpr, ComptimeExpr, NoneExpr, StructLiteralExpr,
-    MatchExpr, CastExpr, LambdaExpr, StructLiteralField,
+    MatchExpr, CastExpr, LambdaExpr, StructLiteralField, NilExpr,
 )
 from ..ast.visitor import NodeVisitor
 from ..errors import LuminaError
@@ -53,6 +53,11 @@ class ExpressionAnalyzer(NodeVisitor):
         # NOVO (A): `none` tem tipo Option (sem args). O tipo concreto
         # (Option<int>, ...) é inferido pelo contexto via is_assignable.
         return "Option"
+
+    def visit_NilExpr(self, node):
+        # `nil` é null pointer — tipo "nil" que is_assignable
+        # aceita para ptr/str/fn/struct.
+        return "nil"
 
     def visit_VariableExpr(self, node):
         info = self.get_var_info(node.name)

@@ -115,13 +115,29 @@ def _load_link_config(entry_file=None):
     }
 
 
-def _compile_extra_objects(extra_objects):
+def _compile_extra_objects(extra_objects, extra_flags=None):
     """Compila cada extra_object (.c/.cpp/.cc) para .o e retorna a lista.
+
+    `extra_flags` são repassadas ao clang/clang++ (ex: -I, -D, -std,
+    -O2). Flags específicas do Lumina (--wasm, --no-gc, --debug,
+    --release, --target=X) são filtradas ou traduzidas antes.
 
     Retorna (obj_paths, has_cpp) onde has_cpp indica se algum veio de C++.
     """
     obj_paths = []
     has_cpp = False
+
+    # Filtra/traduz flags antes de passar ao clang
+    filtered_flags = []
+    for f in (extra_flags or []):
+        if f in ("--wasm", "--no-gc", "--debug", "--release"):
+            continue
+        if f.startswith("--target="):
+            # clang usa `-target <triple>` (hífen simples)
+            filtered_flags.append("-target")
+            filtered_flags.append(f.split("=", 1)[1])
+        else:
+            filtered_flags.append(f)
 
     for src in extra_objects:
         if not os.path.exists(src):
@@ -132,11 +148,10 @@ def _compile_extra_objects(extra_objects):
         compiler = "clang++" if is_cpp else "clang"
         obj_out = os.path.splitext(src)[0] + ".o"
 
+        cmd = [compiler, "-O2", "-c", src, "-o", obj_out] + filtered_flags
+
         try:
-            subprocess.run(
-                [compiler, "-O2", "-c", src, "-o", obj_out],
-                check=True, capture_output=True,
-            )
+            subprocess.run(cmd, check=True, capture_output=True)
             obj_paths.append(obj_out)
             if is_cpp:
                 has_cpp = True
@@ -460,7 +475,7 @@ def cmd_build(entry_file=None, extra_flags=[]):
     linker_extra_flags = [f for f in extra_flags if f not in cli_flags]
     linker_extra_flags.extend(link_extra_flags)
 
-    extra_obj_paths, has_cpp = _compile_extra_objects(extra_objs_src)
+    extra_obj_paths, has_cpp = _compile_extra_objects(extra_objs_src, linker_extra_flags)
 
     ir_file = f"{project_name}.ll"
     with open(ir_file, "w") as f:
@@ -677,7 +692,7 @@ def cmd_test(entry_file=None):
     libs = link_cfg.get("libs", [])
     extra_objs_src = link_cfg.get("extra_objects", [])
     link_extra_flags = link_cfg.get("extra_flags", [])
-    extra_obj_paths, has_cpp = _compile_extra_objects(extra_objs_src)
+    extra_obj_paths, has_cpp = _compile_extra_objects(extra_objs_src, link_extra_flags)
 
     cmd_args = ["clang", "-O0", "-fprofile-instr-generate", "-fcoverage-mapping",
                 ir_file, "-o", binary_name, "-lc", "-lm", "-lpthread", "-lgc"]

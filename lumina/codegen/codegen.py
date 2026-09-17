@@ -11,7 +11,15 @@ from ..ast import Function as AstFunction, Param, TraitDecl
 
 class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCodegen):
     def __init__(self, target_triple=None, use_gc=True):
-        self.module = ir.Module(name="lumina_module")
+        # Contexto LLVM próprio por instância. Sem isso, `ir.Module()`
+        # usa o `global_context` do llvmlite, e tipos identificados
+        # (struct/enum) vazam entre instâncias — recompilar a mesma
+        # struct dispara "P is already defined". Isso afetava o REPL
+        # (que recompila tudo a cada célula). Funções não sofrem
+        # porque `ir.Function(self.module, ...)` é criada no módulo,
+        # não no context.
+        self.context = ir.Context()
+        self.module = ir.Module(name="lumina_module", context=self.context)
 
         try:
             from llvmlite.binding import get_default_triple

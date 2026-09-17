@@ -9,11 +9,9 @@ Notas de decisão:
   * `LambdaExpr` → var_type = "fn"
   * `NoneExpr` → var_type = "Option"
   * `ComptimeExpr` → var_type inferido pelo valor dobrado
-  * `SliceExpr` → var_type = "ptr"
+  * `SliceExpr` → var_type inferido pela fonte (str → str, array → ptr)
+  * `TupleExpr` → var_type = "ptr"
   * Funções genéricas: se o return_type é um type_param (T), infere pelos args
-
-Bug corrigido: corpos de IfStmt/WhileStmt/ForStmt/MatchStmt usam
-`analyze_stmt` (não `visit`), que faz a análise semântica real.
 """
 from ..ast import (
     VarDecl, DestructureStmt, AssignStmt, ReturnStmt, IfStmt, WhileStmt,
@@ -21,10 +19,29 @@ from ..ast import (
     BenchStmt, CallExpr, MemberExpr, DerefExpr, SliceExpr, IndexExpr,
     VariableExpr, StringExpr, NumberExpr, BoolExpr, BinaryExpr,
     StructLiteralExpr, ArrayExpr, AddressOfExpr, PropagateExpr, LambdaExpr,
-    NoneExpr, ComptimeExpr, ErrorNode, NilExpr
+    NoneExpr, ComptimeExpr, ErrorNode, NilExpr, TupleExpr,
 )
 from ..errors import LuminaError
 from .types import is_assignable
+
+
+# Builtins com tipo de retorno conhecido.
+# Usado para inferir o tipo de `let x = <builtin>(...)` sem a tabela
+# completa do codegen.
+BUILTIN_RET = {
+    "alloc": "ptr",
+    "alloc_bytes": "ptr",
+    "argv": "str",
+    "atoi": "int",
+    "len": "int",
+    "chr": "str",
+    "str": "str",
+    "int": "int",
+    "float": "float",
+    "input": "str",
+    "read_file": "str",
+    "http_response": "str",
+}
 
 
 class StatementAnalyzer:
@@ -79,7 +96,6 @@ class StatementAnalyzer:
           - Se algum lado é struct → o tipo da struct (sobrecarga)
           - Caso contrário → "int"
         """
-        # Comparações e lógicos → bool
         if node.op in ('==', '!=', '<', '>', '<=', '>='):
             return "bool"
         if node.op in ('and', 'or'):
@@ -88,17 +104,14 @@ class StatementAnalyzer:
         lt = self.visit(node.left)
         rt = self.visit(node.right)
 
-        # Concatenação de string
         if node.op == '+' and (lt == "str" or rt == "str"):
             return "str"
 
-        # Structs: assume que o overload retorna a mesma struct
         if lt and lt.split('<')[0] in self.structs:
             return lt
         if rt and rt.split('<')[0] in self.structs:
             return rt
 
-        # Promoção numérica
         if lt == "float" or rt == "float":
             return "float"
 
@@ -121,12 +134,6 @@ class StatementAnalyzer:
                     )
 
             if node.var_type is None and node.value is not None:
-                # 1) MemberExpr: infere pelo tipo do campo
-                # 2) BinaryExpr: infere pelo operador
-                # 3) NoneExpr: Option
-                # 4) ComptimeExpr: infere pelo valor dobrado
-                # 5) Os literais de sempre
-                # 6) CallExpr: return_type / genérico / enum
                 if isinstance(node.value, MemberExpr):
                     field_type = self.visit(node.value)
                     if field_type:
@@ -159,6 +166,8 @@ class StatementAnalyzer:
                     node.var_type = "fn"
                 elif isinstance(node.value, ArrayExpr):
                     node.var_type = "ptr"
+                elif isinstance(node.value, TupleExpr):
+                    node.var_type = "ptr"
                 elif isinstance(node.value, AddressOfExpr):
                     node.var_type = "ptr"
                 elif isinstance(node.value, DerefExpr):
@@ -166,12 +175,13 @@ class StatementAnalyzer:
                 elif isinstance(node.value, PropagateExpr):
                     node.var_type = "int"
                 elif isinstance(node.value, SliceExpr):
-                    node.var_type = "ptr"
+                    # Preserva o tipo da fonte: slice de str → str,
+                    # slice de array → ptr. Sem isso, `s[a..b]` vira "ptr"
+                    # (i64*) e `s[a..b] == outra_str` compara endereços.
+                    node.var_type = self.visit(node.value)
                 elif isinstance(node.value, IndexExpr):
                     node.var_type = "int"
                 elif isinstance(node.value, CallExpr):
-                    # NOVO: extrai nome da função corretamente para MemberExpr
-                    # (ex: `p.clone()` → func_name = 'clone').
                     func_name = None
                     _callee = getattr(node.value, 'callee', None)
                     if isinstance(_callee, MemberExpr):
@@ -212,7 +222,7 @@ class StatementAnalyzer:
                             if enum_name is not None:
                                 node.var_type = enum_name
                             else:
-                                node.var_type = "int"
+                                node.var_type = BUILTIN_RET.get(func_name, "int")
 
             if isinstance(node.value, CallExpr) and getattr(node.value.callee, 'name', None) == "alloc":
                 self.heap_allocs.add(node.name)
@@ -376,10 +386,8 @@ class StatementAnalyzer:
                 if var_name:
                     names = var_name if isinstance(var_name, list) else [var_name]
                     if variant_name is None:
-                        # Self-binding: herda tipo do cond
                         binding_type = cond_type or "int"
                     else:
-                        # Payload de variante de enum
                         binding_type = "int"
                     for name in names:
                         self.declare_var(name, binding_type, False)

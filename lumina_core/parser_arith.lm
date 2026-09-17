@@ -1,5 +1,6 @@
-# lumina_core/parser.lm
-# Parser de Expressões que constrói uma AST usando Tipos Algébricos (Enums) nativos!
+# lumina_core/parser_arith.lm
+# Calculadora recursiva (demo de ADTs). NÃO é o parser Lumina.
+# Para o parser self-hosted real, ver Sprint 12.
 
 enum ASTNode:
     NumExpr(int)

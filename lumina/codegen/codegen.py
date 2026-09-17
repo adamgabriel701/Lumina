@@ -55,6 +55,8 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         self.lambda_counter = 0
         self.heap_allocs = set()
 
+        self.array_lengths = {}   # nome → N (para `for x in arr`)
+
         self.builtin_functions = BUILTIN_FUNCTIONS
 
         # Sprint 2e/8b/8d: controle de loop (continue_bb, break_bb, scope_start)
@@ -77,6 +79,8 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
 
         self.setup_libc_functions()
         self.alias_methods = set()   # nomes curtos de trait methods
+
+        self.freed_vars = set()   # populado pelo compile_lumina
 
     # ==================================================================
     # Setup de funções libc/GC

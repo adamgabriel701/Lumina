@@ -59,18 +59,17 @@ def _norm(ir):
 # ============================================================
 def test_default_build_uses_gc_malloc():
     src = (
+        'fn get_size() -> int:\n'
+        '    return 10\n'
+        '\n'
         'fn main() -> int:\n'
-        '    let buf = alloc(10)\n'
+        '    let n = get_size()\n'
+        '    let buf = alloc(n)\n'
         '    return 0\n'
     )
     ir = _build(src)
-    assert "GC_malloc" in ir, (
-        f"IR não usa GC_malloc — Boehm GC inativa.\n{ir}"
-    )
-    # E NÃO deve ter declaração nua de malloc (a não ser no wasm/nogc)
-    assert "declare i8* @malloc" not in _norm(ir), (
-        f"IR declara malloc() em vez de GC_malloc().\n{ir}"
-    )
+    assert "GC_malloc" in ir
+    assert "declare i8* @malloc" not in _norm(ir)
 
 
 def test_default_build_calls_gc_init():
@@ -91,44 +90,40 @@ def test_default_build_calls_gc_init():
 
 def test_no_gc_flag_uses_plain_malloc():
     src = (
+        'fn get_size() -> int:\n'
+        '    return 10\n'
+        '\n'
         'fn main() -> int:\n'
-        '    let buf = alloc(10)\n'
+        '    let n = get_size()\n'
+        '    let buf = alloc(n)\n'
         '    return 0\n'
     )
     ir = _build(src, extra_flags=["--no-gc"])
     norm = _norm(ir)
-    assert "GC_malloc" not in norm, (
-        f"--no-gc ainda emite GC_malloc.\n{ir}"
-    )
-    assert "GC_init" not in norm, (
-        f"--no-gc ainda emite GC_init.\n{ir}"
-    )
-    assert "declare i8* @malloc" in norm, (
-        f"--no-gc não emite malloc().\n{ir}"
-    )
+    assert "GC_malloc" not in norm
+    assert "GC_init" not in norm
+    assert "declare i8* @malloc" in norm
 
 
 def test_gc_init_comes_before_first_allocation():
     src = (
+        'fn get_size() -> int:\n'
+        '    return 10\n'
+        '\n'
         'fn main() -> int:\n'
-        '    let buf = alloc(10)\n'
+        '    let n = get_size()\n'
+        '    let buf = alloc(n)\n'
         '    buf[0] = 42\n'
         '    print(buf[0])\n'
         '    return 0\n'
     )
     ir = _build(src)
     norm = _norm(ir)
-
     gc_init_pos = norm.find("call void @GC_init")
-    assert gc_init_pos >= 0, f"GC_init não é chamada:\n{ir}"
-
-    # Procura a PRIMEIRA chamada (não declaração) de GC_malloc
+    assert gc_init_pos >= 0
     m = re.search(r"call i8\* @GC_malloc", norm)
-    assert m is not None, f"GC_malloc não é chamada:\n{ir}"
-
-    assert gc_init_pos < m.start(), (
-        f"GC_init aparece DEPOIS da primeira alocação.\n{ir}"
-    )
+    assert m is not None
+    assert gc_init_pos < m.start()
 
 
 # ============================================================
@@ -192,3 +187,17 @@ def test_gc_handles_many_allocations():
         for p in (path, path[:-3] + ".ll", path[:-3]):
             if os.path.exists(p):
                 os.remove(p)
+
+def test_default_build_uses_gc_malloc():
+    src = (
+        'fn get_size() -> int:\n'
+        '    return 10\n'
+        '\n'
+        'fn main() -> int:\n'
+        '    let n = get_size()\n'
+        '    let buf = alloc(n)\n'
+        '    return 0\n'
+    )
+    ir = _build(src)
+    assert "GC_malloc" in ir
+    assert "declare i8* @malloc" not in _norm(ir)

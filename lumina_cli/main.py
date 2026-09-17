@@ -14,7 +14,7 @@ from .commands import (
     set_error_format,
 )
 from .playground import run_server as run_playground
-
+from .lint import lint_file
 
 def usage():
     header("🌟 Lumina CLI")
@@ -35,6 +35,7 @@ def usage():
         ("fmt <arquivo.lm> [--check]",    "Formata (ou verifica) o código Lumina"),
         ("repl",                          "Inicia o REPL interativo"),
         ("playground [porta]",            "Inicia o playground web (padrão: 8080)"),
+        ("lint <arquivo> [flags]", "Análise estática (unused, shadow, unreachable)"),
     ]
     for cmd, desc in commands:
         print(f"  {paint(cmd, Color.BOLD + Color.BRIGHT_CYAN)}  {paint(desc, Color.MUTED)}")
@@ -160,6 +161,25 @@ def main():
             port = int(args[0])
         run_playground(port=port)
         return 0
+
+    elif command == "lint":
+        fmt = "text"
+        quiet = False
+        files = []
+        for arg in args:
+            if arg.startswith("--format="):
+                fmt = arg.split("=", 1)[1]
+            elif arg == "--quiet":
+                quiet = True
+            else:
+                files.append(arg)
+        if not files:
+            error("Uso: lumina lint <arquivo.lm> [--format=text|json] [--quiet]")
+            return 1
+        total = 0
+        for f in files:
+            total += len(lint_file(f, format=fmt, quiet=quiet))
+        return min(total, 255)   # exit code satura em 255
 
     else:
         error(f"Comando desconhecido: {paint(command, Color.BOLD)}")

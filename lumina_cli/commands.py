@@ -481,6 +481,21 @@ def cmd_build(entry_file=None, extra_flags=[]):
     with open(ir_file, "w") as f:
         f.write(llvm_ir)
 
+    # Otimização extra com `opt` só em release explícito.
+    # Em builds normais (debug de teste, inspeção de IR, testes do pytest)
+    # deixamos o IR como o codegen gerou, para os testes que checam
+    # nomes de blocos não quebrarem.
+    if is_release and not is_wasm:
+        try:
+            opt_result = subprocess.run(
+                ["opt", "-O2", "-S", ir_file, "-o", ir_file],
+                capture_output=True, text=True, timeout=30,
+            )
+            if opt_result.returncode != 0:
+                warn("⚠️  opt -O2 falhou; seguindo com IR não-otimizado.")
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            warn("⚠️  'opt' não encontrado no PATH; pulando otimização extra.")
+
     debug_flag = "-g" if is_debug else ""
 
     if is_wasm:

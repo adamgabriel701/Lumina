@@ -46,7 +46,6 @@ class DeclarationParser(StatementParser):
 
     def parse_struct(self):
         # Atributos já foram lidos em `parse()` e estão em `_pending_attrs`.
-        # (parse() consome `@nome` e `@nome(args)` antes de delegar.)
         attrs = getattr(self, '_pending_attrs', []) or []
 
         self.consume(TokenType.STRUCT)
@@ -59,11 +58,10 @@ class DeclarationParser(StatementParser):
         self.expect(TokenType.INDENT)
         fields = {}
         while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
-            # Consome NEWLINEs e COMMENTs (comentários dentro da struct)
             self._skip_newlines_and_comments()
             if self.check(TokenType.DEDENT) or self.check(TokenType.EOF):
                 break
-            self._take_comments()  # descarta por ora
+            self._take_comments()
             fn = self.expect(TokenType.IDENT).value
             self.expect(TokenType.COLON)
             ft = self.expect(TokenType.IDENT).value
@@ -86,7 +84,6 @@ class DeclarationParser(StatementParser):
         self.expect(TokenType.INDENT)
         variants = []
         while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
-            # Consome NEWLINEs e COMMENTs (comentários dentro do enum)
             self._skip_newlines_and_comments()
             if self.check(TokenType.DEDENT) or self.check(TokenType.EOF):
                 break
@@ -117,7 +114,6 @@ class DeclarationParser(StatementParser):
         self.expect(TokenType.INDENT)
         methods = []
         while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
-            # Consome NEWLINEs e COMMENTs (comentários dentro do trait)
             self._skip_newlines_and_comments()
             if self.check(TokenType.DEDENT) or self.check(TokenType.EOF):
                 break
@@ -173,14 +169,32 @@ class DeclarationParser(StatementParser):
         return TraitDecl(name, methods)
 
     def parse_impl(self):
+        """Parseia `impl <Tipo>:` ou `impl <Trait> for <Tipo>:`.
+
+        Suporta tipos genéricos:
+          - `impl Box<T>:`         → struct_name = "Box"
+          - `impl Vector<T>:`      → struct_name = "Vector"
+          - `impl Greeter for English:`  → trait_name = "Greeter", struct = "English"
+
+        O `<T>` é descartado porque o codegen sempre registra os métodos
+        com o nome base (`Box_get`, `Vector_push`, ...). Chamadas via
+        `b.get()` em `Box<int>` são resolvidas em `codegen_method_call`
+        tentando o nome exato primeiro, depois o base.
+        """
         self.consume(TokenType.IMPL)
-        first_name = self.expect(TokenType.IDENT).value
+        first_type = self.parse_type()
         trait_name = None
-        struct_name = first_name
+        struct_name = first_type
         if self.check(TokenType.FOR):
-            trait_name = first_name
+            trait_name = first_type
             self.consume()
-            struct_name = self.expect(TokenType.IDENT).value
+            struct_name = self.parse_type()
+        # Descarta args genéricos do nome para registro.
+        if "<" in struct_name:
+            struct_name = struct_name.split("<")[0]
+        if trait_name and "<" in trait_name:
+            trait_name = trait_name.split("<")[0]
+
         self.expect(TokenType.COLON)
         self.expect(TokenType.NEWLINE)
         while self.check(TokenType.NEWLINE):
@@ -195,14 +209,9 @@ class DeclarationParser(StatementParser):
             if self.check(TokenType.FN):
                 func = self.parse_function()
 
-                # Guarda o nome original (antes do mangling) para
-                # detectar métodos de operador (__add__, __eq__, ...).
                 original_name = func.name
                 func.name = f"{struct_name}_{original_name}"
 
-                # Operadores recebem os 2 operandos EXPLICITAMENTE
-                # (ex: `fn __add__(a: Vector2, b: Vector2)`).
-                # Métodos normais recebem `self` implicitamente.
                 is_operator = (
                     original_name.startswith('__') and original_name.endswith('__')
                 )
@@ -223,7 +232,6 @@ class DeclarationParser(StatementParser):
         return ImplBlock(struct_name, methods, trait_name)
 
     def parse_function(self):
-        # Atributos já foram lidos em `parse()` e estão em `_pending_attrs`.
         pending = getattr(self, '_pending_attrs', []) or []
         attrs = [name for (name, _args) in pending]
         is_exported = 'export' in attrs

@@ -134,6 +134,7 @@ def compile_lumina(filename, output_file="output.ll", use_cache=True,
     header("3. Geração de Código LLVM IR")
     codegen = LLVMCodegen(target_triple=target_triple, use_gc=not is_no_gc)
     codegen.escapes = analyzer.escapes
+    codegen.freed_vars = getattr(analyzer, 'freed_vars', set())   # ← AQUI
     codegen.is_wasm = is_wasm
     codegen.is_debug = is_debug
     llvm_ir = codegen.generate_module(ast)
@@ -227,17 +228,22 @@ def run_jit(llvm_ir, cli_args):
 # Auto-Formatter (AST printer usado por `lumina fmt`)
 # ============================================================
 def _fmt_params(params):
-    """Aceita tanto Param (dataclass) quanto tuplas (nome, tipo).
-
-    Param -> .name / .type_ann
-    tuple -> (name, type)
-    """
+    """Formata parâmetros. Suporta `default` (Param.default)."""
     out = []
     for p in params:
         if hasattr(p, 'name'):
-            out.append(f"{p.name}: {p.type_ann}")
+            name = p.name
+            type_ann = p.type_ann
+            default = getattr(p, 'default', None)
         else:
-            out.append(f"{p[0]}: {p[1]}")
+            name = p[0]
+            type_ann = p[1]
+            default = None
+
+        s = f"{name}: {type_ann}"
+        if default is not None:
+            s += f" = {format_node(default, 0)}"
+        out.append(s)
     return ", ".join(out)
 
 

@@ -51,11 +51,12 @@ class CallsMixin:
         return ir.Constant(ty, 0)
 
     def codegen_user_call(self, node, func_name):
-        # NOVO (Sprint 9b): macro → expande AST no call site
+        # 0. Macro (@macro) → expande AST no call site
         if func_name in getattr(self, 'macros', {}):
             macro_fn = self.macros[func_name]
             expanded = self._expand_macro_expr(macro_fn, node.args)
             return self.visit(expanded)
+
         # 1. Chamada indireta via variável local (function pointer / lambda)
         if (func_name not in self.functions_table
                 and func_name not in self.builtin_functions
@@ -90,14 +91,12 @@ class CallsMixin:
         # 2. Chamada a função genérica → materializa cópia especializada
         gen_def = self.function_defs.get(func_name)
         if gen_def is not None and getattr(gen_def, 'type_params', None):
-            # NOVO: infere type_map em strings Lumina (cobre Box<T>, Map<K,V>, ...)
             type_map = self._infer_type_map_lumina(gen_def, node)
 
             if type_map:
                 mangled = self.materialize_generic(gen_def, type_map)
                 arg_vals = None
             else:
-                # Fallback: só type params diretos (comportamento antigo)
                 arg_vals = [self.visit(a) for a in node.args]
                 arg_types = [v.type for v in arg_vals]
                 legacy_map = {}
@@ -108,7 +107,6 @@ class CallsMixin:
 
             func, func_type = self.functions_table[mangled]
 
-            # Se ainda não visitamos (branch type_map), faz agora
             if arg_vals is None:
                 arg_vals = [self.visit(a) for a in node.args]
 
@@ -148,13 +146,11 @@ class CallsMixin:
                 elif val.type == self.i32_ty:
                     self.builder.call(self.printf, [self.create_global_string("%d"), val], name="print_call")
                 elif isinstance(val.type, ir.IntType) and val.type.width == 1:
-                    # NOVO: bool → "true" / "false" (via select).
                     true_str = self.create_global_string("true")
                     false_str = self.create_global_string("false")
                     val = self.builder.select(val, true_str, false_str, name="print_bool")
                     self.builder.call(self.printf, [self.create_global_string("%s"), val], name="print_call")
                 elif isinstance(val.type, ir.IntType) and val.type.width < 64:
-                    # i8, i16 → zext para i64 e imprime como %ld
                     val = self.builder.zext(val, self.i64_ty, name="print_zext")
                     self.builder.call(self.printf, [self.create_global_string("%ld"), val], name="print_call")
                 else:
@@ -187,8 +183,66 @@ class CallsMixin:
             ptr = self.visit(node.args[0])
             if not isinstance(ptr.type, ir.PointerType):
                 ptr = self.builder.inttoptr(ptr, self.voidptr_ty, name="free_cast")
+            elif ptr.type != self.voidptr_ty:
+                ptr = self.builder.bitcast(ptr, self.voidptr_ty, name="free_bitcast")
             self.builder.call(self.free, [ptr], name="free_call")
             return ir.Constant(self.i64_ty, 0)
+
+        if func_name == "chr":
+            c = self.visit(node.args[0])
+            if c.type != self.i64_ty:
+                c = self.builder.sext(c, self.i64_ty, name="chr_sext")
+            c_i8 = self.builder.trunc(c, self.i8_ty, name="chr_trunc")
+            buf = self.builder.call(
+                self.malloc,
+                [ir.Constant(self.i64_ty, 2)],
+                name="chr_buf",
+            )
+            buf_i8 = self.builder.bitcast(buf, self.i8_ty.as_pointer(), name="chr_i8_ptr")
+            self.builder.store(c_i8, buf_i8)
+            null_ptr = self.builder.gep(
+                buf_i8, [ir.Constant(self.i64_ty, 1)],
+                name="chr_null_ptr",
+            )
+            self.builder.store(ir.Constant(self.i8_ty, 0), null_ptr)
+            return buf_i8
+
+        if func_name == "atoi":
+            s = self.visit(node.args[0])
+            if not isinstance(s.type, ir.PointerType):
+                s = self.builder.inttoptr(s, self.voidptr_ty, name="atoi_cast")
+            return self.builder.call(self.atoi, [s], name="atoi_call")
+
+        if func_name == "int":
+            v = self.visit(node.args[0])
+            if v.type == self.voidptr_ty:
+                return self.builder.call(self.atoi, [v], name="int_from_str")
+            return v
+
+        if func_name == "float":
+            v = self.visit(node.args[0])
+            if v.type == self.i64_ty:
+                return self.builder.sitofp(v, self.f64_ty, name="float_from_int")
+            return v
+
+        if func_name == "str":
+            v = self.visit(node.args[0])
+            if v.type == self.voidptr_ty:
+                return v
+            if v.type == self.f64_ty:
+                fmt = self.create_global_string("%f")
+            elif v.type == self.i64_ty:
+                fmt = self.create_global_string("%ld")
+            else:
+                return v
+            buf = self.builder.alloca(ir.ArrayType(self.i8_ty, 32), name="str_buf")
+            buf_ptr = self.builder.bitcast(buf, self.voidptr_ty, name="str_buf_ptr")
+            self.builder.call(
+                self.snprintf,
+                [buf_ptr, ir.Constant(self.i64_ty, 32), fmt, v],
+                name="str_snprintf",
+            )
+            return buf_ptr
 
         if func_name == "write_file":
             path_val = self.visit(node.args[0])
@@ -236,22 +290,62 @@ class CallsMixin:
             mode_r = self.create_global_string("r")
             fp = self.builder.call(fopen, [path_val, mode_r], name="rf_fopen")
 
-            self.builder.call(fseek, [fp, ir.Constant(self.i64_ty, 0), ir.Constant(self.i32_ty, 2)], name="rf_seek_end")
+            # Null check: fopen retorna NULL se o arquivo não existe.
+            fp_int = self.builder.ptrtoint(fp, self.i64_ty, name="rf_fp_int")
+            is_null = self.builder.icmp_signed(
+                "==", fp_int, ir.Constant(self.i64_ty, 0),
+                name="rf_is_null",
+            )
+
+            null_bb = self.builder.append_basic_block(name="rf_null")
+            ok_bb = self.builder.append_basic_block(name="rf_ok")
+            end_bb = self.builder.append_basic_block(name="rf_end")
+
+            self.builder.cbranch(is_null, null_bb, ok_bb)
+
+            # Caminho null: retorna string vazia
+            self.builder.position_at_end(null_bb)
+            empty_str = self.create_global_string("")
+            empty_ptr = self.builder.bitcast(empty_str, self.i8_ty.as_pointer(), name="rf_empty")
+            self.builder.branch(end_bb)
+
+            # Caminho normal: fseek → ftell → fseek → fread → fclose
+            self.builder.position_at_end(ok_bb)
+            self.builder.call(
+                fseek,
+                [fp, ir.Constant(self.i64_ty, 0), ir.Constant(self.i32_ty, 2)],
+                name="rf_seek_end",
+            )
             size = self.builder.call(ftell, [fp], name="rf_size")
-            self.builder.call(fseek, [fp, ir.Constant(self.i64_ty, 0), ir.Constant(self.i32_ty, 0)], name="rf_seek_set")
+            self.builder.call(
+                fseek,
+                [fp, ir.Constant(self.i64_ty, 0), ir.Constant(self.i32_ty, 0)],
+                name="rf_seek_set",
+            )
 
             size_plus = self.builder.add(size, ir.Constant(self.i64_ty, 1), name="rf_size_plus")
             buf = self.builder.call(self.malloc, [size_plus], name="rf_buf")
 
-            self.builder.call(fread, [buf, ir.Constant(self.i64_ty, 1), size, fp], name="rf_fread")
+            self.builder.call(
+                fread,
+                [buf, ir.Constant(self.i64_ty, 1), size, fp],
+                name="rf_fread",
+            )
 
             end_ptr = self.builder.gep(buf, [size], name="rf_end_ptr")
             self.builder.store(ir.Constant(self.i8_ty, 0), end_ptr)
 
             self.builder.call(fclose, [fp], name="rf_fclose")
-            return buf
+            self.builder.branch(end_bb)
 
-        # 4. Construtor de enum (genérico: Ok/Err/Some/None + variantes do usuário)
+            # Merge point: phi escolhe empty ou buf
+            self.builder.position_at_end(end_bb)
+            result = self.builder.phi(self.i8_ty.as_pointer(), name="rf_result")
+            result.add_incoming(empty_ptr, null_bb)
+            result.add_incoming(buf, ok_bb)
+            return result
+
+        # 4. Construtor de enum
         enum_name = None
         variant_idx = None
 
@@ -274,27 +368,17 @@ class CallsMixin:
         if enum_name is not None:
             return self._construct_enum(enum_name, variant_idx, node.args)
 
-        # 4.5 Alias de método (ex: `name()` dentro de um trait default
-        # que resolve para `Struct_name(self)`).
-        # Detecta quando:
-        #   - `func_name` não é uma função normal registrada em
-        #     `function_defs` (senão já é tratada no passo 5)
-        #   - mas existe uma entrada em `functions_table` com o mesmo
-        #     nome cuja função tem o `self` como primeiro parâmetro
-        #   - e estamos dentro de outro método (self no symbol_table)
+        # 4.5 Alias de método (trait default)
         if func_name in getattr(self, 'alias_methods', set()):
             entry = self.functions_table[func_name]
             if isinstance(entry, tuple):
                 func, func_type = entry
-                # Se a assinatura tem 1+ args e o `self` está disponível,
-                # injeta `self` como primeiro argumento.
                 self_ptr = self.symbol_table.get('self')
                 if self_ptr is not None and len(func_type.args) >= 1:
                     self_val = self.builder.load(self_ptr, name="self_load")
                     args = [self_val]
                     for arg_node in node.args:
                         args.append(self.visit(arg_node))
-                    # Coage se necessário
                     final_args = []
                     for i, a in enumerate(args):
                         expected = func_type.args[i] if i < len(func_type.args) else None
@@ -322,7 +406,6 @@ class CallsMixin:
                 arg_val = self._coerce_arg(arg_val, expected_ty)
                 args.append(arg_val)
 
-            # NOVO: preenche args faltantes com defaults (ou zero)
             fn_def = self.function_defs.get(func_name)
             if fn_def is not None and len(args) < len(func_type.args):
                 for i in range(len(args), len(func_type.args)):
@@ -333,7 +416,6 @@ class CallsMixin:
                         default_val = self._coerce_arg(default_val, expected_ty, suffix="_def")
                         args.append(default_val)
                     else:
-                        # Sem default: preenche com zero do tipo esperado
                         args.append(self._zero_for_type(expected_ty))
 
             return self.builder.call(func, args, name=func_name + "_call")
@@ -403,9 +485,38 @@ class CallsMixin:
 
         if isinstance(obj_val.type, ir.PointerType) and isinstance(obj_val.type.pointee, ir.IdentifiedStructType):
             struct_name = obj_val.type.pointee.name
-            real_method_name = f"{struct_name}_{method_name}"
-            if real_method_name in self.functions_table:
+
+            # Candidatos: nome exato primeiro ("Box_int__get"), depois o
+            # base ("Box_get").
+            candidates = [f"{struct_name}_{method_name}"]
+            base = struct_name.split("<")[0]
+            if "_" in base:
+                base = base.split("_")[0]
+            if base != struct_name:
+                candidates.append(f"{base}_{method_name}")
+
+            real_method_name = None
+            used_base = False
+            for c in candidates:
+                if c in self.functions_table:
+                    real_method_name = c
+                    used_base = (c == f"{base}_{method_name}")
+                    break
+
+            if real_method_name is not None:
                 func, func_type = self.functions_table[real_method_name]
+
+                # Se caímos no método do base, o `self` do método tem
+                # tipo `Box*`, mas `obj_val` é `Box_int_*`. São tipos
+                # identificados LLVM distintos (mesmo layout, sem
+                # herança), então o call exige bitcast.
+                if used_base and len(func_type.args) >= 1:
+                    expected_self = func_type.args[0]
+                    if obj_val.type != expected_self:
+                        obj_val = self.builder.bitcast(
+                            obj_val, expected_self, name="self_base_cast",
+                        )
+
                 args = [obj_val]
                 for arg_node in node.args[1:]:
                     args.append(self.visit(arg_node))

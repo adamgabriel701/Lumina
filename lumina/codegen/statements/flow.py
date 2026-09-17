@@ -233,13 +233,61 @@ class FlowMixin:
 
     def visit_DestructureStmt(self, node):
         val = self.visit(node.value)
-        if isinstance(val.type, ir.PointerType) and isinstance(val.type.pointee, ir.IdentifiedStructType):
+
+        # ---- Struct (identificada ou literal) ----
+        # Cobre:
+        #   - user struct: `let (a, b) = p` onde p: Ponto
+        #   - tuple literal: `let (a, b, c) = (10, 20, 30)`
+        #     (o `visit_TupleExpr` cria um LiteralStructType)
+        if (isinstance(val.type, ir.PointerType)
+                and isinstance(val.type.pointee,
+                               (ir.IdentifiedStructType, ir.LiteralStructType))):
             for i, name in enumerate(node.names):
-                elem_ptr = self.builder.gep(val, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, i)])
-                field_val = self.builder.load(elem_ptr, name=name)
-                var_ptr = self.builder.alloca(field_val.type, name=name)
-                self.builder.store(field_val, var_ptr)
+                ep = self.builder.gep(
+                    val,
+                    [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, i)],
+                    name=name + "_ptr",
+                )
+                fv = self.builder.load(ep, name=name)
+                var_ptr = self.builder.alloca(fv.type, name=name)
+                self.builder.store(fv, var_ptr)
                 self.symbol_table[name] = var_ptr
+                self.var_types[name] = self._llvm_ty_to_str(fv.type)
+            return
+
+        # ---- ArrayType* (alloca de ArrayType) ----
+        if (isinstance(val.type, ir.PointerType)
+                and isinstance(val.type.pointee, ir.ArrayType)):
+            elem_ty = val.type.pointee.element
+            for i, name in enumerate(node.names):
+                ep = self.builder.gep(
+                    val,
+                    [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, i)],
+                    name=name + "_ptr",
+                )
+                fv = self.builder.load(ep, name=name)
+                var_ptr = self.builder.alloca(elem_ty, name=name)
+                self.builder.store(fv, var_ptr)
+                self.symbol_table[name] = var_ptr
+                self.var_types[name] = self._llvm_ty_to_str(elem_ty)
+            return
+
+        # ---- Raw T* (alloc'd array) ----
+        # Cobre `let arr = alloc(N); let (x, y) = arr`.
+        if isinstance(val.type, ir.PointerType):
+            elem_ty = val.type.pointee
+            for i, name in enumerate(node.names):
+                ep = self.builder.gep(
+                    val, [ir.Constant(self.i64_ty, i)],
+                    name=name + "_ptr",
+                )
+                fv = self.builder.load(ep, name=name)
+                fv = self._normalize_loaded(fv, name_hint=name)
+                var_ptr = self.builder.alloca(fv.type, name=name)
+                self.builder.store(fv, var_ptr)
+                self.symbol_table[name] = var_ptr
+                self.var_types[name] = self._llvm_ty_to_str(fv.type)
+            return
 
     def visit_DeferStmt(self, node):
         if not hasattr(self, 'defer_stack'):

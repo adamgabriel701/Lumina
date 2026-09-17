@@ -39,6 +39,11 @@ def is_assignable(target: str, value: str) -> bool:
     # Type param genérico aceita qualquer tipo concreto.
     if _is_type_param(target):
         return True
+    # NOVO: valor também pode ser type param (dentro de `impl Box<T>`).
+    # Sem isso, `return self.data` (T) em método de struct genérica
+    # falha quando o método declara `-> int`.
+    if _is_type_param(value):
+        return True
 
     # NOVO (A): Option (sem args) ↔ Option<X>
     if target.startswith("Option") and value == "Option":

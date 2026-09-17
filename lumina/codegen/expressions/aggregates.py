@@ -1,7 +1,7 @@
 from llvmlite import ir
 from ...ast import (
     StringExpr, VariableExpr, StructLiteralExpr,
-    StructLiteralField, LambdaExpr,
+    StructLiteralField, LambdaExpr, TupleExpr,
 )
 
 
@@ -142,3 +142,32 @@ class AggregatesMixin:
         self.builder = old_builder
         self.symbol_table = old_symtab
         return self.builder.bitcast(func, self.voidptr_ty, name="lambda_ptr")
+
+    def visit_TupleExpr(self, node):
+        """`(a, b, c)` — constrói um LiteralStructType anônimo.
+
+        Diferente de `ArrayExpr`, cada elemento tem o tipo natural
+        (i64, f64, i8*, ...). Isso permite que `let (n, s) = (42, "hello")`
+        recupere `n` como i64 e `s` como i8* na desestruturação.
+        """
+        elem_tys = []
+        elem_vals = []
+        for el in node.elements:
+            v = self.visit(el)
+            elem_tys.append(v.type)
+            elem_vals.append(v)
+
+        if not elem_tys:
+            # Tuple vazio — devolve null pointer.
+            return ir.Constant(self.voidptr_ty, None)
+
+        struct_ty = ir.LiteralStructType(elem_tys)
+        ptr = self.builder.alloca(struct_ty, name="tuple_lit")
+        for i, v in enumerate(elem_vals):
+            ep = self.builder.gep(
+                ptr,
+                [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, i)],
+                name=f"tuple_el_{i}_ptr",
+            )
+            self.builder.store(v, ep)
+        return ptr

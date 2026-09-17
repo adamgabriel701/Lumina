@@ -130,6 +130,9 @@ class StatementParser(PatternParser):
             self.consume()
             names = []
             while True:
+                # NOVO: aceita trailing comma: `let (a,) = ...`
+                if self.check(TokenType.RPAREN):
+                    break
                 names.append(self.expect(TokenType.IDENT).value)
                 if self.match(TokenType.COMMA):
                     continue

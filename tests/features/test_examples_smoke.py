@@ -45,7 +45,7 @@ def test_smoke_tests_examples(run_cli, repo_root):
 
         result = run_cli("build", file)
         if result.returncode != 0:
-            failures.append((basename, result.stderr))
+            failures.append((basename, result.stdout + result.stderr))
 
     assert not failures, (
         f"{len(failures)} exemplo(s) falharam ao compilar:\n"

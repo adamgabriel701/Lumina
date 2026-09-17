@@ -60,7 +60,6 @@ class ArrayExpr(Expr):
     # No semantic, `let x = [...]` infere var_type = "ptr"
     elements: List[Expr]
 
-
 @dataclass
 class MapPair:
     key: Expr

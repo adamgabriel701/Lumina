@@ -5,7 +5,7 @@ from ..ast import (
     ArrayExpr, IndexExpr, SliceExpr, MemberExpr, AddressOfExpr, DerefExpr,
     UnaryExpr, PropagateExpr, ComptimeExpr, StructLiteralExpr, CastExpr,
     LambdaExpr, StructLiteralField, Param, InterpolatedStringExpr, NoneExpr,
-    NilExpr,
+    NilExpr, TupleExpr,
 )
 from ..errors import LuminaError
 
@@ -270,6 +270,15 @@ class ExpressionParser(ParserBase):
             return self.parse_postfix(node)
         if self.match(TokenType.LPAREN):
             node = self.parse_expression()
+            if self.check(TokenType.COMMA):
+                # Tuple literal: `(a, b, c)` ou `(a,)`
+                elements = [node]
+                while self.match(TokenType.COMMA):
+                    if self.check(TokenType.RPAREN):
+                        break
+                    elements.append(self.parse_expression())
+                self.expect(TokenType.RPAREN)
+                return self.parse_postfix(TupleExpr(elements))
             self.expect(TokenType.RPAREN)
             return self.parse_postfix(node)
         if self.check(TokenType.NONE):

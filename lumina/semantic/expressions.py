@@ -122,6 +122,30 @@ class ExpressionAnalyzer(NodeVisitor):
         elif isinstance(node.callee, VariableExpr):
             func_name = node.callee.name
 
+        # NOVO: builtins com tipo de retorno conhecido.
+        # Sem isso, o VarDecl infere "int" por padrão e `buf = alloc_bytes(N)`
+        # acaba batendo em campos `str`/`ptr`.
+        if not node.is_method:
+            BUILTIN_RET = {
+                "alloc": "ptr",
+                "alloc_bytes": "ptr",
+                "argv": "str",
+                "atoi": "int",
+                "len": "int",
+                "chr": "str",
+                "str": "str",
+                "int": "int",
+                "float": "float",
+                "input": "str",
+                "read_file": "str",
+                "http_response": "str",
+                "free": "void",
+            }
+            if func_name in BUILTIN_RET:
+                for arg in node.args:
+                    self.visit(arg)
+                return BUILTIN_RET[func_name]
+
         if node.is_method:
             if not node.args:
                 raise LuminaError(
@@ -155,7 +179,10 @@ class ExpressionAnalyzer(NodeVisitor):
             if info is not None and info.get('type') == 'fn':
                 for arg in node.args:
                     self.visit(arg)
-                return "int"
+                # Tipo de retorno de function pointer é desconhecido.
+                # Retorna None para que is_assignable(target, None)
+                # aceite qualquer destino.
+                return None
 
             if func_name not in self.builtin_functions and func_name not in self.functions:
                 suggestion = get_suggestion(func_name, list(self.functions) + list(self.builtin_functions))
@@ -220,6 +247,13 @@ class ExpressionAnalyzer(NodeVisitor):
                                 self.filename, getattr(node, 'line', 0), getattr(node, 'col', 0), self.source_code,
                             )
 
+            # NOVO: rastreia variáveis liberadas com `free()`.
+            # Usado pelo escape analysis para NÃO colocar no stack.
+            if func_name == "free" and node.args:
+                arg0 = node.args[0]
+                if isinstance(arg0, VariableExpr):
+                    self.freed_vars.add(arg0.name)
+
         for arg in node.args:
             self.visit(arg)
         return None
@@ -228,6 +262,11 @@ class ExpressionAnalyzer(NodeVisitor):
         for el in node.elements:
             self.visit(el)
         return "array"
+
+    def visit_TupleExpr(self, node):
+        for el in node.elements:
+            self.visit(el)
+        return "ptr"
 
     def visit_IndexExpr(self, node):
         self.visit(node.array)

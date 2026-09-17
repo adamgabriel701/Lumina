@@ -31,7 +31,6 @@ lumina_test_bin
 !/examples/*.cpp
 !/examples/*.h
 !/examples/MeuBanco/
-!/examples/MeuBanco/**
 
 # ============================================
 # benchmarks/ — rastreia só fontes
@@ -53,7 +52,7 @@ lumina_test_bin
 !/lumina_core/*.lm
 
 # ============================================
-# Logs e dados temporários (explicitado, não global)
+# Logs e dados temporários
 # ============================================
 log.txt
 baseline.txt
@@ -86,10 +85,9 @@ lumina-vscode/*.vsix
 # ============================================
 *.gcda
 *.gcno
+
 # ============================================
 # Binários compilados (sem extensão)
 # ============================================
 /tests/features/uncertain_features
 /tests/features/*_bin
-/examples/*/  # já coberto, mas por garantia
-/std/async_fs

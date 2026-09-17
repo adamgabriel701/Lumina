@@ -25,6 +25,8 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
 
         self.builtin_functions = BUILTIN_FUNCTIONS
 
+        self.freed_vars = set()   # NOVO
+
     # ------------------------------------------------------------------
     # @derive(Eq, Debug)
     # ------------------------------------------------------------------

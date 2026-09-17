@@ -129,16 +129,18 @@ def test_and_short_circuit_logic():
 # ============================================================
 def test_alloc_bytes_returns_i8_ptr():
     src = (
+        'fn get_size() -> int:\n'
+        '    return 100\n'
+        '\n'
         'fn main() -> int:\n'
-        '    let buf = alloc_bytes(100)\n'
+        '    let n = get_size()\n'
+        '    let buf = alloc_bytes(n)\n'
         '    buf[0] = 42\n'
         '    print(buf[0])\n'
         '    return 0\n'
     )
     ir = _build(src)
-    # A alocação deve ser i8*, não i64*
-    # Verifica que existe um malloc e o resultado é bitcast para i8*
-    assert "malloc" in ir
+    assert "malloc" in ir or "GC_malloc" in ir
 
 
 def test_alloc_bytes_roundtrip():

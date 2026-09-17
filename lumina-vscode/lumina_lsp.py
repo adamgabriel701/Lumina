@@ -18,12 +18,17 @@ NOTA: usa I/O em modo binário (`sys.stdin.buffer`). O `Content-Length`
 é sempre em BYTES (spec LSP), e o Python em modo texto lê CARACTERES,
 o que quebra com UTF-8 multi-byte (acentos, emojis).
 
-QUALIFICAÇÃO DE NOMES:
+QUALIFICAÇÃO DE NOMES (Sprint 6a):
   Símbolos de topo (funções, structs, enums, traits) usam chave simples
-  (`main`, `Pessoa`). Locais (varáveis dentro de funções/métodos) usam
+  (`main`, `Pessoa`). Locais (variáveis dentro de funções/métodos) usam
   chave qualificada (`main::i`, `helper::i`), porque dois escopos podem
   ter o mesmo nome. `scope_map` permite descobrir o enclosing function
   de qualquer posição do cursor.
+
+REFERÊNCIAS COM ESCOPO (Sprint 8a):
+  Quando o cursor está sobre uma variável LOCAL do enclosing function,
+  `references` e `rename` filtram para apenas as ocorrências dentro
+  dessa função. Símbolos de topo continuam com varredura léxica global.
 """
 import bisect
 import sys
@@ -262,8 +267,10 @@ def _walk_stmts_with_context(stmts, callback, ctx_name):
 
 
 def _find_all_references(code, names):
-    """Varredura léxica simples. NÃO distingue escopos — para locais
-    homônimos em funções diferentes, retorna todas as ocorrências.
+    """Varredura léxica global.
+
+    Retorna TODAS as ocorrências de cada nome. Não distingue escopos —
+    o filtro por escopo é feito em `LuminaLSP._filter_refs_for_scope`.
     """
     result = {n: [] for n in names}
     lines = code.split('\n')
@@ -318,10 +325,6 @@ def validate_and_extract_symbols(code):
     document_symbols = []
     no_type_var_decls = []
     scope_map = []
-    # Dict paralelo: qkey → VarDecl. Usado para atualizar `detail`
-    # com o tipo inferido APÓS o semantic rodar (o analyzer restaura
-    # os escopos ao sair, então get_var_info não funciona fora da
-    # análise). O `stmt.var_type` é mutado in-place pelo semantic.
     _stmt_refs = {}
 
     try:
@@ -361,7 +364,6 @@ def validate_and_extract_symbols(code):
                     "line": decl.line, "col": decl.col,
                 }
 
-                # Children: locais desta função
                 children = []
                 def _collect_child(stmt, ctx):
                     if isinstance(stmt, VarDecl):
@@ -457,7 +459,6 @@ def validate_and_extract_symbols(code):
                     ret = f" -> {m.return_type}" if m.return_type != "void" else ""
                     mdetail = f"fn {m.name}({params_str}){ret}"
 
-                    # Locais deste método (qualificados pelo nome do método)
                     mchildren = []
                     def _collect_method_local(stmt, ctx):
                         if isinstance(stmt, VarDecl):
@@ -539,14 +540,11 @@ def validate_and_extract_symbols(code):
                     "selectionRange": _range_around(getattr(decl, 'line', 1), getattr(decl, 'col', 1), len(decl.name)),
                 })
 
-        # ----- Passada 2: semantic (preenche tipos inferidos) -----
+        # ----- Passada 2: semantic -----
         analyzer = SemanticAnalyzer("lsp.lm", code)
         analyzer.analyze(ast)
 
-        # Passada 3: relê os `stmt.var_type` (mutados pelo semantic
-        # durante a passada 2) para atualizar `detail` dos locais
-        # qualificados. Não usa analyzer.get_var_info porque o
-        # analyze_function restaura os escopos ao sair.
+        # Passada 3: atualiza detail dos locais com tipo inferido.
         for qkey, stmt in _stmt_refs.items():
             info = symbol_details.get(qkey)
             if info is None:
@@ -568,7 +566,8 @@ def validate_and_extract_symbols(code):
     except Exception:
         pass
 
-    # References: só para top-level (locais homônimos não distinguem escopo)
+    # References: só para top-level. Locais são filtrados por escopo
+    # em `LuminaLSP._filter_refs_for_scope` no momento da query.
     top_level_names = [k for k in symbol_details.keys() if "::" not in k]
     references = _find_all_references(code, top_level_names)
 
@@ -603,13 +602,11 @@ def _build_name_to_type(symbol_details):
 def _collect_semantic_tokens(code, tokens, ast, symbol_details):
     name_to_type = _build_name_to_type(symbol_details)
 
-    # Enum members
     for decl in ast:
         if isinstance(decl, EnumDecl):
             for vname, _payloads in decl.variants:
                 name_to_type[vname] = TT_ENUM_MEMBER
 
-    # Parâmetros
     for decl in ast:
         if isinstance(decl, Function):
             for p in decl.params:
@@ -718,10 +715,7 @@ class LuminaLSP:
         return best
 
     def _lookup(self, table, name, line):
-        """Tenta a chave qualificada primeiro; cai para simples.
-
-        Retorna o valor ou None.
-        """
+        """Tenta a chave qualificada primeiro; cai para simples."""
         func = self._enclosing_func(line)
         if func is not None:
             qualified = f"{func}::{name}"
@@ -730,6 +724,51 @@ class LuminaLSP:
         if name in table:
             return table[name]
         return None
+
+    def _build_func_ranges(self):
+        """Constrói `{func_name: (start_line, end_line)}` 1-based.
+
+        End line da função N é `start_line` da função N+1 - 1.
+        Para a última função, é o total de linhas do arquivo.
+        """
+        total_lines = self.latest_text.count('\n') + 1
+        ranges = {}
+        for i, (start, name) in enumerate(self.scope_map):
+            if i + 1 < len(self.scope_map):
+                end = self.scope_map[i + 1][0] - 1
+            else:
+                end = total_lines
+            ranges[name] = (start, end)
+        return ranges
+
+    def _filter_refs_for_scope(self, word, refs, cursor_line):
+        """Filtra refs para o escopo do cursor.
+
+        Se `word` é uma variável LOCAL do enclosing function (chave
+        qualificada `func::word` presente em `symbol_details`),
+        mantém apenas as ocorrências dentro do range dessa função.
+        Caso contrário, retorna todas (varredura léxica).
+
+        `cursor_line` é 0-based (LSP); `refs` usam linhas 0-based.
+        """
+        enclosing = self._enclosing_func(cursor_line)
+        if enclosing is None:
+            return refs
+
+        qkey = f"{enclosing}::{word}"
+        if qkey not in self.symbol_details:
+            return refs
+
+        ranges = self._build_func_ranges()
+        func_range = ranges.get(enclosing)
+        if not func_range:
+            return refs
+
+        start_1b, end_1b = func_range
+        return [
+            r for r in refs
+            if (start_1b - 1) <= r["line"] <= (end_1b - 1)
+        ]
 
     # ------------------------------------------------------------------
     # Run loop
@@ -925,7 +964,7 @@ class LuminaLSP:
             'return', 'print', 'true', 'false', 'match', 'case', 'default',
             'and', 'or', 'not', 'struct', 'enum', 'extern', 'import', 'defer',
             'break', 'continue', 'assert', 'bench', 'trait', 'comptime', 'as',
-            'impl', 'switch', 'export', 'none',
+            'impl', 'switch', 'export', 'none', 'nil',
         ]
         for kw in keywords:
             items.append({"label": kw, "kind": 14, "detail": "Lumina Keyword"})
@@ -958,7 +997,6 @@ class LuminaLSP:
         if not word:
             return None
 
-        # Tenta qualificado (main::i) primeiro, cai para simples
         info = self._lookup(self.symbol_details, word, line)
         if info:
             value = f"```lumina\n{info['detail']}\n```"
@@ -987,12 +1025,18 @@ class LuminaLSP:
 
     def get_references(self, params):
         pos = params.get("position", {})
+        line = pos.get("line", 0)
         word = get_word_at_position(
-            self.latest_text, pos.get("line", 0), pos.get("character", 0)
+            self.latest_text, line, pos.get("character", 0)
         )
         if not word:
             return []
+
         refs = self.references.get(word, [])
+        # NOVO (Sprint 8a): filtra para o escopo do cursor se `word`
+        # for uma variável local do enclosing function.
+        refs = self._filter_refs_for_scope(word, refs, line)
+
         return [
             {
                 "uri": self.latest_uri,
@@ -1022,17 +1066,20 @@ class LuminaLSP:
 
     def rename(self, params):
         pos = params.get("position", {})
+        line = pos.get("line", 0)
         new_name = params.get("newName", "")
         if not new_name:
             return None
 
         word = get_word_at_position(
-            self.latest_text, pos.get("line", 0), pos.get("character", 0)
+            self.latest_text, line, pos.get("character", 0)
         )
         if not word:
             return None
 
         refs = self.references.get(word, [])
+        # NOVO (Sprint 8a): mesma filtragem que `get_references`.
+        refs = self._filter_refs_for_scope(word, refs, line)
         if not refs:
             return None
 

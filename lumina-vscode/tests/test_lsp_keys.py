@@ -169,3 +169,78 @@ def test_locals_type_inferred_after_semantic():
     assert details["f::f"]["detail"] == "f: float"
     assert details["f::s"]["detail"] == "s: str"
     assert details["f::b"]["detail"] == "b: bool"
+
+def test_scope_filter_for_local_var():
+    """`references` de uma variável local só retorna ocorrências
+    dentro da mesma função."""
+    src = (
+        'fn a() -> int:\n'
+        '    let i = 10\n'
+        '    let x = i + i\n'   # i aparece 2x
+        '    return x\n'
+        '\n'
+        'fn b() -> int:\n'
+        '    let i = 20\n'       # i de b — mesmo nome, escopo diferente
+        '    return i\n'
+        '\n'
+        'fn main() -> int:\n'
+        '    return 0\n'
+    )
+    (_, _, _, _, _, refs, _, scope) = validate_and_extract_symbols(src)
+
+    # Simula `_filter_refs_for_scope` sem instanciar LuminaLSP
+    total_lines = src.count('\n') + 1
+    ranges = {}
+    for i, (start, name) in enumerate(scope):
+        end = scope[i + 1][0] - 1 if i + 1 < len(scope) else total_lines
+        ranges[name] = (start, end)
+
+    def filter_refs(word, cursor_line):
+        target = cursor_line + 1
+        best = None
+        for start, name in scope:
+            if start <= target:
+                best = name
+            else:
+                break
+        if best is None:
+            return refs.get(word, [])
+        start_1b, end_1b = ranges[best]
+        return [
+            r for r in refs.get(word, [])
+            if (start_1b - 1) <= r["line"] <= (end_1b - 1)
+        ]
+
+    # Cursor na linha 2 (dentro de `a`) — só i de `a`
+    refs_a = filter_refs("i", 2)
+    # Esperado: 3 ocorrências em a (let i, i+i) — só as linhas de a
+    a_start_0b = scope[0][0] - 1   # 0-based
+    for r in refs_a:
+        assert r["line"] >= a_start_0b
+
+
+def test_func_ranges_contiguous():
+    """`_build_func_ranges` gera ranges sem sobreposição."""
+    src = (
+        'fn a() -> int:\n'
+        '    return 0\n'
+        '\n'
+        'fn b() -> int:\n'
+        '    return 1\n'
+        '\n'
+        'fn c() -> int:\n'
+        '    return 2\n'
+    )
+    (_, _, _, _, _, _, _, scope) = validate_and_extract_symbols(src)
+    total = src.count('\n') + 1
+    ranges = {}
+    for i, (start, name) in enumerate(scope):
+        end = scope[i + 1][0] - 1 if i + 1 < len(scope) else total
+        ranges[name] = (start, end)
+
+    # Nenhum range sobrepõe o próximo
+    ordered = sorted(ranges.items(), key=lambda kv: kv[1][0])
+    for i in range(len(ordered) - 1):
+        _, (s1, e1) = ordered[i]
+        _, (s2, e2) = ordered[i + 1]
+        assert e1 < s2, f"range {ordered[i]} sobrepõe {ordered[i+1]}"

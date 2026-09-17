@@ -6,7 +6,7 @@ from ..ast import (
 )
 from ..ast.visitor import NodeVisitor
 from ..errors import LuminaError
-from .types import is_assignable
+from .types import is_assignable, unify_type, substitute_generic
 
 
 def get_suggestion(name, possible_names):
@@ -177,16 +177,43 @@ class ExpressionAnalyzer(NodeVisitor):
                         )
 
                 type_params = getattr(fn_def, 'type_params', None) or []
-                for arg_node, param in zip(node.args, fn_def.params):
-                    arg_type = self.visit(arg_node)
-                    p_name, p_type = param.name, param.type_ann
-                    if p_type in type_params:
-                        continue
-                    if arg_type and p_type and not is_assignable(p_type, arg_type):
-                        raise LuminaError(
-                            f"Tipo inválido para parâmetro '{p_name}': esperado '{p_type}', obteve '{arg_type}'.",
-                            self.filename, getattr(node, 'line', 0), getattr(node, 'col', 0), self.source_code,
-                        )
+
+                if type_params:
+                    # NOVO: infere type_map unificando (param_type, arg_type)
+                    type_map = {}
+                    for arg_node, param in zip(node.args, fn_def.params):
+                        arg_type = self.visit(arg_node)
+                        if arg_type is None:
+                            continue
+                        unify_type(param.type_ann, arg_type, type_map)
+
+                    # Valida com tipo substituído
+                    for arg_node, param in zip(node.args, fn_def.params):
+                        arg_type = self.visit(arg_node)
+                        if arg_type is None:
+                            continue
+                        expected = substitute_generic(param.type_ann, type_map)
+                        # Se ainda tem type params não resolvidos, aceita
+                        # (não dá para validar sem contexto)
+                        if expected != param.type_ann and expected.isupper():
+                            continue
+                        if not is_assignable(expected, arg_type):
+                            raise LuminaError(
+                                f"Tipo inválido para parâmetro '{param.name}': "
+                                f"esperado '{expected}', obteve '{arg_type}'.",
+                                self.filename, getattr(node, 'line', 0),
+                                getattr(node, 'col', 0), self.source_code,
+                            )
+                else:
+                    # Comportamento antigo (sem type params)
+                    for arg_node, param in zip(node.args, fn_def.params):
+                        arg_type = self.visit(arg_node)
+                        p_name, p_type = param.name, param.type_ann
+                        if arg_type and p_type and not is_assignable(p_type, arg_type):
+                            raise LuminaError(
+                                f"Tipo inválido para parâmetro '{p_name}': esperado '{p_type}', obteve '{arg_type}'.",
+                                self.filename, getattr(node, 'line', 0), getattr(node, 'col', 0), self.source_code,
+                            )
 
         for arg in node.args:
             self.visit(arg)

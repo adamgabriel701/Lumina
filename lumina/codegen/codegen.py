@@ -5,6 +5,7 @@ from .expressions import ExpressionCodegen
 from .statements import StatementCodegen
 from .helpers import HelpersCodegen
 from .types import TypesCodegen
+from ..semantic.types import substitute_generic, unify_type
 
 from ..ast import Function as AstFunction, Param, TraitDecl
 
@@ -387,59 +388,68 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
             return "ptr"
         return "unknown"
 
-    def materialize_generic(self, gen_def, arg_types):
-        """Gera (uma vez) uma cópia especializada da função genérica
-        para os tipos concretos em `arg_types`. Retorna o nome mangled.
+    def materialize_generic(self, gen_def, type_map):
+        """Gera cópia especializada de uma função genérica.
+
+        `type_map`: dict {type_param_name: tipo_concreto_lumina}.
+        Ex: materialize_generic(put_def, {"T": "int"}) gera `put__int`.
         """
-        mangled = gen_def.name + "__" + "_".join(self._llvm_ty_to_str(t) for t in arg_types)
+        type_params = getattr(gen_def, 'type_params', None) or []
+
+        # Mangled: nome + args normalizados
+        def _sanitize(s):
+            return s.replace("<", "_").replace(">", "").replace(",", "_").replace(" ", "")
+        suffix_parts = [_sanitize(type_map.get(tp, "unknown")) for tp in type_params]
+        mangled = f"{gen_def.name}__{'_'.join(suffix_parts)}"
 
         if mangled in self.functions_table:
             return mangled
 
-        type_params = getattr(gen_def, 'type_params', None) or []
-        type_map = {}
-        for p, t in zip(gen_def.params, arg_types):
-            if p.type_ann in type_params:
-                type_map[p.type_ann] = t
+        # Resolve cada tipo Lumina substituindo type params
+        def resolve_lumina(name):
+            return substitute_generic(name, type_map)
 
-        def resolve_ty(name):
-            if name in type_map:
-                return type_map[name]
-            return self.get_llvm_param_type(name)
+        ret_lumina = resolve_lumina(gen_def.return_type)
+        ret_ty = self.get_llvm_param_type(ret_lumina)
 
-        ret_ty = resolve_ty(gen_def.return_type)
-        param_tys = [resolve_ty(p.type_ann) for p in gen_def.params]
+        param_tys = []
+        for p in gen_def.params:
+            param_lumina = resolve_lumina(p.type_ann)
+            param_tys.append(self.get_llvm_param_type(param_lumina))
 
         func_type = ir.FunctionType(ret_ty, param_tys)
         func = ir.Function(self.module, func_type, name=mangled)
         self.functions_table[mangled] = (func, func_type)
         self.function_defs[mangled] = gen_def
 
+        # Salva/restaura estado
         old_builder = self.builder
         old_symtab = self.symbol_table
         old_var_types = self.var_types
         old_current = getattr(self, 'current_func_name', None)
+        old_body_bb = getattr(self, 'current_body_bb', None)
 
-        block = func.append_basic_block(name=f"{mangled}_entry")
-        self.builder = ir.IRBuilder(block)
+        entry_bb = func.append_basic_block(name=f"{mangled}_entry")
+        body_bb = func.append_basic_block(name=f"{mangled}_body")
+        self.builder = ir.IRBuilder(entry_bb)
         self.symbol_table = {}
         self.var_types = {}
         self.current_func_name = mangled
 
-        old_body_bb_gen = getattr(self, 'current_body_bb', None)
-        body_bb_gen = func.append_basic_block(name=f"{mangled}_body")
-
         for i, p in enumerate(gen_def.params):
             p_name = p.name
+            param_lumina = resolve_lumina(p.type_ann)
             p_ty = func_type.args[i]
             ptr = self.builder.alloca(p_ty, name=p_name)
             self.builder.store(func.args[i], ptr)
             self.symbol_table[p_name] = ptr
-            self.var_types[p_name] = self._llvm_ty_to_str(p_ty)
+            # IMPORTANTE: `var_types` guarda o tipo Lumina JÁ SUBSTITUÍDO,
+            # para que `b.data = val` (dentro do corpo) saiba o tipo.
+            self.var_types[p_name] = param_lumina
 
-        self.builder.branch(body_bb_gen)
-        self.builder.position_at_end(body_bb_gen)
-        self.current_body_bb = body_bb_gen
+        self.builder.branch(body_bb)
+        self.builder.position_at_end(body_bb)
+        self.current_body_bb = body_bb
 
         for stmt in gen_def.body:
             if self.builder.block.is_terminated:
@@ -454,14 +464,57 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
             else:
                 self.builder.ret(ir.Constant(func_type.return_type, 0))
 
-        self.current_body_bb = old_body_bb_gen
-
         self.builder = old_builder
         self.symbol_table = old_symtab
         self.var_types = old_var_types
         self.current_func_name = old_current
+        self.current_body_bb = old_body_bb
 
         return mangled
+
+    def _infer_arg_type_lumina(self, arg_node):
+        """Best-effort: infere tipo Lumina de um argumento.
+
+        Retorna str ou None.
+        """
+        from ..ast import VariableExpr, NumberExpr, StringExpr, BoolExpr, CallExpr, StructLiteralExpr
+        if isinstance(arg_node, VariableExpr):
+            return self.var_types.get(arg_node.name)
+        if isinstance(arg_node, NumberExpr):
+            return "float" if arg_node.is_float else "int"
+        if isinstance(arg_node, StringExpr):
+            return "str"
+        if isinstance(arg_node, BoolExpr):
+            return "bool"
+        if isinstance(arg_node, StructLiteralExpr):
+            return arg_node.struct_name
+        if isinstance(arg_node, CallExpr):
+            callee_name = None
+            if isinstance(arg_node.callee, VariableExpr):
+                callee_name = arg_node.callee.name
+            elif hasattr(arg_node.callee, 'member'):
+                callee_name = arg_node.callee.member
+            if callee_name and callee_name in self.function_defs:
+                return self.function_defs[callee_name].return_type
+            if callee_name:
+                lookup = self._find_enum_variant(callee_name)
+                if lookup is not None:
+                    return lookup[0]
+        return None
+
+    def _infer_type_map_lumina(self, gen_def, node):
+        """Unifica (param.type_ann, arg_type_lumina) para inferir type_map.
+
+        Retorna dict ou {} se falhar (aí cai no caminho antigo).
+        """
+        type_map = {}
+        for arg_node, param in zip(node.args, gen_def.params):
+            arg_type = self._infer_arg_type_lumina(arg_node)
+            if arg_type is None:
+                return {}
+            if not unify_type(param.type_ann, arg_type, type_map):
+                return {}
+        return type_map
 
     def generate_function_body(self, node):
         func, func_type = self.functions_table[node.name]

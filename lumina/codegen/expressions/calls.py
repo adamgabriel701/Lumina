@@ -85,11 +85,27 @@ class CallsMixin:
         # 2. Chamada a função genérica → materializa cópia especializada
         gen_def = self.function_defs.get(func_name)
         if gen_def is not None and getattr(gen_def, 'type_params', None):
-            arg_vals = [self.visit(a) for a in node.args]
-            arg_types = [v.type for v in arg_vals]
+            # NOVO: infere type_map em strings Lumina (cobre Box<T>, Map<K,V>, ...)
+            type_map = self._infer_type_map_lumina(gen_def, node)
 
-            mangled = self.materialize_generic(gen_def, arg_types)
+            if type_map:
+                mangled = self.materialize_generic(gen_def, type_map)
+                arg_vals = None
+            else:
+                # Fallback: só type params diretos (comportamento antigo)
+                arg_vals = [self.visit(a) for a in node.args]
+                arg_types = [v.type for v in arg_vals]
+                legacy_map = {}
+                for p, t in zip(gen_def.params, arg_types):
+                    if p.type_ann in (gen_def.type_params or []):
+                        legacy_map[p.type_ann] = self._llvm_ty_to_str(t)
+                mangled = self.materialize_generic(gen_def, legacy_map)
+
             func, func_type = self.functions_table[mangled]
+
+            # Se ainda não visitamos (branch type_map), faz agora
+            if arg_vals is None:
+                arg_vals = [self.visit(a) for a in node.args]
 
             final_args = []
             for i, a in enumerate(arg_vals):
@@ -108,6 +124,8 @@ class CallsMixin:
                         a = self.builder.inttoptr(a, expected, name="gen_arg_itop")
                     elif expected == self.i64_ty and isinstance(a.type, ir.PointerType):
                         a = self.builder.ptrtoint(a, self.i64_ty, name="gen_arg_ptoi")
+                    elif isinstance(expected, ir.PointerType) and isinstance(a.type, ir.PointerType):
+                        a = self.builder.bitcast(a, expected, name="gen_arg_bitcast")
                 final_args.append(a)
 
             return self.builder.call(func, final_args, name=mangled + "_call")

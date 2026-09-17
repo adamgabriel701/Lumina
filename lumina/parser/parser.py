@@ -76,13 +76,6 @@ class Parser(DeclarationParser):
                     filename=self.filename, line=t.line, col=t.col, source_code=self.source_code,
                 )
 
-            # Anexa os atributos ao nó (se o nó aceitar).
-            if attrs and decl is not None:
-                try:
-                    decl.attrs = attrs
-                except AttributeError:
-                    pass
-
             self._pending_attrs = []
 
             if is_export and hasattr(decl, 'is_exported'):

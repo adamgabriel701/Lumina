@@ -5,9 +5,9 @@ from .expressions import ExpressionCodegen
 from .statements import StatementCodegen
 from .helpers import HelpersCodegen
 from .types import TypesCodegen
-from ..semantic.types import substitute_generic, unify_type
 
 from ..ast import Function as AstFunction, Param, TraitDecl
+from ..semantic.types import substitute_generic, unify_type
 
 
 class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCodegen):
@@ -22,6 +22,9 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         self.context = ir.Context()
         self.module = ir.Module(name="lumina_module", context=self.context)
 
+        # Consistência com o triple do alvo (ou do host, se não
+        # especificado). Evita o warning "overriding the module
+        # target triple" do clang e é essencial para cross-compile.
         try:
             from llvmlite.binding import get_default_triple
             self.module.triple = target_triple or get_default_triple()
@@ -45,8 +48,8 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         self.struct_defs = {}
         self.symbol_table = {}
         self.var_types = {}
-        self.global_var_decls = {}   # NOVO: top-level constants
-        self.global_mut_vars = {}    # NOVO: nome → GlobalVariable
+        self.global_var_decls = {}   # top-level constants
+        self.global_mut_vars = {}    # nome → GlobalVariable
 
         self.string_counter = 0
         self.lambda_counter = 0
@@ -54,10 +57,30 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
 
         self.builtin_functions = BUILTIN_FUNCTIONS
 
-        self.setup_libc_functions()
-        self.alias_methods = set()   # NOVO: nomes curtos de trait methods
-        self.loop_stack = []  # [(continue_bb, break_bb), ...]
+        # Sprint 2e/8b/8d: controle de loop (continue_bb, break_bb, scope_start)
+        self.loop_stack = []
+        # Sprint 8b: pilha de defers (escopos + função)
+        self.defer_stack = []
+        # Sprint 2e: bloco do corpo da função atual (para TCO)
+        self.current_body_bb = None
 
+        # Sprint 9a: null check em MemberExpr/IndexExpr quando @safe
+        self._safe_mode = False
+        # Sprint 9b: macros (@macro) para expansão de AST
+        self.macros = {}
+
+        # Sprint 8c: estado do dispatcher SCC em construção
+        self._current_scc_slots = None
+        self._current_scc_ids = None
+        self._current_scc_id_slot = None
+        self._current_scc_dispatch_bb = None
+
+        self.setup_libc_functions()
+        self.alias_methods = set()   # nomes curtos de trait methods
+
+    # ==================================================================
+    # Setup de funções libc/GC
+    # ==================================================================
     def setup_libc_functions(self):
         printf_ty = ir.FunctionType(ir.IntType(32), [self.i8_ty.as_pointer()], var_arg=True)
         self.printf = ir.Function(self.module, printf_ty, name="printf")
@@ -116,6 +139,9 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         )
         self.strncpy = ir.Function(self.module, strncpy_ty, name="strncpy")
 
+    # ==================================================================
+    # Globais mutáveis (top-level `mut X = 0`)
+    # ==================================================================
     def _emit_mutable_global(self, decl):
         """Emite uma GlobalVariable LLVM para `mut X = <literal>` no topo.
 
@@ -127,7 +153,6 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
 
         name = decl.name
 
-        # Determina tipo
         var_type = decl.var_type
         if var_type is None:
             v = decl.value
@@ -136,13 +161,11 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
             elif isinstance(v, BoolExpr):
                 var_type = "bool"
             else:
-                # Não suportado como global mutável — cai para inline
                 self.global_var_decls[name] = decl
                 return
 
         llvm_ty = self.get_llvm_type(var_type)
         if isinstance(llvm_ty, ir.VoidType) or isinstance(llvm_ty, ir.PointerType):
-            # void ou ptr (str) — cai para inline
             self.global_var_decls[name] = decl
             return
 
@@ -167,18 +190,9 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         gv.linkage = "internal"
         self.global_mut_vars[name] = gv
 
-    def _const_from_literal(self, node, llvm_ty):
-        """Avalia um literal como constante LLVM. Retorna None se não
-        for literal."""
-        from ..ast import NumberExpr, BoolExpr
-        if isinstance(node, NumberExpr):
-            if isinstance(llvm_ty, ir.DoubleType):
-                return ir.Constant(llvm_ty, float(node.value))
-            return ir.Constant(llvm_ty, int(node.value, 0))
-        if isinstance(node, BoolExpr):
-            return ir.Constant(llvm_ty, 1 if node.value else 0)
-        return None
-
+    # ==================================================================
+    # Trait defaults
+    # ==================================================================
     def _resolve_trait_defaults(self, ast):
         """Copia métodos default do trait para o ImplBlock que não os sobrescreve.
 
@@ -215,14 +229,36 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
                 )
                 decl.methods.append(default_method)
 
+    def _validate_macro(self, fn):
+        """Macro deve ter corpo `return <expr>` (1 statement)."""
+        from ..errors import LuminaError
+
+        body = fn.body or []
+        if len(body) != 1 or type(body[0]).__name__ != 'ReturnStmt':
+            raise LuminaError(
+                f"Macro '{fn.name}' deve ter corpo `return <expr>` "
+                f"(um único statement). Macros multi-statement não são "
+                f"suportadas.",
+                filename="<macro>",
+                line=getattr(fn, 'line', 0) or 0,
+                col=getattr(fn, 'col', 0) or 0,
+                source_code="",
+            )
+        if not body[0].values:
+            raise LuminaError(
+                f"Macro '{fn.name}' deve retornar uma expressão "
+                f"(`return <expr>`).",
+                filename="<macro>",
+                line=getattr(fn, 'line', 0) or 0,
+                col=getattr(fn, 'col', 0) or 0,
+                source_code="",
+            )
+
+    # ==================================================================
+    # Geração do módulo
+    # ==================================================================
     def generate_module(self, ast):
         # 0. Coleta VarDecls de topo.
-        #
-        #   - `let X = <literal>` (imutável) → inline como constante
-        #   - `mut X = <literal>` (mutável)  → GlobalVariable LLVM
-        #
-        # Top-level `let` continua inline para performance; mutáveis
-        # precisam de endereço real (podem ser reatribuídos em runtime).
         self.global_var_decls = {}
         self.global_mut_vars = {}
         for decl in ast:
@@ -231,6 +267,18 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
                     self._emit_mutable_global(decl)
                 else:
                     self.global_var_decls[decl.name] = decl
+
+        # 0b. Sprint 9b: coleta macros (@macro). Não são registradas
+        # como funções normais — só expandem em call sites.
+        # Valida aqui (não só no call site) para que macros malformadas
+        # falhem mesmo se nunca chamadas.
+        self.macros = {}
+        for decl in ast:
+            if isinstance(decl, AstFunction):
+                attrs = getattr(decl, 'attrs', None) or []
+                if 'macro' in attrs:
+                    self._validate_macro(decl)
+                    self.macros[decl.name] = decl
 
         # 1. Pré-registra todas as structs e enums
         for decl in ast:
@@ -245,26 +293,20 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         self._resolve_trait_defaults(ast)
 
         # 2. Pré-registra todas as funções e métodos de impls.
-        # TraitDecl NÃO é registrado — seus métodos são copiados para
-        # os ImplBlocks por `_resolve_trait_defaults`.
+        # TraitDecl NÃO é registrado.
+        # Macros NÃO são registradas como funções normais.
         for decl in ast:
             if isinstance(decl, TraitDecl):
                 continue
             if hasattr(decl, 'params') and hasattr(decl, 'return_type'):
+                if isinstance(decl, AstFunction) and decl.name in self.macros:
+                    continue
                 self.register_function(decl)
             elif hasattr(decl, 'methods'):
                 for method in decl.methods:
                     self.register_function(method)
 
         # 2.5 Registra aliases `metodo` → `Struct_metodo` para traits.
-        # Também marca em `alias_methods` para que o codegen saiba
-        # que essas chamadas precisam de `self` como 1º argumento.
-        #
-        # Importante: pass 2 já registrou o método ABSTRATO do TraitDecl
-        # com o nome curto (`name`), e agora o pass 2.5 sobrescreve com
-        # a implementação CONCRETA (`English_name`). Por isso NÃO
-        # verificamos `short not in functions_table` — sempre
-        # sobrescrevemos.
         self.alias_methods = set()
         for decl in ast:
             if not (hasattr(decl, 'methods') and hasattr(decl, 'struct_name')):
@@ -281,10 +323,8 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
                         self.functions_table[short] = full_entry
                         self.alias_methods.add(short)
 
-        # 3. Detecta SCCs de tail calls (mutual recursion) e gera
-        # dispatchers. Cada SCC vira UMA função LLVM; os wrappers
-        # originais (`is_even`, `is_odd`) chamam o dispatcher com um
-        # `entry_id`.
+        # 3. Sprint 8c: detecta SCCs de tail calls (mutual recursion)
+        # e gera dispatchers.
         sccs = self._compute_tail_call_sccs(ast)
         handled_scc_members = set()
         for scc_id, members in enumerate(sccs):
@@ -301,12 +341,14 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
             self._materialize_scc_dispatcher(scc_id, funcs)
             handled_scc_members.update(f.name for f in funcs)
 
-        # 3b. Gera o corpo das funções restantes (não cobertas por SCC).
+        # 3b. Gera o corpo das funções restantes.
         for decl in ast:
             if isinstance(decl, TraitDecl):
                 continue
             if hasattr(decl, 'body') and decl.body is not None:
                 if getattr(decl, 'type_params', None):
+                    continue
+                if isinstance(decl, AstFunction) and decl.name in self.macros:
                     continue
                 if isinstance(decl, AstFunction) and decl.name in handled_scc_members:
                     continue
@@ -320,228 +362,9 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
 
         return str(self.module)
 
-    # ------------------------------------------------------------------
-    # Mutual recursion TCO (Sprint 8c)
-    # ------------------------------------------------------------------
-    def _compute_tail_call_sccs(self, ast):
-        """SCCs do grafo de tail calls entre funções top-level.
-
-        Retorna `[[name1, name2, ...], ...]` — cada sub-lista é um
-        SCC com >= 2 membros. Self-recursion (tamanho 1) é tratada
-        pelo `_try_tail_call` existente e NÃO aparece aqui.
-        """
-        from ..ast import (
-            Function, CallExpr, VariableExpr, ReturnStmt,
-            IfStmt, WhileStmt, ForStmt, MatchStmt, DeferStmt, BenchStmt,
-        )
-
-        func_names = set()
-        for decl in ast:
-            if isinstance(decl, Function) and not getattr(decl, 'type_params', None):
-                func_names.add(decl.name)
-
-        graph = {n: set() for n in func_names}
-
-        def walk_tail(stmts, current):
-            for s in stmts:
-                if s is None:
-                    continue
-                if isinstance(s, ReturnStmt) and len(s.values) == 1:
-                    v = s.values[0]
-                    if isinstance(v, CallExpr) and isinstance(v.callee, VariableExpr):
-                        if v.callee.name in func_names:
-                            graph[current].add(v.callee.name)
-                if isinstance(s, IfStmt):
-                    walk_tail(s.then_body, current)
-                    if s.else_body:
-                        walk_tail(s.else_body, current)
-                elif isinstance(s, (WhileStmt, ForStmt, DeferStmt, BenchStmt)):
-                    walk_tail(s.body, current)
-                elif isinstance(s, MatchStmt):
-                    for c in s.cases:
-                        if len(c) >= 4 and isinstance(c[3], list):
-                            walk_tail(c[3], current)
-                    if s.default:
-                        walk_tail(s.default, current)
-
-        for decl in ast:
-            if isinstance(decl, Function) and not getattr(decl, 'type_params', None):
-                walk_tail(decl.body, decl.name)
-
-        # Kosaraju
-        visited = set()
-        order = []
-        def dfs1(n):
-            visited.add(n)
-            for m in graph.get(n, ()):
-                if m not in visited:
-                    dfs1(m)
-            order.append(n)
-
-        for n in func_names:
-            if n not in visited:
-                dfs1(n)
-
-        rgraph = {n: set() for n in func_names}
-        for n, ns in graph.items():
-            for m in ns:
-                rgraph[m].add(n)
-
-        visited = set()
-        sccs = []
-        def dfs2(n, comp):
-            visited.add(n)
-            comp.append(n)
-            for m in rgraph.get(n, ()):
-                if m not in visited:
-                    dfs2(m, comp)
-
-        for n in reversed(order):
-            if n not in visited:
-                comp = []
-                dfs2(n, comp)
-                sccs.append(comp)
-
-        return [scc for scc in sccs if len(scc) > 1]
-
-    def _can_dispatcher(self, funcs):
-        """Todos os membros do SCC têm assinatura compatível?
-
-        Requer mesmo número de params e mesmos tipos (Lumina) e
-        mesmo tipo de retorno.
-        """
-        if not funcs:
-            return False
-        sig0 = (
-            tuple(p.type_ann for p in funcs[0].params),
-            funcs[0].return_type,
-        )
-        for f in funcs[1:]:
-            sig = (
-                tuple(p.type_ann for p in f.params),
-                f.return_type,
-            )
-            if sig != sig0:
-                return False
-        return True
-
-    def _materialize_scc_dispatcher(self, scc_id, funcs):
-        sample = funcs[0]
-        param_tys = [self.get_llvm_param_type(p.type_ann) for p in sample.params]
-        ret_ty = self.get_llvm_param_type(sample.return_type)
-
-        disp_name = f"__scc_{scc_id}"
-        disp_fn_ty = ir.FunctionType(ret_ty, [self.i32_ty] + param_tys)
-        disp_fn = ir.Function(self.module, disp_fn_ty, name=disp_name)
-
-        old_builder = self.builder
-        old_defer_stack_outer = getattr(self, 'defer_stack', None)
-        # NOVO: defer_stack próprio do dispatcher, inicializado vazio.
-        # Sem isso, o `visit_DeferStmt` da primeira member cria o
-        # atributo na hora (via `hasattr`), mas o `visit_IfStmt` do
-        # `visit_ReturnStmt` do TCO pode rodar antes — daí
-        # `AttributeError`.
-        self.defer_stack = []
-
-        # ---- entry: aloca slots e current_id ----
-        entry_bb = disp_fn.append_basic_block(name=f"{disp_name}_entry")
-        self.builder = ir.IRBuilder(entry_bb)
-
-        slots = []
-        for i, p in enumerate(sample.params):
-            slot = self.builder.alloca(param_tys[i], name=f"scc_slot_{i}_{p.name}")
-            self.builder.store(disp_fn.args[i + 1], slot)
-            slots.append(slot)
-
-        id_slot = self.builder.alloca(self.i32_ty, name=f"{disp_name}_id")
-        self.builder.store(disp_fn.args[0], id_slot)
-
-        dispatch_bb = disp_fn.append_basic_block(name=f"{disp_name}_dispatch")
-        self.builder.branch(dispatch_bb)
-
-        # ---- dispatch: switch ----
-        self.builder.position_at_end(dispatch_bb)
-        id_val = self.builder.load(id_slot, name=f"{disp_name}_id_load")
-
-        bad_bb = disp_fn.append_basic_block(name=f"{disp_name}_bad")
-        sw = self.builder.switch(id_val, bad_bb)
-
-        member_bb = {}
-        for idx, f in enumerate(funcs):
-            bb = disp_fn.append_basic_block(name=f"{disp_name}_{f.name}")
-            sw.add_case(ir.Constant(self.i32_ty, idx), bb)
-            member_bb[f.name] = bb
-
-        self.builder.position_at_end(bad_bb)
-        self.builder.unreachable()
-
-        old_scc_slots = getattr(self, '_current_scc_slots', None)
-        old_scc_ids = getattr(self, '_current_scc_ids', None)
-        old_scc_id_slot = getattr(self, '_current_scc_id_slot', None)
-        old_scc_dispatch = getattr(self, '_current_scc_dispatch_bb', None)
-
-        self._current_scc_slots = {f.name: slots for f in funcs}
-        self._current_scc_ids = {f.name: idx for idx, f in enumerate(funcs)}
-        self._current_scc_id_slot = id_slot
-        self._current_scc_dispatch_bb = dispatch_bb
-
-        # ---- Corpos de cada membro ----
-        for idx, f in enumerate(funcs):
-            self.builder.position_at_end(member_bb[f.name])
-
-            old_sym = self.symbol_table
-            old_vt = self.var_types
-            old_current = getattr(self, 'current_func_name', None)
-
-            # NOVO: reset per-membro. Sem isso, defers pendentes de um
-            # membro "vazam" para o próximo (ex: b emite `A` porque `a`
-            # deixou [A] no stack global).
-            self.defer_stack = []
-
-            self.symbol_table = {p.name: slots[i] for i, p in enumerate(f.params)}
-            self.var_types = {p.name: p.type_ann for p in f.params}
-            self.current_func_name = f.name
-
-            for stmt in f.body:
-                if self.builder.block.is_terminated:
-                    break
-                self.visit(stmt)
-
-            if not self.builder.block.is_terminated:
-                self._emit_all_defers()
-            if not self.builder.block.is_terminated:
-                if ret_ty == self.void_ty:
-                    self.builder.ret_void()
-                elif isinstance(ret_ty, ir.PointerType):
-                    self.builder.ret(ir.Constant(ret_ty, None))
-                else:
-                    self.builder.ret(ir.Constant(ret_ty, 0))
-
-            self.symbol_table = old_sym
-            self.var_types = old_vt
-            self.current_func_name = old_current
-
-        self._current_scc_slots = old_scc_slots
-        self._current_scc_ids = old_scc_ids
-        self._current_scc_id_slot = old_scc_id_slot
-        self._current_scc_dispatch_bb = old_scc_dispatch
-
-        # ---- Wrappers ----
-        for idx, f in enumerate(funcs):
-            func, func_type = self.functions_table[f.name]
-            wbb = func.append_basic_block(name=f"{f.name}_wrap")
-            self.builder = ir.IRBuilder(wbb)
-            call_args = [ir.Constant(self.i32_ty, idx)] + list(func.args)
-            result = self.builder.call(disp_fn, call_args, name=f"{f.name}_scc_call")
-            if func_type.return_type == self.void_ty:
-                self.builder.ret_void()
-            else:
-                self.builder.ret(result)
-
-        # Restaura estado
-        self.defer_stack = old_defer_stack_outer
-        self.builder = old_builder
-
+    # ==================================================================
+    # Registro de structs/enums/funções
+    # ==================================================================
     def register_struct(self, node):
         if node.name in self.struct_types:
             return
@@ -575,9 +398,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
     def register_enum(self, node):
         if node.name in self.struct_types:
             return
-        # Layout: { i32 tag, i64 payload_0, i64 payload_1, ..., i64 payload_{N-1} }
-        # N = max payloads entre todas as variantes. Para enums de 1 payload
-        # (Result, Option), o layout é idêntico ao antigo {i32, i64}.
+        # Layout: { i32 tag, i64 payload_0, ..., i64 payload_{N-1} }
         struct_ty = self.module.context.get_identified_type(node.name)
         self.struct_types[node.name] = struct_ty
         self.struct_defs[node.name] = node
@@ -630,6 +451,9 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
             return "ptr"
         return "unknown"
 
+    # ==================================================================
+    # Sprint 7a: materialize_generic + inferência de type_map
+    # ==================================================================
     def materialize_generic(self, gen_def, type_map):
         """Gera cópia especializada de uma função genérica.
 
@@ -638,7 +462,6 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         """
         type_params = getattr(gen_def, 'type_params', None) or []
 
-        # Mangled: nome + args normalizados
         def _sanitize(s):
             return s.replace("<", "_").replace(">", "").replace(",", "_").replace(" ", "")
         suffix_parts = [_sanitize(type_map.get(tp, "unknown")) for tp in type_params]
@@ -647,7 +470,6 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         if mangled in self.functions_table:
             return mangled
 
-        # Resolve cada tipo Lumina substituindo type params
         def resolve_lumina(name):
             return substitute_generic(name, type_map)
 
@@ -671,7 +493,9 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         old_current = getattr(self, 'current_func_name', None)
         old_body_bb = getattr(self, 'current_body_bb', None)
         old_defer_stack = getattr(self, 'defer_stack', None)
+        old_safe = getattr(self, '_safe_mode', False)
         self.defer_stack = []
+        self._safe_mode = False   # genéricos não têm attrs
 
         entry_bb = func.append_basic_block(name=f"{mangled}_entry")
         body_bb = func.append_basic_block(name=f"{mangled}_body")
@@ -687,8 +511,6 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
             ptr = self.builder.alloca(p_ty, name=p_name)
             self.builder.store(func.args[i], ptr)
             self.symbol_table[p_name] = ptr
-            # IMPORTANTE: `var_types` guarda o tipo Lumina JÁ SUBSTITUÍDO,
-            # para que `b.data = val` (dentro do corpo) saiba o tipo.
             self.var_types[p_name] = param_lumina
 
         self.builder.branch(body_bb)
@@ -701,10 +523,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
             self.visit(stmt)
 
         if not self.builder.block.is_terminated:
-            # NOVO (Sprint 8b): emite defers pendentes antes do ret de
-            # fallthrough.
             self._emit_all_defers()
-
         if not self.builder.block.is_terminated:
             if func_type.return_type == self.void_ty:
                 self.builder.ret_void()
@@ -719,14 +538,12 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         self.var_types = old_var_types
         self.current_func_name = old_current
         self.current_body_bb = old_body_bb
+        self._safe_mode = old_safe
 
         return mangled
 
     def _infer_arg_type_lumina(self, arg_node):
-        """Best-effort: infere tipo Lumina de um argumento.
-
-        Retorna str ou None.
-        """
+        """Best-effort: infere tipo Lumina de um argumento."""
         from ..ast import VariableExpr, NumberExpr, StringExpr, BoolExpr, CallExpr, StructLiteralExpr
         if isinstance(arg_node, VariableExpr):
             return self.var_types.get(arg_node.name)
@@ -766,6 +583,220 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
                 return {}
         return type_map
 
+    # ==================================================================
+    # Sprint 8c: SCCs de tail calls + dispatcher
+    # ==================================================================
+    def _compute_tail_call_sccs(self, ast):
+        """SCCs do grafo de tail calls entre funções top-level.
+
+        Retorna `[[name1, name2, ...], ...]` — cada sub-lista é um
+        SCC com >= 2 membros. Self-recursion (tamanho 1) é tratada
+        pelo `_try_tail_call` existente e NÃO aparece aqui.
+        """
+        from ..ast import (
+            CallExpr, VariableExpr, ReturnStmt,
+            IfStmt, WhileStmt, ForStmt, MatchStmt, DeferStmt, BenchStmt,
+        )
+
+        func_names = set()
+        for decl in ast:
+            if isinstance(decl, AstFunction) and not getattr(decl, 'type_params', None):
+                func_names.add(decl.name)
+
+        graph = {n: set() for n in func_names}
+
+        def walk_tail(stmts, current):
+            for s in stmts:
+                if s is None:
+                    continue
+                if isinstance(s, ReturnStmt) and len(s.values) == 1:
+                    v = s.values[0]
+                    if isinstance(v, CallExpr) and isinstance(v.callee, VariableExpr):
+                        if v.callee.name in func_names:
+                            graph[current].add(v.callee.name)
+                if isinstance(s, IfStmt):
+                    walk_tail(s.then_body, current)
+                    if s.else_body:
+                        walk_tail(s.else_body, current)
+                elif isinstance(s, (WhileStmt, ForStmt, DeferStmt, BenchStmt)):
+                    walk_tail(s.body, current)
+                elif isinstance(s, MatchStmt):
+                    for c in s.cases:
+                        if len(c) >= 4 and isinstance(c[3], list):
+                            walk_tail(c[3], current)
+                    if s.default:
+                        walk_tail(s.default, current)
+
+        for decl in ast:
+            if isinstance(decl, AstFunction) and not getattr(decl, 'type_params', None):
+                walk_tail(decl.body, decl.name)
+
+        # Kosaraju
+        visited = set()
+        order = []
+        def dfs1(n):
+            visited.add(n)
+            for m in graph.get(n, ()):
+                if m not in visited:
+                    dfs1(m)
+            order.append(n)
+
+        for n in func_names:
+            if n not in visited:
+                dfs1(n)
+
+        rgraph = {n: set() for n in func_names}
+        for n, ns in graph.items():
+            for m in ns:
+                rgraph[m].add(n)
+
+        visited = set()
+        sccs = []
+        def dfs2(n, comp):
+            visited.add(n)
+            comp.append(n)
+            for m in rgraph.get(n, ()):
+                if m not in visited:
+                    dfs2(m, comp)
+
+        for n in reversed(order):
+            if n not in visited:
+                comp = []
+                dfs2(n, comp)
+                sccs.append(comp)
+
+        return [scc for scc in sccs if len(scc) > 1]
+
+    def _can_dispatcher(self, funcs):
+        """Todos os membros do SCC têm assinatura compatível?"""
+        if not funcs:
+            return False
+        sig0 = (
+            tuple(p.type_ann for p in funcs[0].params),
+            funcs[0].return_type,
+        )
+        for f in funcs[1:]:
+            sig = (
+                tuple(p.type_ann for p in f.params),
+                f.return_type,
+            )
+            if sig != sig0:
+                return False
+        return True
+
+    def _materialize_scc_dispatcher(self, scc_id, funcs):
+        """Gera dispatcher + wrappers para um SCC de mutual recursion."""
+        sample = funcs[0]
+        param_tys = [self.get_llvm_param_type(p.type_ann) for p in sample.params]
+        ret_ty = self.get_llvm_param_type(sample.return_type)
+
+        disp_name = f"__scc_{scc_id}"
+        disp_fn_ty = ir.FunctionType(ret_ty, [self.i32_ty] + param_tys)
+        disp_fn = ir.Function(self.module, disp_fn_ty, name=disp_name)
+
+        old_builder = self.builder
+        old_defer_stack_outer = getattr(self, 'defer_stack', None)
+        self.defer_stack = []
+
+        # entry: aloca slots e current_id
+        entry_bb = disp_fn.append_basic_block(name=f"{disp_name}_entry")
+        self.builder = ir.IRBuilder(entry_bb)
+
+        slots = []
+        for i, p in enumerate(sample.params):
+            slot = self.builder.alloca(param_tys[i], name=f"scc_slot_{i}_{p.name}")
+            self.builder.store(disp_fn.args[i + 1], slot)
+            slots.append(slot)
+
+        id_slot = self.builder.alloca(self.i32_ty, name=f"{disp_name}_id")
+        self.builder.store(disp_fn.args[0], id_slot)
+
+        dispatch_bb = disp_fn.append_basic_block(name=f"{disp_name}_dispatch")
+        self.builder.branch(dispatch_bb)
+
+        # dispatch: switch
+        self.builder.position_at_end(dispatch_bb)
+        id_val = self.builder.load(id_slot, name=f"{disp_name}_id_load")
+
+        bad_bb = disp_fn.append_basic_block(name=f"{disp_name}_bad")
+        sw = self.builder.switch(id_val, bad_bb)
+
+        member_bb = {}
+        for idx, f in enumerate(funcs):
+            bb = disp_fn.append_basic_block(name=f"{disp_name}_{f.name}")
+            sw.add_case(ir.Constant(self.i32_ty, idx), bb)
+            member_bb[f.name] = bb
+
+        self.builder.position_at_end(bad_bb)
+        self.builder.unreachable()
+
+        old_scc_slots = getattr(self, '_current_scc_slots', None)
+        old_scc_ids = getattr(self, '_current_scc_ids', None)
+        old_scc_id_slot = getattr(self, '_current_scc_id_slot', None)
+        old_scc_dispatch = getattr(self, '_current_scc_dispatch_bb', None)
+
+        self._current_scc_slots = {f.name: slots for f in funcs}
+        self._current_scc_ids = {f.name: idx for idx, f in enumerate(funcs)}
+        self._current_scc_id_slot = id_slot
+        self._current_scc_dispatch_bb = dispatch_bb
+
+        # Corpos de cada membro
+        for idx, f in enumerate(funcs):
+            self.builder.position_at_end(member_bb[f.name])
+
+            old_sym = self.symbol_table
+            old_vt = self.var_types
+            old_current = getattr(self, 'current_func_name', None)
+
+            # Reset per-membro
+            self.defer_stack = []
+
+            self.symbol_table = {p.name: slots[i] for i, p in enumerate(f.params)}
+            self.var_types = {p.name: p.type_ann for p in f.params}
+            self.current_func_name = f.name
+
+            for stmt in f.body:
+                if self.builder.block.is_terminated:
+                    break
+                self.visit(stmt)
+
+            if not self.builder.block.is_terminated:
+                self._emit_all_defers()
+            if not self.builder.block.is_terminated:
+                if ret_ty == self.void_ty:
+                    self.builder.ret_void()
+                elif isinstance(ret_ty, ir.PointerType):
+                    self.builder.ret(ir.Constant(ret_ty, None))
+                else:
+                    self.builder.ret(ir.Constant(ret_ty, 0))
+
+            self.symbol_table = old_sym
+            self.var_types = old_vt
+            self.current_func_name = old_current
+
+        self._current_scc_slots = old_scc_slots
+        self._current_scc_ids = old_scc_ids
+        self._current_scc_id_slot = old_scc_id_slot
+        self._current_scc_dispatch_bb = old_scc_dispatch
+
+        # Wrappers
+        for idx, f in enumerate(funcs):
+            func, func_type = self.functions_table[f.name]
+            wbb = func.append_basic_block(name=f"{f.name}_wrap")
+            self.builder = ir.IRBuilder(wbb)
+            call_args = [ir.Constant(self.i32_ty, idx)] + list(func.args)
+            result = self.builder.call(disp_fn, call_args, name=f"{f.name}_scc_call")
+            if func_type.return_type == self.void_ty:
+                self.builder.ret_void()
+            else:
+                self.builder.ret(result)
+
+        self.defer_stack = old_defer_stack_outer
+        self.builder = old_builder
+
+    # ==================================================================
+    # Corpo de função (com TCO + defers + @safe)
+    # ==================================================================
     def generate_function_body(self, node):
         func, func_type = self.functions_table[node.name]
 
@@ -775,6 +806,12 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         old_var_types = self.var_types
         old_body_bb = getattr(self, 'current_body_bb', None)
         old_defer_stack = getattr(self, 'defer_stack', None)
+        old_safe = getattr(self, '_safe_mode', False)
+        self.defer_stack = []
+
+        # Sprint 9a: ativa modo @safe se a função tem @safe
+        attrs = getattr(node, 'attrs', None) or []
+        self._safe_mode = 'safe' in attrs
 
         # entry_bb: alloca + store dos args + branch para body_bb.
         # body_bb: onde o corpo é emitido. TCO salta de volta para cá.
@@ -784,7 +821,6 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         self.builder = ir.IRBuilder(entry_bb)
         self.symbol_table = {}
         self.var_types = {}
-        self.defer_stack = []   # NOVO: pilha de defers desta função
 
         for i, p in enumerate(node.params):
             p_name, p_type = p.name, p.type_ann
@@ -794,12 +830,13 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
             self.symbol_table[p_name] = ptr
             self.var_types[p_name] = p_type
 
+        # Injeta GC_init() no topo de main, antes de qualquer alocação
+        # do usuário. Garante que a GC está pronta quando o programa começa.
         if self.use_gc and node.name == "main":
             self.builder.call(self.gc_init, [], name="gc_init_call")
 
         self.builder.branch(body_bb)
 
-        # Corpo fica em body_bb. Salva para TCO saber onde voltar.
         self.builder.position_at_end(body_bb)
         self.current_body_bb = body_bb
 
@@ -809,26 +846,31 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
             self.visit(stmt)
 
         if not self.builder.block.is_terminated:
-            # NOVO: emite defers pendentes (top-level do body) antes do
-            # ret implícito. Blocos aninhados já consumiram os seus.
+            # Sprint 8b: emite defers pendentes antes do ret de
+            # fallthrough. Cobre `fn f(): defer print("x")` sem
+            # `return` explícito.
             self._emit_all_defers()
 
-            if not self.builder.block.is_terminated:
-                if func_type.return_type == self.void_ty:
-                    self.builder.ret_void()
-                elif isinstance(func_type.return_type, ir.IdentifiedStructType):
-                    zero_fields = [ir.Constant(ft, 0) for ft in func_type.return_type.elements]
-                    self.builder.ret(ir.Constant(func_type.return_type, zero_fields))
-                elif isinstance(func_type.return_type, ir.PointerType):
-                    self.builder.ret(ir.Constant(func_type.return_type, None))
-                else:
-                    self.builder.ret(ir.Constant(func_type.return_type, 0))
+        if not self.builder.block.is_terminated:
+            if func_type.return_type == self.void_ty:
+                self.builder.ret_void()
+            elif isinstance(func_type.return_type, ir.IdentifiedStructType):
+                zero_fields = [ir.Constant(ft, 0) for ft in func_type.return_type.elements]
+                self.builder.ret(ir.Constant(func_type.return_type, zero_fields))
+            elif isinstance(func_type.return_type, ir.PointerType):
+                self.builder.ret(ir.Constant(func_type.return_type, None))
+            else:
+                self.builder.ret(ir.Constant(func_type.return_type, 0))
 
         self.current_body_bb = old_body_bb
-        self.defer_stack = old_defer_stack   # NOVO: restaura
+        self.defer_stack = old_defer_stack
         self.symbol_table = old_symtab
         self.var_types = old_var_types
+        self._safe_mode = old_safe
 
+    # ==================================================================
+    # API de baixo nível
+    # ==================================================================
     def codegen_stmt(self, node):
         return self.visit(node)
 

@@ -438,6 +438,48 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         self.functions_table[node.name] = (func, func_type)
         self.function_defs[node.name] = node
 
+        # Sprint 10: aplica atributos LLVM por função
+        attrs = getattr(node, 'attrs', None) or []
+        self._apply_llvm_attrs(func, attrs)
+
+    def _apply_llvm_attrs(self, func, attrs):
+        """Aplica atributos LLVM a uma função (`@inline`, `@noinline`,
+        `@cold`, `@hot`).
+
+        Attrs devem ser uma lista de strings (Sprint 9a — `parse_function`
+        passa strings, não tuples). Aceita também tuple por robustez.
+        """
+        # Normaliza: aceita ['inline'] ou [('inline', [])]
+        names = set()
+        for a in attrs:
+            if isinstance(a, tuple):
+                names.add(a[0])
+            else:
+                names.add(a)
+
+        if 'inline' in names and 'noinline' in names:
+            from ..errors import LuminaError
+            raise LuminaError(
+                f"Função '{func.name}' tem @inline e @noinline — conflitante.",
+                filename="<codegen>",
+                line=0, col=0, source_code="",
+            )
+
+        if 'inline' in names:
+            func.attributes.add('alwaysinline')
+        if 'noinline' in names:
+            func.attributes.add('noinline')
+        if 'cold' in names:
+            func.attributes.add('cold')
+        if 'hot' in names:
+            # NOTA: o LLVM tem `hot` como STRING attribute, não enum.
+            # O llvmlite não expõe API para string attributes em
+            # `Function.attributes`. Mapeamos `@hot` para `inlinehint`
+            # — mesma intenção semântica ("função quente, boa candidata
+            # a inline"). Se o llvmlite ganhar suporte futuro, trocar
+            # por string `"hot"`.
+            func.attributes.add('inlinehint')
+
     def _llvm_ty_to_str(self, t):
         if t == self.i64_ty:
             return "int"
@@ -485,6 +527,10 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         func = ir.Function(self.module, func_type, name=mangled)
         self.functions_table[mangled] = (func, func_type)
         self.function_defs[mangled] = gen_def
+
+        # Sprint 10: aplica attrs também na cópia especializada
+        attrs = getattr(gen_def, 'attrs', None) or []
+        self._apply_llvm_attrs(func, attrs)
 
         # Salva/restaura estado
         old_builder = self.builder

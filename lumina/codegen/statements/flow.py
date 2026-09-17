@@ -297,11 +297,17 @@ class FlowMixin:
             self.builder.branch(continue_bb)
 
     def _try_tail_call(self, node):
-        """TCO para self-recursion direta.
+        """TCO para self-recursion OU mutual recursion (SCC).
 
-        Emite os defers pendentes antes do branch de volta ao
-        body_bb — mesma semântica de `return` normal (Sprint 8b).
-        O corpo re-executa e re-empilha seus defers a cada iteração.
+        Caso 1 (SCC): estamos dentro de um dispatcher de mutual
+        recursion e o alvo é outro membro. Setamos current_id +
+        args e branch de volta para dispatch_bb.
+
+        Caso 2 (self): comportamento existente — self-recursion
+        direta. Avalia args, sobrescreve slots dos params, branch
+        para body_bb.
+
+        Emite defers pendentes antes de qualquer branch (Sprint 8d).
         """
         from ...ast import CallExpr as _CallExpr, VariableExpr as _VarExpr
         if len(node.values) != 1:
@@ -311,7 +317,35 @@ class FlowMixin:
             return False
         if not isinstance(val.callee, _VarExpr):
             return False
-        if val.callee.name != getattr(self, 'current_func_name', None):
+        target = val.callee.name
+
+        # ---- Caso 1: mutual TCO ----
+        scc_slots = getattr(self, '_current_scc_slots', None)
+        if scc_slots is not None and target in scc_slots:
+            arg_vals = [self.visit(a) for a in val.args]
+            slots = scc_slots[target]
+            for i, slot_ptr in enumerate(slots):
+                expected = slot_ptr.type.pointee
+                a = arg_vals[i]
+                if a.type != expected:
+                    a = self._coerce_arg(a, expected, suffix=f"_scc{i}")
+                self.builder.store(a, slot_ptr)
+
+            target_id = self._current_scc_ids[target]
+            self.builder.store(
+                ir.Constant(self.i32_ty, target_id),
+                self._current_scc_id_slot,
+            )
+
+            self._emit_all_defers()
+            if self.builder.block.is_terminated:
+                return True
+
+            self.builder.branch(self._current_scc_dispatch_bb)
+            return True
+
+        # ---- Caso 2: self-recursion (código existente) ----
+        if target != getattr(self, 'current_func_name', None):
             return False
         body_bb = getattr(self, 'current_body_bb', None)
         if body_bb is None:
@@ -340,14 +374,8 @@ class FlowMixin:
                 return False
             self.builder.store(arg_vals[i], ptr)
 
-        # NOVO (Sprint 8d): emite defers pendentes antes do branch de
-        # TCO. Eles representam "o frame está sendo encerrado"
-        # semanticamente — mesma regra de `return self(...)` sem TCO.
-        # Limpa a pilha para que a próxima iteração comece com estado
-        # fresco (o corpo re-executa `defer ...` que re-empilha).
         self._emit_all_defers()
         if self.builder.block.is_terminated:
-            # defer fez return/abort — já terminou o bloco.
             return True
 
         self.builder.branch(body_bb)

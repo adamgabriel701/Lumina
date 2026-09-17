@@ -500,12 +500,25 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
                 struct_def = self.struct_defs[cond_type]
                 if hasattr(struct_def, 'variants'):
                     if not node.default:
-                        covered_variants = [c[0] for c in node.cases]
+                        # NOVO: `c[0]` pode ser lista (multi-pattern `case A | B:`).
+                        # Achata tudo para uma lista plana de nomes cobertos.
+                        covered = []
+                        for c in node.cases:
+                            v = c[0]
+                            if isinstance(v, list):
+                                covered.extend(v)
+                            elif v is not None:  # `_` wildcard → variante None
+                                covered.append(v)
+
                         all_variants = [v[0] for v in struct_def.variants]
-                        if not set(all_variants).issubset(set(covered_variants)):
+                        missing = set(all_variants) - set(covered)
+                        # Wildcard `_` em qualquer posição cobre o resto
+                        has_wildcard = any(c[0] is None for c in node.cases)
+                        if missing and not has_wildcard:
                             raise LuminaError(
                                 "Match não exaustivo. Faltam variantes ou um ramo 'default'.",
-                                self.filename, getattr(node, 'line', 0), getattr(node, 'col', 0), self.source_code,
+                                self.filename, getattr(node, 'line', 0),
+                                getattr(node, 'col', 0), self.source_code,
                             )
 
         super().analyze_stmt(node)

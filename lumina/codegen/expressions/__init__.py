@@ -7,7 +7,7 @@ from .members import MembersMixin
 from .calls import CallsMixin
 from .aggregates import AggregatesMixin
 from .match import MatchExprMixin
-
+from .macros import MacrosMixin
 
 class ExpressionCodegen(
     LiteralsMixin,
@@ -16,10 +16,10 @@ class ExpressionCodegen(
     CallsMixin,
     AggregatesMixin,
     MatchExprMixin,
+    MacrosMixin,      # NOVO
     NodeVisitor,
 ):
     """Combina todos os visitors de expressão via MRO."""
 
     def generic_visit(self, node):
-        # Fallback silencioso: nós sem visit_X retornam 0 (i64).
         return ir.Constant(self.i64_ty, 0)

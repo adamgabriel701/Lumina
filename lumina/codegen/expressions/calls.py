@@ -51,6 +51,11 @@ class CallsMixin:
         return ir.Constant(ty, 0)
 
     def codegen_user_call(self, node, func_name):
+        # NOVO (Sprint 9b): macro → expande AST no call site
+        if func_name in getattr(self, 'macros', {}):
+            macro_fn = self.macros[func_name]
+            expanded = self._expand_macro_expr(macro_fn, node.args)
+            return self.visit(expanded)
         # 1. Chamada indireta via variável local (function pointer / lambda)
         if (func_name not in self.functions_table
                 and func_name not in self.builtin_functions

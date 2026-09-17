@@ -54,7 +54,8 @@ class MembersMixin:
         return ir.Constant(self.i64_ty, 0)
 
     def visit_MemberExpr(self, node):
-        """Acesso a campo, com suporte a safe navigation (`?.`)."""
+        """Acesso a campo. Com `?.` (is_safe) OU `@safe` na função,
+        faz null check e retorna 0 se o ponteiro for nil."""
         obj_val = self.visit(node.obj)
 
         if not (isinstance(obj_val.type, ir.PointerType)
@@ -66,14 +67,17 @@ class MembersMixin:
         if field_idx is None:
             return ir.Constant(self.i64_ty, 0)
 
-        if not node.is_safe:
+        # Safe se `?.` explícito OU modo @safe ativo
+        safe = node.is_safe or getattr(self, '_safe_mode', False)
+
+        if not safe:
             elem_ptr = self.builder.gep(
                 obj_val,
                 [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, field_idx)],
             )
             return self.builder.load(elem_ptr, name=node.member + "_load")
 
-        # Safe nav: se obj_val for null, retorna 0; senão, faz o load
+        # Null check
         null_ptr = ir.Constant(obj_val.type, None)
         is_null = self.builder.icmp_signed("==", obj_val, null_ptr, name="safe_nav_isnull")
 
@@ -104,30 +108,50 @@ class MembersMixin:
         phi.add_incoming(field_val, ok_bb)
         return phi
 
-    # ------------------------------------------------------------------
-    # Index normal: arr[i]
-    # ------------------------------------------------------------------
     def visit_IndexExpr(self, node):
-        """Index simples: `arr[i]`.
-
-        Slicing (`arr[a..b]`) é tratado em `visit_SliceExpr` — nó dedicado.
-        """
+        """Index `arr[i]`. Com `@safe`, checa nil do array."""
         arr_val = self.visit(node.array)
         idx_val = self.visit(node.index)
 
-        if isinstance(arr_val.type, ir.PointerType):
-            if isinstance(arr_val.type.pointee, ir.ArrayType):
-                elem_ptr = self.builder.gep(arr_val, [ir.Constant(self.i32_ty, 0), idx_val])
-                raw = self.builder.load(elem_ptr, name="arr_idx_load")
-            else:
-                elem_ptr = self.builder.gep(arr_val, [idx_val])
-                raw = self.builder.load(elem_ptr, name="ptr_idx_load")
+        if not isinstance(arr_val.type, ir.PointerType):
+            return ir.Constant(self.i64_ty, 0)
 
-            # Normaliza para i64 — cobre alloc_bytes (i8*), str (i8*),
-            # arrays de bool (i1*) e de ponteiros.
-            return self._normalize_loaded(raw, name_hint="idx")
+        # Em modo @safe, checa nil
+        if getattr(self, '_safe_mode', False):
+            null_ptr = ir.Constant(arr_val.type, None)
+            is_null = self.builder.icmp_signed("==", arr_val, null_ptr, name="safe_idx_isnull")
 
-        return ir.Constant(self.i64_ty, 0)
+            null_bb = self.builder.append_basic_block(name="safe_idx_null")
+            ok_bb = self.builder.append_basic_block(name="safe_idx_ok")
+            end_bb = self.builder.append_basic_block(name="safe_idx_end")
+
+            self.builder.cbranch(is_null, null_bb, ok_bb)
+
+            self.builder.position_at_end(null_bb)
+            self.builder.branch(end_bb)
+
+            self.builder.position_at_end(ok_bb)
+            raw = self._load_index(arr_val, idx_val)
+            self.builder.branch(end_bb)
+
+            self.builder.position_at_end(end_bb)
+            default_val = ir.Constant(self.i64_ty, 0)
+            phi = self.builder.phi(self.i64_ty, name="safe_idx_result")
+            phi.add_incoming(default_val, null_bb)
+            phi.add_incoming(raw, ok_bb)
+            return phi
+
+        return self._load_index(arr_val, idx_val)
+
+    def _load_index(self, arr_val, idx_val):
+        """Helper: load real do index (sem null check)."""
+        if isinstance(arr_val.type.pointee, ir.ArrayType):
+            elem_ptr = self.builder.gep(arr_val, [ir.Constant(self.i32_ty, 0), idx_val])
+            raw = self.builder.load(elem_ptr, name="arr_idx_load")
+        else:
+            elem_ptr = self.builder.gep(arr_val, [idx_val])
+            raw = self.builder.load(elem_ptr, name="ptr_idx_load")
+        return self._normalize_loaded(raw, name_hint="idx")
 
     # ------------------------------------------------------------------
     # Slicing: arr[a..b], arr[..b], arr[a..], arr[..]

@@ -3,240 +3,51 @@ from llvmlite import ir
 
 class MatchStmtMixin:
 
+    # ==================================================================
+    # Dispatcher
+    # ==================================================================
     def visit_MatchStmt(self, node):
-        # MatchStmt.cases é 4-tuple: (variant, bindings, guard, body).
-        # bindings pode ser None, [name] ou [name1, name2].
-        has_guard = any(len(c) >= 4 and c[2] is not None for c in node.cases)
-
         cond_val = self.visit(node.condition)
         end_bb = self.builder.append_basic_block(name="match_end")
+        self._match_chain(node, cond_val, end_bb)
 
-        if has_guard:
-            self._codegen_match_with_guard(node, cond_val, end_bb)
-            return
+    # ==================================================================
+    # Cadeia de branches por case (common a int/enum/str)
+    #
+    # Estrutura por case:
+    #   test_bb: avalia pattern_match
+    #   bind_bb: extrai bindings (só quando casou o pattern)
+    #   body_bb: executa corpo (só quando guard passou, se houver)
+    #   next_bb: próximo case
+    #
+    # IMPORTANTE: bindings são extraídos ANTES do guard ser avaliado.
+    # Isso permite `case Circle(r) if r > 10` e `case s if s.contains(...)`.
+    #
+    # NOTA: optamos por chain sequencial em vez de `switch` (jump table).
+    # Para um compilador em desenvolvimento, simplicidade > micro-otimização.
+    # Quando performance importar, adicionar fast-path: se todos os cases
+    # são int literals sem guard/binding, emitir `switch`.
+    # ==================================================================
+    def _match_chain(self, node, cond_val, end_bb):
+        kind = self._classify_match_kind(cond_val)
 
-        # Caso 1: match sobre i64
-        if cond_val.type == self.i64_ty:
-            self._codegen_match_int(node, cond_val, end_bb)
-            return
-
-        # Caso 2: match sobre enum {i32 tag, i64 payload_0, ...}
-        if isinstance(cond_val.type, ir.PointerType) and isinstance(cond_val.type.pointee, ir.IdentifiedStructType):
-            struct_name = cond_val.type.pointee.name
-            if struct_name in self.struct_defs and hasattr(self.struct_defs[struct_name], 'variants'):
-                self._codegen_match_enum(node, cond_val, end_bb)
-                return
-
-        # Caso 3: match sobre str (i8*)  ← NOVO
-        if cond_val.type == self.voidptr_ty:
-            self._codegen_match_str(node, cond_val, end_bb)
-            return
-
-        # Fallback: tipo desconhecido. Ainda assim, garante terminador
-        # e posiciona no end_bb para não deixar IR inválido.
-        if not self.builder.block.is_terminated:
-            self.builder.branch(end_bb)
-        self.builder.position_at_end(end_bb)
-
-    # ------------------------------------------------------------------
-    # Match em i64
-    # ------------------------------------------------------------------
-    def _codegen_match_int(self, node, cond_val, end_bb):
-        default_bb = self.builder.append_basic_block(name="match_default")
-        sw = self.builder.switch(cond_val, default_bb)
-
-        for case in node.cases:
-            if len(case) == 4:
-                val_node, var_name, _guard, body = case
-            else:
-                val_node, var_name, body = case
-
-            if isinstance(val_node, str):
-                try:
-                    val = ir.Constant(self.i64_ty, int(val_node))
-                except (ValueError, TypeError):
-                    continue
-            else:
-                val = self.visit(val_node)
-
-            case_bb = self.builder.append_basic_block(name="match_case")
-            sw.add_case(val, case_bb)
-            self.builder.position_at_end(case_bb)
-
-            if var_name:
-                if isinstance(var_name, list):
-                    for name in var_name:
-                        var_ptr = self.builder.alloca(self.i64_ty, name=name)
-                        self.symbol_table[name] = var_ptr
-                else:
-                    var_ptr = self.builder.alloca(self.i64_ty, name=var_name)
-                    self.symbol_table[var_name] = var_ptr
-
-            for stmt in body:
-                self.visit(stmt)
+        # Tipos não suportados em MatchStmt (ex: struct não-enum).
+        # Comportamento atual: no-op, vai direto para end_bb.
+        if kind == "unknown":
             if not self.builder.block.is_terminated:
                 self.builder.branch(end_bb)
+            self.builder.position_at_end(end_bb)
+            return
 
-        self.builder.position_at_end(default_bb)
-        if node.default:
-            for stmt in node.default:
-                self.visit(stmt)
-        if not self.builder.block.is_terminated:
-            self.builder.branch(end_bb)
-        self.builder.position_at_end(end_bb)
+        variant_map = self._build_variant_map(kind, cond_val)
 
-    # ------------------------------------------------------------------
-    # Match em enum
-    # ------------------------------------------------------------------
-    def _codegen_match_enum(self, node, cond_val, end_bb):
-        struct_name = cond_val.type.pointee.name
-        struct_def = self.struct_defs[struct_name]
-        variant_map = {v[0]: i for i, v in enumerate(struct_def.variants)}
-
-        tag_ptr = self.builder.gep(
-            cond_val,
-            [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 0)],
-            name="match_tag_ptr",
-        )
-        tag_val = self.builder.load(tag_ptr, name="match_tag")
-
-        default_bb = self.builder.append_basic_block(name="match_default")
-        sw = self.builder.switch(tag_val, default_bb)
-
-        for case in node.cases:
-            if len(case) == 4:
-                variant_name, var_name, _guard, body = case
-            else:
-                variant_name, var_name, body = case
-            if variant_name not in variant_map:
-                continue
-            case_idx = variant_map[variant_name]
-            case_bb = self.builder.append_basic_block(name=f"match_{variant_name.lower()}")
-            sw.add_case(ir.Constant(self.i32_ty, case_idx), case_bb)
-            self.builder.position_at_end(case_bb)
-
-            if var_name:
-                if isinstance(var_name, list):
-                    for i, name in enumerate(var_name):
-                        pp = self.builder.gep(
-                            cond_val,
-                            [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, i + 1)],
-                            name=f"payload_ptr_{name}",
-                        )
-                        payload_val = self.builder.load(pp, name=f"payload_{name}")
-                        var_ptr = self.builder.alloca(self.i64_ty, name=name)
-                        self.builder.store(payload_val, var_ptr)
-                        self.symbol_table[name] = var_ptr
-                else:
-                    payload_ptr = self.builder.gep(
-                        cond_val,
-                        [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 1)],
-                        name="payload_ptr",
-                    )
-                    payload_val = self.builder.load(payload_ptr, name="payload_load")
-                    var_ptr = self.builder.alloca(self.i64_ty, name=var_name)
-                    self.builder.store(payload_val, var_ptr)
-                    self.symbol_table[var_name] = var_ptr
-
-            for stmt in body:
-                self.visit(stmt)
-            if not self.builder.block.is_terminated:
-                self.builder.branch(end_bb)
-
-        self.builder.position_at_end(default_bb)
-        if node.default:
-            for stmt in node.default:
-                self.visit(stmt)
-        if not self.builder.block.is_terminated:
-            self.builder.branch(end_bb)
-        self.builder.position_at_end(end_bb)
-
-    # ------------------------------------------------------------------
-    # Match em str (i8*)  ← NOVO
-    # ------------------------------------------------------------------
-    def _codegen_match_str(self, node, cond_val, end_bb):
-        """Match sobre string (i8*).
-
-        Estrutura por case (4 blocos):
-            test_bb: strcmp (pattern_match)
-            bind_bb: bind do nome do case (self-binding)
-            body_bb: corpo
-            next_bb: próximo case
-
-        O binding acontece ANTES do guard — necessário para
-        `case s if s.contains("...")`.
-        """
-        strcmp_fn = self.strcmp
-
-        next_bb = self.builder.append_basic_block(name="match_str_next_0")
+        next_bb = self.builder.append_basic_block(name="match_next_0")
         self.builder.branch(next_bb)
 
         for i, case in enumerate(node.cases):
-            if len(case) == 4:
-                variant, binding, guard, body = case
-            else:
-                variant, binding, body = case
-                guard = None
-
-            test_bb = self.builder.append_basic_block(name=f"match_str_test_{i}")
-            bind_bb = self.builder.append_basic_block(name=f"match_str_bind_{i}")
-            body_bb = self.builder.append_basic_block(name=f"match_str_body_{i}")
-            next_next_bb = self.builder.append_basic_block(name=f"match_str_next_{i + 1}")
-
-            self.builder.position_at_end(next_bb)
-            self.builder.branch(test_bb)
-
-            # --- test_bb: strcmp ---
-            self.builder.position_at_end(test_bb)
-
-            if variant is None:
-                pattern_match = ir.Constant(ir.IntType(1), 1)
-            else:
-                if isinstance(variant, str):
-                    case_str = self.create_global_string(variant)
-                else:
-                    case_str = self.visit(variant)
-
-                cmp_result = self.builder.call(
-                    strcmp_fn, [cond_val, case_str], name=f"strcmp_{i}"
-                )
-                pattern_match = self.builder.icmp_signed(
-                    "==", cmp_result, ir.Constant(ir.IntType(32), 0),
-                    name=f"str_eq_{i}",
-                )
-
-            self.builder.cbranch(pattern_match, bind_bb, next_next_bb)
-
-            # --- bind_bb: extrai bindings ---
-            self.builder.position_at_end(bind_bb)
-            if binding:
-                names = binding if isinstance(binding, list) else [binding]
-                for name in names:
-                    var_ptr = self.builder.alloca(self.voidptr_ty, name=name)
-                    self.builder.store(cond_val, var_ptr)
-                    self.symbol_table[name] = var_ptr
-
-            if guard:
-                guard_val = self.visit(guard)
-                if guard_val.type != ir.IntType(1):
-                    guard_val = self.builder.icmp_signed(
-                        "!=", guard_val, ir.Constant(guard_val.type, 0),
-                        name=f"guard_cond_{i}",
-                    )
-                self.builder.cbranch(guard_val, body_bb, next_next_bb)
-            else:
-                self.builder.branch(body_bb)
-
-            # --- body_bb ---
-            self.builder.position_at_end(body_bb)
-            for stmt in body:
-                if self.builder.block.is_terminated:
-                    break
-                self.visit(stmt)
-            if not self.builder.block.is_terminated:
-                self.builder.branch(end_bb)
-
-            next_bb = next_next_bb
+            next_bb = self._emit_case(
+                i, case, kind, cond_val, variant_map, next_bb, end_bb
+            )
 
         # Default / fallthrough
         self.builder.position_at_end(next_bb)
@@ -250,214 +61,219 @@ class MatchStmtMixin:
 
         self.builder.position_at_end(end_bb)
 
-    # ------------------------------------------------------------------
-    # Helper: match com guards
-    # ------------------------------------------------------------------
-    def _is_enum_condition(self, cond_val):
-        return (
-            isinstance(cond_val.type, ir.PointerType)
-            and isinstance(cond_val.type.pointee, ir.IdentifiedStructType)
-            and cond_val.type.pointee.name in self.struct_defs
-            and hasattr(self.struct_defs[cond_val.type.pointee.name], 'variants')
+    # ==================================================================
+    # Emissão de um case
+    # ==================================================================
+    def _emit_case(self, i, case, kind, cond_val, variant_map, prev_next_bb, end_bb):
+        # Normaliza o tuple
+        if len(case) == 4:
+            variant, binding, guard, body = case
+        else:
+            variant, binding, body = case
+            guard = None
+
+        variant, binding = self._coerce_self_binding(variant, binding, cond_val)
+
+        test_bb  = self.builder.append_basic_block(name=f"match_test_{i}")
+        bind_bb  = self.builder.append_basic_block(name=f"match_bind_{i}")
+        body_bb  = self.builder.append_basic_block(name=f"match_body_{i}")
+        next_bb  = self.builder.append_basic_block(name=f"match_next_{i + 1}")
+
+        # --- test_bb: pattern_match ---
+        self.builder.position_at_end(prev_next_bb)
+        self.builder.branch(test_bb)
+
+        self.builder.position_at_end(test_bb)
+        pattern_match = self._compute_pattern_match(
+            kind, cond_val, variant, variant_map, i
         )
+        self.builder.cbranch(pattern_match, bind_bb, next_bb)
+
+        # --- bind_bb: extrai bindings (antes do guard) ---
+        self.builder.position_at_end(bind_bb)
+        self._emit_bindings(kind, cond_val, variant, binding)
+
+        if guard:
+            guard_val = self.visit(guard)
+            if guard_val.type != ir.IntType(1):
+                guard_val = self.builder.icmp_signed(
+                    "!=", guard_val, ir.Constant(guard_val.type, 0),
+                    name=f"guard_cond_{i}",
+                )
+            self.builder.cbranch(guard_val, body_bb, next_bb)
+        else:
+            self.builder.branch(body_bb)
+
+        # --- body_bb: corpo ---
+        self.builder.position_at_end(body_bb)
+        for stmt in body:
+            if self.builder.block.is_terminated:
+                break
+            self.visit(stmt)
+        if not self.builder.block.is_terminated:
+            self.builder.branch(end_bb)
+
+        return next_bb
+
+    # ==================================================================
+    # Classificação e maps
+    # ==================================================================
+    def _classify_match_kind(self, cond_val):
+        """Retorna 'int', 'enum', 'str' ou 'unknown'."""
+        if cond_val.type == self.i64_ty:
+            return "int"
+        if (isinstance(cond_val.type, ir.PointerType)
+                and isinstance(cond_val.type.pointee, ir.IdentifiedStructType)):
+            name = cond_val.type.pointee.name
+            if name in self.struct_defs and hasattr(self.struct_defs[name], 'variants'):
+                return "enum"
+        if cond_val.type == self.voidptr_ty:
+            return "str"
+        return "unknown"
+
+    def _build_variant_map(self, kind, cond_val):
+        if kind != "enum":
+            return {}
+        struct_name = cond_val.type.pointee.name
+        struct_def = self.struct_defs[struct_name]
+        return {v[0]: i for i, v in enumerate(struct_def.variants)}
+
+    # ==================================================================
+    # Teste do pattern (kind-specific)
+    # ==================================================================
+    def _compute_pattern_match(self, kind, cond_val, variant, variant_map, i):
+        """Retorna um valor i1: True se o pattern do case casa.
+
+        Casos:
+          - variant is None  → self-binding (sempre casa)
+          - kind == 'int'    → icmp eq contra o literal
+          - kind == 'enum'   → icmp eq do tag contra o índice da variante
+          - kind == 'str'    → strcmp == 0
+        """
+        if variant is None:
+            return ir.Constant(ir.IntType(1), 1)
+
+        if kind == "int":
+            if isinstance(variant, str):
+                try:
+                    case_val = ir.Constant(self.i64_ty, int(variant))
+                except (ValueError, TypeError):
+                    # Não é número — não casa nada
+                    return ir.Constant(ir.IntType(1), 0)
+            else:
+                case_val = self.visit(variant)
+                if case_val.type != self.i64_ty:
+                    case_val = self._coerce_arg(
+                        case_val, self.i64_ty, suffix=f"_match{i}"
+                    )
+            return self.builder.icmp_signed(
+                "==", cond_val, case_val, name=f"match_eq_{i}"
+            )
+
+        if kind == "enum":
+            if not isinstance(variant, str) or variant not in variant_map:
+                return ir.Constant(ir.IntType(1), 0)
+            tag_ptr = self.builder.gep(
+                cond_val,
+                [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 0)],
+                name=f"match_tag_ptr_{i}",
+            )
+            tag_val = self.builder.load(tag_ptr, name=f"match_tag_{i}")
+            return self.builder.icmp_signed(
+                "==", tag_val,
+                ir.Constant(self.i32_ty, variant_map[variant]),
+                name=f"match_tag_eq_{i}",
+            )
+
+        if kind == "str":
+            if isinstance(variant, str):
+                case_str = self.create_global_string(variant)
+            else:
+                case_str = self.visit(variant)
+            cmp_result = self.builder.call(
+                self.strcmp, [cond_val, case_str], name=f"match_strcmp_{i}"
+            )
+            return self.builder.icmp_signed(
+                "==", cmp_result, ir.Constant(ir.IntType(32), 0),
+                name=f"match_str_eq_{i}",
+            )
+
+        # unknown
+        return ir.Constant(ir.IntType(1), 0)
+
+    # ==================================================================
+    # Bindings (kind-specific)
+    # ==================================================================
+    def _emit_bindings(self, kind, cond_val, variant, binding):
+        """Popula `symbol_table` com os bindings do case.
+
+        - `kind == 'enum'` e `variant != None`: payload da variante.
+          Um slot i64 por binding (índices 1, 2, ... no struct).
+        - `variant is None`: self-binding. O binding recebe o próprio
+          `cond_val` (int → i64; str → i8*).
+        """
+        if not binding:
+            return
+
+        names = binding if isinstance(binding, list) else [binding]
+
+        if kind == "enum" and variant is not None:
+            for idx, name in enumerate(names):
+                pp = self.builder.gep(
+                    cond_val,
+                    [ir.Constant(self.i32_ty, 0),
+                     ir.Constant(self.i32_ty, idx + 1)],
+                    name=f"payload_ptr_{name}",
+                )
+                payload_val = self.builder.load(pp, name=f"payload_{name}")
+                var_ptr = self.builder.alloca(self.i64_ty, name=name)
+                self.builder.store(payload_val, var_ptr)
+                self.symbol_table[name] = var_ptr
+        else:
+            # Self-binding
+            for name in names:
+                var_ptr = self.builder.alloca(cond_val.type, name=name)
+                self.builder.store(cond_val, var_ptr)
+                self.symbol_table[name] = var_ptr
+
+    # ==================================================================
+    # Helpers de coerção
+    # ==================================================================
+    def _is_enum_condition(self, cond_val):
+        """Mantido por compatibilidade (usado em testes)."""
+        return self._classify_match_kind(cond_val) == "enum"
 
     def _coerce_self_binding(self, variant, binding, cond_val):
-        """Converte `case foo if ...:` (variant=str, binding=None) em
-        self-binding (variant=None, binding=[foo]).
+        """Converte `case foo:` (variant=str, binding=None, sem guard)
+        em self-binding quando `foo` NÃO é número nem variante de enum.
+
+        Esta é uma heurística do codegen porque o parser não distingue
+        `case <var>` (comparar por valor) de `case <nome> if <guard>`
+        (self-binding) quando o guard está ausente.
+
+        LIMITAÇÃO CONHECIDA: `let x = 42; match y: case x: ...` faz
+        self-binding em vez de comparar `y == x`. Veja Notas no README.
 
         `variant` pode ser:
           - `str`          → nome de variante ou self-binding
-          - `StringExpr`   → string literal (`case \"build\":`)
-          - `NumberExpr`   → já consumido como str no parser atual
-          - nó AST         → variável/expressão
-        Só converte `str` não-numérico em self-binding.
+          - `StringExpr`   → literal string (`case "build":`)
+          - `NumberExpr`   → literal numérico (não ocorre: parser usa str)
+          - outro nó AST   → expressão
         """
         if not isinstance(variant, str) or not variant:
             return variant, binding
+
         if self._is_enum_condition(cond_val):
             return variant, binding
+
+        # Tenta int; se for número, não é self-binding
         try:
             int(variant)
             return variant, binding
         except (ValueError, TypeError):
-            if binding is None:
-                return None, [variant]
-            return variant, binding
+            pass
 
-    def _codegen_match_with_guard(self, node, cond_val, end_bb):
-        """Match com guards.
-
-        Para enum, usa 4 blocos por case:
-            test_bb: testa tag
-            bind_bb: extrai payload nos bindings
-            body_bb: executa corpo
-            next_bb: próximo case
-
-        Para int/str, mantém 3 blocos (testa + guard combinados).
-
-        O ponto crítico é que os bindings do enum precisam existir ANTES
-        da avaliação do guard — senão `case Circle(r) if r > 10` avalia
-        `r` como 0 (não declarado) e o guard sempre falha.
-        """
-        is_enum = self._is_enum_condition(cond_val)
-
-        variant_map = {}
-        if is_enum:
-            struct_name = cond_val.type.pointee.name
-            struct_def = self.struct_defs[struct_name]
-            variant_map = {v[0]: i for i, v in enumerate(struct_def.variants)}
-
-        for i, case in enumerate(node.cases):
-            if len(case) == 4:
-                variant, binding, guard, body = case
-            else:
-                variant, binding, body = case
-                guard = None
-
-            variant, binding = self._coerce_self_binding(variant, binding, cond_val)
-
-            test_bb = self.builder.append_basic_block(name=f"match_guard_test_{i}")
-            body_bb = self.builder.append_basic_block(name=f"match_guard_body_{i}")
-            next_bb = self.builder.append_basic_block(name=f"match_guard_next_{i}")
-
-            self.builder.branch(test_bb)
-            self.builder.position_at_end(test_bb)
-
-            # Self-binding: variant is None + binding existente
-            # (ex: `case n if n > 10`). Vincula antes do guard.
-            if variant is None and binding:
-                binding_name = binding[0] if isinstance(binding, list) else binding
-                var_ptr = self.builder.alloca(cond_val.type, name=binding_name)
-                self.builder.store(cond_val, var_ptr)
-                self.symbol_table[binding_name] = var_ptr
-
-            # ============================================================
-            # ENUM: 4 blocos, bindings antes do guard
-            # ============================================================
-            if is_enum:
-                # 1. Testa tag
-                if variant is None:
-                    pattern_match = ir.Constant(ir.IntType(1), 1)
-                elif variant in variant_map:
-                    tag_ptr = self.builder.gep(
-                        cond_val,
-                        [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 0)],
-                        name=f"tag_ptr_{i}",
-                    )
-                    tag_val = self.builder.load(tag_ptr, name=f"tag_{i}")
-                    pattern_match = self.builder.icmp_signed(
-                        "==", tag_val,
-                        ir.Constant(self.i32_ty, variant_map[variant]),
-                        name=f"tag_eq_{i}",
-                    )
-                else:
-                    pattern_match = ir.Constant(ir.IntType(1), 0)
-
-                bind_bb = self.builder.append_basic_block(name=f"match_guard_bind_{i}")
-                self.builder.cbranch(pattern_match, bind_bb, next_bb)
-
-                # 2. Extrai payload para os bindings
-                self.builder.position_at_end(bind_bb)
-                if binding and variant is not None:
-                    names = binding if isinstance(binding, list) else [binding]
-                    for idx, name in enumerate(names):
-                        pp = self.builder.gep(
-                            cond_val,
-                            [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, idx + 1)],
-                            name=f"payload_ptr_{idx}",
-                        )
-                        payload_val = self.builder.load(pp, name=f"payload_{idx}")
-                        var_ptr = self.builder.alloca(self.i64_ty, name=name)
-                        self.builder.store(payload_val, var_ptr)
-                        self.symbol_table[name] = var_ptr
-
-                # 3. Guard (bindings agora em escopo)
-                if guard:
-                    guard_val = self.visit(guard)
-                    if guard_val.type != ir.IntType(1):
-                        guard_val = self.builder.icmp_signed(
-                            "!=", guard_val, ir.Constant(guard_val.type, 0),
-                            name=f"guard_cond_{i}",
-                        )
-                    self.builder.cbranch(guard_val, body_bb, next_bb)
-                else:
-                    self.builder.branch(body_bb)
-
-            # ============================================================
-            # INT/STR: 3 blocos (comportamento anterior)
-            # ============================================================
-            else:
-                if variant is None:
-                    # Self-binding: sempre casa; o guard decide
-                    pattern_match = ir.Constant(ir.IntType(1), 1)
-                elif cond_val.type == self.i64_ty:
-                    if isinstance(variant, str):
-                        try:
-                            case_val = ir.Constant(self.i64_ty, int(variant))
-                            pattern_match = self.builder.icmp_signed(
-                                "==", cond_val, case_val, name=f"match_eq_{i}",
-                            )
-                        except ValueError:
-                            pattern_match = ir.Constant(ir.IntType(1), 1)
-                    else:
-                        case_val = self.visit(variant)
-                        pattern_match = self.builder.icmp_signed(
-                            "==", cond_val, case_val, name=f"match_eq_{i}",
-                        )
-                elif cond_val.type == self.voidptr_ty:
-                    # NOVO: strings precisam de strcmp — antes caíam
-                    # no `else` final e viravam sempre-verdadeiro.
-                    if isinstance(variant, str):
-                        case_str = self.create_global_string(variant)
-                    else:
-                        case_str = self.visit(variant)
-                    cmp_result = self.builder.call(
-                        self.strcmp, [cond_val, case_str],
-                        name=f"match_str_cmp_{i}",
-                    )
-                    pattern_match = self.builder.icmp_signed(
-                        "==", cmp_result, ir.Constant(ir.IntType(32), 0),
-                        name=f"match_str_eq_{i}",
-                    )
-                else:
-                    pattern_match = ir.Constant(ir.IntType(1), 1)
-
-                if guard:
-                    self.builder.position_at_end(test_bb)
-                    guard_val = self.visit(guard)
-                    if guard_val.type != ir.IntType(1):
-                        guard_val = self.builder.icmp_signed(
-                            "!=", guard_val, ir.Constant(guard_val.type, 0),
-                            name=f"guard_cond_{i}",
-                        )
-                    final_cond = self.builder.and_(
-                        pattern_match, guard_val, name=f"match_and_{i}",
-                    )
-                else:
-                    final_cond = pattern_match
-
-                self.builder.cbranch(final_cond, body_bb, next_bb)
-
-            # ============================================================
-            # Corpo (comum aos dois caminhos)
-            # ============================================================
-            self.builder.position_at_end(body_bb)
-            for stmt in body:
-                if self.builder.block.is_terminated:
-                    break
-                self.visit(stmt)
-            if not self.builder.block.is_terminated:
-                self.builder.branch(end_bb)
-
-            self.builder.position_at_end(next_bb)
-
-        # Default / fallthrough
-        if node.default:
-            for stmt in node.default:
-                if self.builder.block.is_terminated:
-                    break
-                self.visit(stmt)
-        if not self.builder.block.is_terminated:
-            self.builder.branch(end_bb)
-
-        self.builder.position_at_end(end_bb)
+        # String não-numérica: provavelmente é self-binding
+        if binding is None:
+            return None, [variant]
+        return variant, binding

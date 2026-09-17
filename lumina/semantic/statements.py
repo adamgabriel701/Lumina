@@ -48,14 +48,24 @@ class StatementAnalyzer:
             self.filename, line, col, self.source_code,
         )
 
-    def _find_enum_of_variant(self, variant_name):
-        """Retorna o nome do enum que contém `variant_name`, ou None."""
+    def _find_enum_of_variant(self, variant_name, require_no_payload=False):
+        """Retorna o nome do enum que contém `variant_name`, ou None.
+
+        Se `require_no_payload=True`, ignora variantes com payload.
+        Usado em `visit_VariableExpr` para aceitar `Stop` bare (só quando
+        a variante não tem payload — `Some` bare seria ambíguo).
+        """
         for enum_name, enum_def in self.struct_defs.items():
             if not hasattr(enum_def, 'variants'):
                 continue
             for v in enum_def.variants:
-                if v[0] == variant_name:
-                    return enum_name
+                if v[0] != variant_name:
+                    continue
+                if require_no_payload:
+                    payloads = v[1] if len(v) > 1 else []
+                    if payloads:
+                        return None
+                return enum_name
         return None
 
     def _infer_binary_type(self, node: BinaryExpr):

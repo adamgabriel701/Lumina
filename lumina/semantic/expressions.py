@@ -57,6 +57,16 @@ class ExpressionAnalyzer(NodeVisitor):
     def visit_VariableExpr(self, node):
         info = self.get_var_info(node.name)
         if not info:
+            # NOVO: variante de enum sem payload pode ser usada bare
+            # (ex: `Stop`, `None`, `Zero`). Constrói o enum
+            # implicitamente. Variantes COM payload (ex: `Some`)
+            # continuam exigindo chamada: `Some(42)`.
+            enum_name = self._find_enum_of_variant(
+                node.name, require_no_payload=True
+            )
+            if enum_name is not None:
+                return enum_name
+
             available_vars = [k for scope in self.scopes for k in scope.keys()]
             suggestion = get_suggestion(node.name, available_vars)
             msg = f"Variável '{node.name}' não declarada."

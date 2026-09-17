@@ -27,7 +27,7 @@ class MembersMixin:
         if ptr:
             return self.builder.load(ptr, name=node.name + "_load")
 
-        # NOVO: globais mutáveis → carrega da GlobalVariable LLVM.
+        # Globais mutáveis → carrega da GlobalVariable LLVM.
         gv = getattr(self, 'global_mut_vars', {}).get(node.name)
         if gv is not None:
             return self.builder.load(gv, name=f"g_{node.name}_load")
@@ -36,6 +36,20 @@ class MembersMixin:
         global_node = getattr(self, 'global_var_decls', {}).get(node.name)
         if global_node is not None:
             return self.visit(global_node.value)
+
+        # NOVO: variante de enum sem payload usada bare (ex: `Stop`).
+        # Constrói o enum com tag correta e zero payloads.
+        lookup = self._find_enum_variant(node.name)
+        if lookup is not None:
+            enum_name, variant_idx = lookup
+            enum_def = self.struct_defs[enum_name]
+            for v in enum_def.variants:
+                if v[0] != node.name:
+                    continue
+                payloads = v[1] if len(v) > 1 else []
+                if not payloads:
+                    return self._construct_enum(enum_name, variant_idx, [])
+                break  # tem payload — só via `Name(args)`
 
         return ir.Constant(self.i64_ty, 0)
 

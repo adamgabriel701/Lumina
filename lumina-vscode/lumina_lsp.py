@@ -17,6 +17,13 @@ Protocolo: JSON-RPC 2.0 sobre stdio.
 NOTA: usa I/O em modo binário (`sys.stdin.buffer`). O `Content-Length`
 é sempre em BYTES (spec LSP), e o Python em modo texto lê CARACTERES,
 o que quebra com UTF-8 multi-byte (acentos, emojis).
+
+QUALIFICAÇÃO DE NOMES:
+  Símbolos de topo (funções, structs, enums, traits) usam chave simples
+  (`main`, `Pessoa`). Locais (varáveis dentro de funções/métodos) usam
+  chave qualificada (`main::i`, `helper::i`), porque dois escopos podem
+  ter o mesmo nome. `scope_map` permite descobrir o enclosing function
+  de qualquer posição do cursor.
 """
 import bisect
 import sys
@@ -108,7 +115,11 @@ def read_message():
             continue
         headers[key] = value
     content_length = int(headers.get('Content-Length', 0))
+    if content_length <= 0:
+        return None
     body_bytes = sys.stdin.buffer.read(content_length)
+    if not body_bytes:
+        return None
     return json.loads(body_bytes.decode('utf-8'))
 
 
@@ -215,6 +226,7 @@ def _range_around(line, col, length):
 
 
 def _walk_stmts(stmts, callback):
+    """Walk genérico (sem contexto)."""
     if not stmts:
         return
     for stmt in stmts:
@@ -241,7 +253,18 @@ def _walk_stmts(stmts, callback):
             _walk_stmts(stmt.body, callback)
 
 
+def _walk_stmts_with_context(stmts, callback, ctx_name):
+    """Walk que passa `ctx_name` (função/método) ao callback.
+
+    Usado para registrar locais com chave qualificada (`main::i`).
+    """
+    _walk_stmts(stmts, lambda s: callback(s, ctx_name))
+
+
 def _find_all_references(code, names):
+    """Varredura léxica simples. NÃO distingue escopos — para locais
+    homônimos em funções diferentes, retorna todas as ocorrências.
+    """
     result = {n: [] for n in names}
     lines = code.split('\n')
     for i, line_str in enumerate(lines):
@@ -265,16 +288,41 @@ def _extract_suggestion(message):
     return None
 
 
+def _qualify(func_name, var_name):
+    """Chave qualificada para locais."""
+    return f"{func_name}::{var_name}"
+
+
 # ============================================================
 # Análise do documento
 # ============================================================
 def validate_and_extract_symbols(code):
+    """Parse + semantic + extração de símbolos.
+
+    Retorna (8-tuple):
+      diagnostics, symbols, definitions, symbol_details,
+      document_symbols, references, no_type_var_decls, scope_map
+
+    Chaves:
+      - top-level: `name`         → `main`, `Pessoa`, `Red`
+      - locais:    `func::name`   → `main::i`, `helper::x`
+
+    `scope_map` é [(start_line, func_name), ...] ordenado por
+    start_line, usado para descobrir o enclosing function de uma
+    posição do cursor.
+    """
     diagnostics = []
     symbols = {"functions": [], "vars": []}
     definitions = {}
     symbol_details = {}
     document_symbols = []
-    no_type_var_decls = []  # VarDecls sem tipo explícito (para inlay hints)
+    no_type_var_decls = []
+    scope_map = []
+    # Dict paralelo: qkey → VarDecl. Usado para atualizar `detail`
+    # com o tipo inferido APÓS o semantic rodar (o analyzer restaura
+    # os escopos ao sair, então get_var_info não funciona fora da
+    # análise). O `stmt.var_type` é mutado in-place pelo semantic.
+    _stmt_refs = {}
 
     try:
         lexer = Lexer(code)
@@ -282,17 +330,23 @@ def validate_and_extract_symbols(code):
         parser = Parser(tokens, "lsp.lm", code)
         ast = parser.parse()
 
-        # ----- Passada 0: captura VarDecls sem tipo ANTES do semantic -----
-        def _capture_no_type(stmt):
+        # ----- Passada 0: captura VarDecls sem tipo + constrói scope_map -----
+        def _capture(stmt, ctx):
             if isinstance(stmt, VarDecl) and stmt.var_type is None:
                 no_type_var_decls.append(stmt)
 
         for decl in ast:
             if isinstance(decl, Function):
-                _walk_stmts(decl.body, _capture_no_type)
+                start = getattr(decl, 'line', 0) or 0
+                scope_map.append((start, decl.name))
+                _walk_stmts_with_context(decl.body, _capture, decl.name)
             elif isinstance(decl, ImplBlock):
                 for m in decl.methods:
-                    _walk_stmts(m.body, _capture_no_type)
+                    start = getattr(m, 'line', 0) or 0
+                    scope_map.append((start, m.name))
+                    _walk_stmts_with_context(m.body, _capture, m.name)
+
+        scope_map.sort()
 
         # ----- Passada 1: top-level -----
         for decl in ast:
@@ -306,10 +360,48 @@ def validate_and_extract_symbols(code):
                     "kind": SK_FUNCTION, "detail": detail,
                     "line": decl.line, "col": decl.col,
                 }
+
+                # Children: locais desta função
+                children = []
+                def _collect_child(stmt, ctx):
+                    if isinstance(stmt, VarDecl):
+                        qkey = _qualify(ctx, stmt.name)
+                        if qkey not in symbol_details:
+                            vt = stmt.var_type or "inferred"
+                            symbol_details[qkey] = {
+                                "kind": SK_VARIABLE,
+                                "detail": f"{stmt.name}: {vt}",
+                                "line": getattr(stmt, 'line', 0) or 0,
+                                "col": getattr(stmt, 'col', 0) or 0,
+                            }
+                            definitions[qkey] = {
+                                "line": max(0, (getattr(stmt, 'line', 1) or 1) - 1),
+                                "col": max(0, (getattr(stmt, 'col', 1) or 1) - 1),
+                            }
+                            _stmt_refs[qkey] = stmt
+                        child_detail = f"{stmt.name}: {stmt.var_type or 'inferred'}"
+                        children.append({
+                            "name": stmt.name,
+                            "detail": child_detail,
+                            "kind": SK_VARIABLE,
+                            "range": _range_around(
+                                getattr(stmt, 'line', 1),
+                                getattr(stmt, 'col', 1),
+                                len(stmt.name),
+                            ),
+                            "selectionRange": _range_around(
+                                getattr(stmt, 'line', 1),
+                                getattr(stmt, 'col', 1),
+                                len(stmt.name),
+                            ),
+                        })
+                _walk_stmts_with_context(decl.body, _collect_child, decl.name)
+
                 document_symbols.append({
                     "name": decl.name, "detail": detail, "kind": SK_FUNCTION,
                     "range": _range_around(decl.line, decl.col, len(decl.name)),
                     "selectionRange": _range_around(decl.line, decl.col, len(decl.name)),
+                    "children": children,
                 })
 
             elif isinstance(decl, StructDecl):
@@ -364,10 +456,47 @@ def validate_and_extract_symbols(code):
                     params_str = _fmt_params(m.params)
                     ret = f" -> {m.return_type}" if m.return_type != "void" else ""
                     mdetail = f"fn {m.name}({params_str}){ret}"
+
+                    # Locais deste método (qualificados pelo nome do método)
+                    mchildren = []
+                    def _collect_method_local(stmt, ctx):
+                        if isinstance(stmt, VarDecl):
+                            qkey = _qualify(ctx, stmt.name)
+                            if qkey not in symbol_details:
+                                vt = stmt.var_type or "inferred"
+                                symbol_details[qkey] = {
+                                    "kind": SK_VARIABLE,
+                                    "detail": f"{stmt.name}: {vt}",
+                                    "line": getattr(stmt, 'line', 0) or 0,
+                                    "col": getattr(stmt, 'col', 0) or 0,
+                                }
+                                definitions[qkey] = {
+                                    "line": max(0, (getattr(stmt, 'line', 1) or 1) - 1),
+                                    "col": max(0, (getattr(stmt, 'col', 1) or 1) - 1),
+                                }
+                                _stmt_refs[qkey] = stmt
+                            mchildren.append({
+                                "name": stmt.name,
+                                "detail": f"{stmt.name}: {stmt.var_type or 'inferred'}",
+                                "kind": SK_VARIABLE,
+                                "range": _range_around(
+                                    getattr(stmt, 'line', 1),
+                                    getattr(stmt, 'col', 1),
+                                    len(stmt.name),
+                                ),
+                                "selectionRange": _range_around(
+                                    getattr(stmt, 'line', 1),
+                                    getattr(stmt, 'col', 1),
+                                    len(stmt.name),
+                                ),
+                            })
+                    _walk_stmts_with_context(m.body, _collect_method_local, m.name)
+
                     methods.append({
                         "name": m.name, "detail": mdetail, "kind": SK_METHOD,
                         "range": _range_around(getattr(m, 'line', 1), getattr(m, 'col', 1), len(m.name)),
                         "selectionRange": _range_around(getattr(m, 'line', 1), getattr(m, 'col', 1), len(m.name)),
+                        "children": mchildren,
                     })
                     symbol_details[m.name] = {
                         "kind": SK_METHOD, "detail": mdetail,
@@ -410,48 +539,21 @@ def validate_and_extract_symbols(code):
                     "selectionRange": _range_around(getattr(decl, 'line', 1), getattr(decl, 'col', 1), len(decl.name)),
                 })
 
-        # ----- Passada 2: semantic -----
+        # ----- Passada 2: semantic (preenche tipos inferidos) -----
         analyzer = SemanticAnalyzer("lsp.lm", code)
         analyzer.analyze(ast)
 
-        for name, info in symbol_details.items():
-            if info["kind"] == SK_VARIABLE:
-                var_info = analyzer.get_var_info(name) if hasattr(analyzer, 'get_var_info') else None
-                if var_info:
-                    inferred = var_info.get('type') or 'inferred'
-                    info["detail"] = f"{name}: {inferred}"
-
-        # ----- Passada 3: VarDecls locais -----
-        def _register_local(stmt):
-            if isinstance(stmt, VarDecl):
-                var_type = stmt.var_type or "inferred"
-                name = stmt.name
-                line = getattr(stmt, 'line', 0) or 0
-                col = getattr(stmt, 'col', 0) or 0
-                if name not in symbol_details:
-                    symbol_details[name] = {
-                        "kind": SK_VARIABLE,
-                        "detail": f"{name}: {var_type}",
-                        "line": line, "col": col,
-                    }
-                if name not in definitions:
-                    definitions[name] = {
-                        "line": max(0, line - 1),
-                        "col": max(0, col - 1),
-                    }
-
-        for decl in ast:
-            if isinstance(decl, Function):
-                _walk_stmts(decl.body, _register_local)
-            elif isinstance(decl, ImplBlock):
-                for m in decl.methods:
-                    _walk_stmts(m.body, _register_local)
-
-        for name, info in symbol_details.items():
-            if info["kind"] == SK_VARIABLE and ": inferred" in info["detail"]:
-                var_info = analyzer.get_var_info(name) if hasattr(analyzer, 'get_var_info') else None
-                if var_info and var_info.get('type'):
-                    info["detail"] = f"{name}: {var_info['type']}"
+        # Passada 3: relê os `stmt.var_type` (mutados pelo semantic
+        # durante a passada 2) para atualizar `detail` dos locais
+        # qualificados. Não usa analyzer.get_var_info porque o
+        # analyze_function restaura os escopos ao sair.
+        for qkey, stmt in _stmt_refs.items():
+            info = symbol_details.get(qkey)
+            if info is None:
+                continue
+            inferred = stmt.var_type or "inferred"
+            base_name = qkey.split("::")[-1]
+            info["detail"] = f"{base_name}: {inferred}"
 
     except LuminaError as e:
         diagnostics.append({
@@ -466,19 +568,22 @@ def validate_and_extract_symbols(code):
     except Exception:
         pass
 
-    references = _find_all_references(code, list(symbol_details.keys()))
+    # References: só para top-level (locais homônimos não distinguem escopo)
+    top_level_names = [k for k in symbol_details.keys() if "::" not in k]
+    references = _find_all_references(code, top_level_names)
 
     return (diagnostics, symbols, definitions, symbol_details,
-            document_symbols, references, no_type_var_decls)
+            document_symbols, references, no_type_var_decls, scope_map)
 
 
 # ============================================================
 # Semantic tokens
 # ============================================================
-def _build_name_to_type(ast, symbol_details):
+def _build_name_to_type(symbol_details):
+    """Mapeia nome simples → tokenType (sem distinguir escopo)."""
     mapping = {}
-
-    for name, info in symbol_details.items():
+    for key, info in symbol_details.items():
+        name = key.split("::")[-1]
         kind = info.get('kind')
         if kind == SK_FUNCTION:
             mapping[name] = TT_FUNCTION
@@ -492,33 +597,31 @@ def _build_name_to_type(ast, symbol_details):
             mapping[name] = TT_INTERFACE
         elif kind == SK_VARIABLE:
             mapping[name] = TT_VARIABLE
-
-    for decl in ast:
-        if isinstance(decl, EnumDecl):
-            for vname, _payloads in decl.variants:
-                mapping[vname] = TT_ENUM_MEMBER
-
-    def _collect_params(methods):
-        for m in methods:
-            for p in m.params:
-                pname = p.name if hasattr(p, 'name') else p[0]
-                mapping[pname] = TT_PARAMETER
-
-    for decl in ast:
-        if isinstance(decl, Function):
-            for p in decl.params:
-                pname = p.name if hasattr(p, 'name') else p[0]
-                mapping[pname] = TT_PARAMETER
-        elif isinstance(decl, ImplBlock):
-            _collect_params(decl.methods)
-
     return mapping
 
 
 def _collect_semantic_tokens(code, tokens, ast, symbol_details):
-    name_to_type = _build_name_to_type(ast, symbol_details)
-    starts = _build_line_starts(code)
+    name_to_type = _build_name_to_type(symbol_details)
 
+    # Enum members
+    for decl in ast:
+        if isinstance(decl, EnumDecl):
+            for vname, _payloads in decl.variants:
+                name_to_type[vname] = TT_ENUM_MEMBER
+
+    # Parâmetros
+    for decl in ast:
+        if isinstance(decl, Function):
+            for p in decl.params:
+                pname = p.name if hasattr(p, 'name') else p[0]
+                name_to_type[pname] = TT_PARAMETER
+        elif isinstance(decl, ImplBlock):
+            for m in decl.methods:
+                for p in m.params:
+                    pname = p.name if hasattr(p, 'name') else p[0]
+                    name_to_type[pname] = TT_PARAMETER
+
+    starts = _build_line_starts(code)
     result = []
     prev_line = 0
     prev_col = 0
@@ -526,23 +629,18 @@ def _collect_semantic_tokens(code, tokens, ast, symbol_details):
     for tok in tokens:
         if tok.type != TokenType.IDENT:
             continue
-
         tt = name_to_type.get(tok.value)
         if tt is None:
             continue
-
         start_offset = tok.offset - len(tok.value)
         if start_offset < 0:
             continue
-
         try:
             line, col = _offset_to_linecol(starts, start_offset)
         except Exception:
             continue
-
         delta_line = line - prev_line
         delta_col = col - prev_col if delta_line == 0 else col
-
         result.extend([delta_line, delta_col, len(tok.value), tt, 0])
         prev_line = line
         prev_col = col
@@ -554,45 +652,33 @@ def _collect_semantic_tokens(code, tokens, ast, symbol_details):
 # Inlay hints
 # ============================================================
 def _collect_inlay_hints(no_type_var_decls, analyzer):
-    """Para cada VarDecl sem tipo explícito, se o semantic inferiu um
-    tipo concreto, emite um InlayHint `: <tipo>` após o nome.
-    """
     hints = []
-
     for decl in no_type_var_decls:
         name = decl.name
         line = getattr(decl, 'line', 0) or 0
         col = getattr(decl, 'col', 0) or 0
         if line <= 0 or col <= 0:
             continue
-
-        # Busca o tipo inferido no escopo atual
         info = None
         try:
             info = analyzer.get_var_info(name)
         except Exception:
             info = None
         inferred = (info or {}).get('type') if info else None
-
-        # Fallback: o semantic mutou o próprio VarDecl com o tipo inferido
         if not inferred:
             inferred = decl.var_type
-
         if not inferred or inferred == "inferred":
             continue
-
-        # Posição: logo após o nome da variável
         hints.append({
             "position": {
                 "line": line - 1,
                 "character": (col - 1) + len(name),
             },
             "label": f": {inferred}",
-            "kind": 1,  # InlayHintKind.Type
+            "kind": 1,
             "paddingLeft": False,
             "paddingRight": False,
         })
-
     return hints
 
 
@@ -611,7 +697,43 @@ class LuminaLSP:
         self.semantic_tokens_data = []
         self.inlay_hints_data = []
         self.last_diagnostics = []
+        self.scope_map = []   # [(start_line, func_name), ...] ordenado
 
+    # ------------------------------------------------------------------
+    # Lookup helpers
+    # ------------------------------------------------------------------
+    def _enclosing_func(self, line):
+        """Encontra a função cujo `start_line` <= `line` está mais próxima.
+
+        `line` é 0-based (formato LSP). `scope_map` está 1-based,
+        então convertemos.
+        """
+        target = line + 1
+        best = None
+        for start, name in self.scope_map:
+            if start <= target:
+                best = name
+            else:
+                break
+        return best
+
+    def _lookup(self, table, name, line):
+        """Tenta a chave qualificada primeiro; cai para simples.
+
+        Retorna o valor ou None.
+        """
+        func = self._enclosing_func(line)
+        if func is not None:
+            qualified = f"{func}::{name}"
+            if qualified in table:
+                return table[qualified]
+        if name in table:
+            return table[name]
+        return None
+
+    # ------------------------------------------------------------------
+    # Run loop
+    # ------------------------------------------------------------------
     def run(self):
         while True:
             try:
@@ -669,7 +791,7 @@ class LuminaLSP:
                     self.latest_uri = params.get("textDocument", {}).get("uri", "")
 
                     (diagnostics, symbols, defs, details,
-                     doc_syms, refs, no_type_vars) = \
+                     doc_syms, refs, no_type_vars, scope_map) = \
                         validate_and_extract_symbols(text)
 
                     self.latest_definitions = defs
@@ -678,8 +800,8 @@ class LuminaLSP:
                     self.document_symbols = doc_syms
                     self.references = refs
                     self.last_diagnostics = diagnostics
+                    self.scope_map = scope_map
 
-                    # Recalcula semantic tokens + inlay hints
                     self._recompute_extras(text, no_type_vars)
 
                     write_message({
@@ -781,8 +903,6 @@ class LuminaLSP:
             self.semantic_tokens_data = _collect_semantic_tokens(
                 text, tokens, ast, self.symbol_details
             )
-
-            # Roda semantic para preencher var_type dos VarDecls capturados
             try:
                 analyzer = SemanticAnalyzer("lsp.lm", text)
                 analyzer.analyze(ast)
@@ -790,8 +910,6 @@ class LuminaLSP:
                     no_type_vars, analyzer
                 )
             except LuminaError:
-                # Se o semantic falha, ainda tentamos usar var_type dos
-                # VarDecls que o próprio código já tinha
                 self.inlay_hints_data = []
         except Exception:
             self.semantic_tokens_data = []
@@ -818,25 +936,30 @@ class LuminaLSP:
         for var in self.symbols.get("vars", []):
             items.append({"label": var["name"], "kind": 6, "detail": var["detail"]})
 
-        for name, info in self.symbol_details.items():
+        for key, info in self.symbol_details.items():
             if info["kind"] == SK_CLASS:
+                name = key.split("::")[-1]
                 items.append({"label": name, "kind": 7, "detail": info["detail"]})
             elif info["kind"] == SK_ENUM:
+                name = key.split("::")[-1]
                 items.append({"label": name, "kind": 13, "detail": info["detail"]})
             elif info["kind"] == SK_INTERFACE:
+                name = key.split("::")[-1]
                 items.append({"label": name, "kind": 8, "detail": info["detail"]})
 
         return items
 
     def get_hover(self, params):
         pos = params.get("position", {})
+        line = pos.get("line", 0)
         word = get_word_at_position(
-            self.latest_text, pos.get("line", 0), pos.get("character", 0)
+            self.latest_text, line, pos.get("character", 0)
         )
         if not word:
             return None
 
-        info = self.symbol_details.get(word)
+        # Tenta qualificado (main::i) primeiro, cai para simples
+        info = self._lookup(self.symbol_details, word, line)
         if info:
             value = f"```lumina\n{info['detail']}\n```"
             return {"contents": {"kind": "markdown", "value": value}}
@@ -844,10 +967,14 @@ class LuminaLSP:
 
     def get_definition(self, params):
         pos = params.get("position", {})
+        line = pos.get("line", 0)
         word = get_word_at_position(
-            self.latest_text, pos.get("line", 0), pos.get("character", 0)
+            self.latest_text, line, pos.get("character", 0)
         )
-        def_loc = self.latest_definitions.get(word)
+        if not word:
+            return None
+
+        def_loc = self._lookup(self.latest_definitions, word, line)
         if not def_loc:
             return None
         return {
@@ -922,11 +1049,6 @@ class LuminaLSP:
         return {"changes": {self.latest_uri: edits}}
 
     def get_code_actions(self, params):
-        """Oferece quick fixes para diagnósticos.
-
-        Atualmente: quando a mensagem contém "Você quis dizer 'X'?",
-        oferece "Renomear para 'X'".
-        """
         context = params.get("context", {})
         diagnostics = context.get("diagnostics", [])
         actions = []
@@ -936,11 +1058,8 @@ class LuminaLSP:
             suggestion = _extract_suggestion(msg)
             if not suggestion:
                 continue
-
             original_range = diag.get("range", {})
             word_range = _expand_range_to_word(self.latest_text, original_range)
-
-            # Extrai o nome original para o título
             start_line = word_range["start"]["line"]
             start_char = word_range["start"]["character"]
             end_char = word_range["end"]["character"]
@@ -948,10 +1067,8 @@ class LuminaLSP:
                 original_word = self.latest_text.split('\n')[start_line][start_char:end_char]
             except Exception:
                 original_word = "?"
-
             if not original_word or original_word == suggestion:
                 continue
-
             actions.append({
                 "title": f"Renomear '{original_word}' para '{suggestion}'",
                 "kind": "quickfix",

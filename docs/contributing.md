@@ -18,11 +18,14 @@ sudo apt install -y libgc-dev clang llvm python3.11
 ## Rodar testes
 
 ```bash
-# Todos os testes (267)
+# Todos os testes (325)
 pytest tests/ -v
 
 # Só um arquivo
 pytest tests/test_tco.py -v
+pytest tests/test_forin.py -v
+pytest tests/test_tuples.py -v
+pytest tests/test_lint.py -v
 
 # Standalone (~5s)
 python3 run_tests.py
@@ -57,14 +60,17 @@ python3 -m pytest tests/test_lsp_keys.py -v
 
 ```
 feat(codegen): TCO para mutual recursion via SCC dispatcher
+feat(parser): tuplas literais + destructuring
+feat(cli): lumina lint
 fix(parser): @attrs como strings em Function
+fix(codegen): bitcast para impl Box<T> em Box<int>
 docs: atualiza README + CHANGELOG
-test(tco): adiciona testes para is_even/is_odd 1M
+test(forin): adiciona testes para `for x in arr`
 refactor(match): unifica em _match_chain
 chore: atualiza dependências
 ```
 
-Escopos comuns: `lexer`, `parser`, `semantic`, `codegen`, `cli`, `lsp`, `repl`, `docs`.
+Escopos comuns: `lexer`, `parser`, `semantic`, `codegen`, `cli`, `lint`, `lsp`, `repl`, `docs`.
 
 ## Adicionar testes
 
@@ -124,6 +130,8 @@ if func_name == "meu_novo_builtin":
     ...
 ```
 
+Se o builtin retorna valor, adicione também em `semantic/statements.py::BUILTIN_RET` para o `VarDecl` inferir o tipo corretamente.
+
 ## Adicionar módulos da stdlib
 
 Crie `std/<nome>.lm` em Lumina. Consumido via `import "std/<nome>"`.
@@ -153,42 +161,8 @@ Ver [`README.md` → Roadmap](../README.md#-roadmap). Em especial:
 - **Package registry** — `lumina publish` + index JSON
 - **Code actions no LSP** — quick fixes (sugestão de `@derive` quando `==` falha)
 - **Inlay hints no LSP** — `: int` fantasma em `let x = 10`
+- **Genéricos reais** — `Result<T, E>`, `Vector<T>` funcional com tipo params
 
 ## Licença
 
 MIT. Ao contribuir, você concorda com os termos da [LICENSE](../LICENSE).
-```
-
----
-
-## 🔨 Commit
-
-```bash
-git add README.md CHANGELOG.md docs/
-
-git commit -m "docs: atualiza README/CHANGELOG + cria docs/ navegável
-
-README.md:
-  - Badge: 249 → 267 testes
-  - Tabela de features: +SCC TCO, @safe, @macro, defers em TCO
-  - Tabela de bugs: +SCC sem defer_stack, @attrs como tuples
-  - Tabela de testes: +test_tco_mutual (6), test_safe_mode (6),
-    test_macros (6)
-  - Exemplos: @safe, @macro, mutual TCO, nil, Box<T>, defer escopo
-  - Roadmap: 48 concluídos
-  - Link para docs/
-
-CHANGELOG.md:
-  - [Unreleased]: nova seção com Sprints 8c, 8d, 9a, 9b + fixes
-  - [Unreleased-Sprints 7a-8a]: seção anterior consolidada
-
-docs/ (novo):
-  - README.md — índice navegável
-  - guia-rapido.md — instalação, primeiros programas, CLI
-  - linguagem.md — sintaxe, tipos, controle, patterns, @attrs
-  - stdlib.md — módulos std/* completos
-  - ferramental.md — CLI, REPL, formatter, LSP, testes, playground
-  - internals.md — arquitetura do compilador, pipeline, como estender
-  - contributing.md — setup, fluxo de PR, adicionar testes"
-
-git push origin main

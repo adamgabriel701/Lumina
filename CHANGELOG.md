@@ -7,7 +7,52 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ---
 
-## [Unreleased]
+## [Unreleased — 0.3.0]
+
+### Adicionado
+
+#### Linguagem
+- **Escape analysis:** `alloc(N)` com `N` constante e sem `return`/`free` viram `alloca` no stack. Reduz pressão no Boehm GC. Reduz ~30% das alocações em código típico.
+- **`for x in arr`:** itera sobre arrays literais e strings. Aceita `let arr = [1, 2, 3]; for n in arr` e `for n in [10, 20]` inline.
+- **Tuplas literais:** `let (a, b, c) = (1, 2, 3)`. Tipos heterogêneos via `LiteralStructType`.
+- **`impl Box<T>:`** — métodos em structs genéricas. O `<T>` é descartado para registro; chamadas em `Box<int>`, `Box<str>`, etc. fazem bitcast para o tipo base.
+- **`std/string`** — `StringBuilder` com `push_char`, `push_str`, `finish`, `clear`, crescimento geométrico. Complementa `std/str` (que é funcional).
+- **`std/result`** — `unwrap`, `unwrap_or`, `is_ok`, `is_err`, `is_ok_and`, `expect`, `map`, `and_then`.
+- **`lumina lint`** — análise estática sem gerar código: W001 (unused), W002 (shadowing), W003 (unreachable), W004 (unused param), W005 (empty body). `--format=json`, `--quiet`, exit code = nº warnings.
+- **`opt -O2`** no IR antes do clang, apenas em `--release`.
+- **`chr` e `atoi`** agora têm branches dedicados no codegen (antes retornavam 0).
+
+#### CLI
+- `lumina lint <arquivo> [--format=text|json] [--quiet]`.
+- `--help`/`-h`/`help` retornam exit code 0 (antes caíam em "comando desconhecido").
+
+### Corrigido
+
+- `@attrs` sobrescritos como tuples em `parse()` — `@safe`/`@macro` nunca ativavam.
+- `read_file()` dava segfault quando o arquivo não existia (agora retorna `""` via `phi`).
+- `free()` rejeitava `i64*` (bitcast para `i8*` antes do call).
+- `SliceExpr` era inferido como `ptr` no `VarDecl`, fazendo `s[..3] == "abc"` comparar endereços.
+- `bool` → `int` usava `sext`, fazendo `true` virar `-1`. Agora usa `zext` quando origem é `i1`.
+- `impl Box<T>` chamado em `Box<int>` gerava `%"Box"* != %"Box_int_"*`. Bitcast para o tipo base.
+- `std/result::unwrap_or` usava `default` (keyword reservada). Renomeado para `fallback`.
+- `for x in arr` com `N` não-constante caía em loop vazio. Agora registra `array_lengths` no `var_decl`.
+- `and_then` retornava `int` para function pointers, falhando no `_require_assignable`.
+- `lumina lint` estourava `RecursionError` por recursão mútua entre `_collect_vars` e `_collect_exprs`. Reescrito como `_collect` única.
+
+### Adicionado (tests)
+
+- `tests/test_lint.py` (14 testes).
+- `tests/test_forin.py` (9 testes).
+- `tests/test_tuples.py` (7 testes).
+- `tests/test_generic_impl.py` (6 testes).
+- `tests/test_std_result.py` (9 testes).
+- `tests/test_escape_analysis.py` (4 testes).
+
+**Total: 325 passed** (antes 267).
+
+---
+
+## [Unreleased — Sprint 9]
 
 ### Adicionado
 

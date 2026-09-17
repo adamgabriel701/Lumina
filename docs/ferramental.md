@@ -11,6 +11,7 @@
 | `lumina run [arquivo]` | Compila e executa (exit code propagado) |
 | `lumina check [arquivo]` | Lexer + parser + semantic (~100ms) |
 | `lumina test [arquivo]` | Suíte nativa (exit = nº falhas) |
+| `lumina lint [arquivo] [flags]` | Análise estática (W001..W005) |
 | `lumina jit [arquivo]` | Executa via JIT |
 | `lumina repl` | REPL persistente |
 | `lumina clean` | Limpa cache e binários |
@@ -24,7 +25,7 @@
 
 | Flag | Efeito |
 |---|---|
-| `--release` | `-O3` |
+| `--release` | `-O3` + `opt -O2` no IR |
 | `--debug` | `-O0` + DWARF + sem cache |
 | `--wasm` | Compila para WebAssembly (WASI SDK) |
 | `--no-gc` | Sem Boehm GC (bare-metal) |
@@ -36,6 +37,7 @@
 - `lumina test` → nº de falhas (0 = tudo passou)
 - `lumina build` → 0 sucesso, 1 falha
 - `lumina check` → 0 sem erros, 1 com erros
+- `lumina lint` → nº de warnings (0 = limpo)
 
 ### Saída JSON
 
@@ -45,6 +47,58 @@ lumina check app.lm --error-format=json | jq .
 ```
 
 Progresso vai para `stderr`; JSON vai para `stdout` — pipe-safe.
+
+---
+
+## Linter (`lumina lint`)
+
+Análise estática sem gerar código.
+
+```bash
+lumina lint arquivo.lm           # texto colorido
+lumina lint arquivo.lm --format=json
+lumina lint arquivo.lm --quiet   # só exit code
+```
+
+### Warnings
+
+| Código | Significado |
+|---|---|
+| W001 | Variável declarada mas nunca usada |
+| W002 | Variável sombreando outra já visível |
+| W003 | Código inalcançável após `return`/`break`/`continue` |
+| W004 | Parâmetro de função nunca usado |
+| W005 | Função com corpo vazio |
+
+### Exit codes
+
+- `0` → sem warnings
+- `N > 0` → N warnings
+- `1` → erro de parse (reportado via stdout)
+
+### Uso em CI
+
+```bash
+lumina lint src/*.lm --quiet || exit 1
+```
+
+### Saída JSON
+
+```bash
+lumina lint app.lm --format=json | jq '.[].code'
+# "W001"
+# "W004"
+```
+
+Formato:
+
+```json
+[{"file": "app.lm", "line": 2, "col": 9, "code": "W001", "message": "..."}]
+```
+
+### Prefixo `_`
+
+Variáveis com prefixo `_` (`_unused`) são ignoradas em W001/W002/W004.
 
 ---
 
@@ -107,6 +161,7 @@ lumina fmt arquivo.lm --check   # Verifica (exit 1 se desformatado)
 - `@derive`, `@safe`, `@macro`
 - Multi-pattern (`case A | B:`)
 - Wildcard (`case _:`)
+- Parâmetros com default (`fn greet(name: str = "World")`)
 
 ### Não preserva (ainda)
 
@@ -185,8 +240,11 @@ lumina test exemplo.lm
 ### Pytest (compilador)
 
 ```bash
-pytest tests/ -v                # 267 testes
+pytest tests/ -v                # 325 testes
 pytest tests/test_tco.py -v     # só TCO
+pytest tests/test_forin.py -v   # só for-in
+pytest tests/test_tuples.py -v  # só tuplas
+pytest tests/test_lint.py -v    # só linter
 ```
 
 ### Standalone

@@ -14,6 +14,8 @@ AST (lumina/ast/)
 AST + tipos + symbol tables
    ↓ LLVMCodegen (lumina/codegen/)
 LLVM IR
+   ↓ opt -O2 (só em --release)
+LLVM IR otimizado
    ↓ clang
 binário nativo / .wasm
 ```
@@ -28,28 +30,28 @@ binário nativo / .wasm
 ### `lumina/parser/`
 
 - `base.py` — primitivas de consumo + comentários pendentes
-- `expressions.py` — precedência (logical → bitwise → comparison → shift → range → additive → term → factor → postfix)
+- `expressions.py` — precedência + tuple literals
 - `statements.py` — statements e controle de fluxo
 - `patterns.py` — match / switch + multi-pattern
-- `declarations.py` — fn, struct, enum, trait, impl, import, extern
+- `declarations.py` — fn, struct, enum, trait, `impl Box<T>`, import, extern
 - `parser.py` — orquestrador + `@attrs`
 
 ### `lumina/ast/`
 
-- `expressions.py` — `NumberExpr`, `StringExpr`, `BinaryExpr`, `NilExpr`, `NoneExpr`, `ComptimeExpr`, ...
+- `expressions.py` — `NumberExpr`, `StringExpr`, `BinaryExpr`, `NilExpr`, `NoneExpr`, `ComptimeExpr`, `TupleExpr`, ...
 - `statements.py` — `Function`, `StructDecl`, `VarDecl`, `ReturnStmt`, `MatchStmt`, ...
 - `visitor.py` — `NodeVisitor` (despacha para `visit_<ClassName>`)
 
 ### `lumina/semantic/`
 
 - `types.py` — `is_assignable`, `parse_generic`, `substitute_generic`, `unify_type`
-- `expressions.py` — type checking de expressões
-- `statements.py` — type checking de statements + MatchStmt
+- `expressions.py` — type checking de expressões + `visit_TupleExpr`
+- `statements.py` — type checking de statements, `BUILTIN_RET`, MatchStmt
 - `analyzer.py` — orquestrador, `@derive`, traits
 
 ### `lumina/codegen/`
 
-- `codegen.py` — `LLVMCodegen` (orquestrador). Contém:
+- `codegen.py` — `LLVMCodegen` (orquestrador):
   - `setup_libc_functions` — GC_malloc ou malloc
   - `generate_module` — pipeline principal
   - `register_struct` / `register_enum` / `register_function`
@@ -63,18 +65,22 @@ binário nativo / .wasm
   - `literals.py` — Number, Bool, String, Interp, Nil, None
   - `operators.py` — Binary, Unary, Cast, Deref, Address, Propagate
   - `members.py` — Variable, Member (`?.` + `@safe`), Index, Slice
-  - `calls.py` — CallExpr + builtins + enums + generics + macros
-  - `aggregates.py` — Array, StructLiteral, Lambda
+  - `calls.py` — CallExpr + builtins (`chr`, `atoi`, `int`, `float`, `str`) + enums + generics + macros
+  - `aggregates.py` — Array, StructLiteral, Lambda, **Tuple**
   - `match.py` — MatchExpr
   - `macros.py` — expansão de `@macro`
 - `statements/`
-  - `var_decl.py`, `control.py`, `flow.py`, `match.py`
+  - `var_decl.py` — **escape analysis** (`_try_stack_alloc`) + `array_lengths`
+  - `control.py` — if/while/for + **`_visit_for_iterable`** (`for x in arr`)
+  - `flow.py` — assign/return/defer + **destructuring** (struct/array/tuple)
+  - `match.py` — MatchStmt com `_match_chain`
 
 ### `lumina_cli/`
 
 - `main.py` — dispatch de comandos
 - `commands.py` — implementação de cada comando
 - `compiler.py` — `compile_lumina`, `run_jit`, `format_node`
+- `lint.py` — análise estática (W001..W005)
 - `playground.py` — servidor web
 - `utils.py` — cores, hashes, paths
 
@@ -112,6 +118,58 @@ Cada bloco (`if`/`while`/`for`/`match`) faz `_begin_scope` no início e `_end_sc
 
 `generate_module` coleta funções com `attr macro` em `self.macros`. Essas não são registradas como funções normais. `codegen_user_call` verifica `func_name in self.macros` antes de tudo e expande via `_expand_macro_expr` (deep-copy + substituição de `VariableExpr(param) → arg`).
 
+### Escape analysis
+
+`var_decl.py::_try_stack_alloc` decide se `alloc(N)` vai para stack ou heap:
+
+- `N` **constante** (NumberExpr) e `N > 0` e `N <= 4096`.
+- o nome **não** está em `self.escapes` (retornado, atribuído a campo, etc.).
+- o nome **não** está em `self.freed_vars` (tem `free(x)` explícito).
+
+Se as 3 condições valem, gera `alloca` de `ArrayType(i64, N)` (ou `i8` para `alloc_bytes`) e aponta `symbol_table[nome]` para o primeiro elemento.
+
+`self.escapes` é populado em `semantic/analyzer.py::check_escape`. `self.freed_vars` é populado em `semantic/expressions.py::visit_CallExpr` quando detecta `free(x)`.
+
+### `array_lengths` (para `for x in arr`)
+
+`visit_VarDecl` registra `self.array_lengths[name] = len(value.elements)` quando `value` é `ArrayExpr`. Isso é necessário porque `visit_VariableExpr` faz `load` do slot (um `i64*`) e o `pointee` LLVM do slot é `i64`, não `ArrayType` — o tamanho seria perdido. `_visit_for_iterable` consulta `array_lengths` antes de tentar `arr_val.type.pointee.count`.
+
+`_visit_for_iterable` cobre 4 casos:
+
+1. Variável com array literal registrado → `N` conhecido, GEP simples.
+2. Array inline → `ArrayType*`, GEP duplo `[0, idx]`.
+3. String → `strlen` em runtime, elemento `i8`.
+4. Outros → loop vazio (não crasha).
+
+### `impl Box<T>:` — resolução de método genérico
+
+`parse_impl` descarta o `<T>` para registro: `struct_name = "Box"`. Todos os métodos ficam como `Box_get`, `Box_set`.
+
+`codegen_method_call` tenta `f"{struct_name}_{method_name}"` (ex: `Box_int__get`), e se não achar, cai para `f"{base}_{method_name}"` (ex: `Box_get`). Se `used_base == True` e o tipo do `self` esperado pelo método (i.e., `func_type.args[0]`) for diferente do tipo do `obj_val` (`Box_int_*` vs `Box*`), emite `bitcast`.
+
+Isso funciona porque `Box<T>` no LLVM tem o mesmo layout para qualquer `T` do mesmo tamanho (i64/ptr/f64).
+
+### Tuplas — `LiteralStructType`
+
+`visit_TupleExpr` cria `ir.LiteralStructType([t1, t2, ...])` onde cada `ti` é o tipo LLVM do elemento. Diferente de `ArrayExpr`, que força tudo para `i64`.
+
+`visit_DestructureStmt` em `flow.py` trata 4 casos:
+
+1. `PointerType[IdentifiedStructType]` — struct nomeada.
+2. `PointerType[LiteralStructType]` — tupla literal.
+3. `PointerType[ArrayType]` — alloca de array literal.
+4. `PointerType[T]` (raw) — array `alloc`'d.
+
+### `lumina lint`
+
+`lumina_cli/lint.py` roda 4 checks (`_check_unused`, `_check_shadowing`, `_check_unreachable`, `_check_empty_functions`) sobre o AST sem rodar o semantic. Ponto de entrada único `_collect(node, into)` para evitar recursão mútua entre statements e expressões.
+
+### `opt -O2` em `--release`
+
+`cmd_build` roda `opt -O2 -S ir -o ir` antes do clang **apenas** quando `--release`. Em builds normais o IR fica cru, permitindo inspeção e mantendo testes que checam nomes de blocos (`sum_rec_body`, `and_rhs`).
+
+Se `opt` não está no PATH, emite warning e segue sem otimizar.
+
 ## Como estender
 
 ### Adicionar um tipo
@@ -124,7 +182,8 @@ Cada bloco (`if`/`while`/`for`/`match`) faz `_begin_scope` no início e `_end_sc
 ### Adicionar um builtin
 
 1. `lumina/builtins.py` — adicionar nome em `BUILTIN_FUNCTIONS`
-2. `codegen/expressions/calls.py::codegen_user_call` — branch `if func_name == "..."`
+2. `semantic/statements.py::BUILTIN_RET` — tipo de retorno (se retorna valor)
+3. `codegen/expressions/calls.py::codegen_user_call` — branch `if func_name == "..."`
 
 ### Adicionar uma sintaxe
 
@@ -135,6 +194,7 @@ Cada bloco (`if`/`while`/`for`/`match`) faz `_begin_scope` no início e `_end_sc
 5. `semantic/expressions.py` ou `semantic/statements.py` — type checking
 6. `codegen/expressions/` ou `codegen/statements/` — geração LLVM
 7. `lumina_cli/compiler.py::format_node` — imprimir
+8. `lumina_cli/lint.py::_collect` — coletar (se for um nó que pode conter `VariableExpr`)
 
 ## Debug
 
@@ -156,4 +216,11 @@ code = open("app.lm").read()
 tokens = Lexer(code).tokenize()
 ast = Parser(tokens, "app.lm", code).parse()
 SemanticAnalyzer("app.lm", code).analyze(ast)
+```
+
+Inspecionar IR otimizado:
+
+```bash
+lumina build app.lm --release
+cat app.ll   # já passou por opt -O2
 ```

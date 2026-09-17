@@ -34,6 +34,8 @@ fn valor_absoluto(val: int) -> int
 
 ### `std/str`
 
+Funções funcionais para strings.
+
 ```lumina
 fn to_upper(s: str) -> str
 fn to_lower(s: str) -> str
@@ -44,6 +46,60 @@ fn join(arr: ptr, delimiter: str) -> str
 fn substr(s: str, start: int, length: int) -> str
 fn find(texto: str, alvo: str) -> int
 ```
+
+`to_upper` e `to_lower` usam `StringBuilder` internamente (O(n)).
+
+### `std/string` — StringBuilder
+
+Buffer de bytes com crescimento geométrico. Use quando estiver construindo strings grandes byte-a-byte.
+
+```lumina
+import "std/string"
+
+mut sb = new_string_builder()
+sb.push_str("hello")
+sb.push_char(32)         # espaço
+sb.push_str("world")
+print(sb.finish())       # "hello world"
+
+sb.clear()               # esvazia mas mantém a capacidade
+sb.push_str("reusado")
+print(sb.finish())       # "reusado"
+```
+
+Métodos: `push_char(c)`, `push_str(s)`, `finish()`, `clear()`, `size()`.
+
+Campos: `buf: str`, `len: int`, `cap: int`.
+
+**Motivação:** `s = s + chr(c)` em loop é O(n²). Aqui é O(1) amortizado por byte.
+
+### `std/result` — Helpers sobre `Result`
+
+```lumina
+import "std/result"
+
+fn divide(a: int, b: int) -> Result:
+    if b == 0:
+        return Err(1)
+    return Ok(a / b)
+
+fn main() -> int:
+    let r = divide(10, 2)
+    print(is_ok(r))              # 1
+    print(unwrap(r))             # 5
+
+    let e = divide(10, 0)
+    print(is_err(e))             # 1
+    print(unwrap_or(e, -1))      # -1
+
+    let doubled = map(r, fn(x: int) -> int: x * 2)
+    print(unwrap(doubled))       # 10
+    return 0
+```
+
+Funções: `unwrap`, `unwrap_or`, `is_ok`, `is_err`, `is_ok_and`, `expect`, `map`, `and_then`.
+
+**Limitação:** todos os helpers são `int`-only (o prelude não é genérico). Quando genéricos reais existirem, migram para `Result<T, E>`.
 
 ### `std/time`
 
@@ -90,10 +146,11 @@ v.push(20)
 print(v.get(0))     # 10
 print(v.sum())      # 30
 print(v.is_empty()) # 0
-
-# Métodos: push, pop, get, set, clear, is_empty, sum
-# Campos: data (ptr), len (int), cap (int)
 ```
+
+Métodos: `push`, `pop`, `get`, `set`, `clear`, `is_empty`, `sum`.
+
+Campos: `data (ptr)`, `len (int)`, `cap (int)`.
 
 ### `std/map`
 

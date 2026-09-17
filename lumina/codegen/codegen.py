@@ -428,6 +428,8 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         old_var_types = self.var_types
         old_current = getattr(self, 'current_func_name', None)
         old_body_bb = getattr(self, 'current_body_bb', None)
+        old_defer_stack = getattr(self, 'defer_stack', None)
+        self.defer_stack = []
 
         entry_bb = func.append_basic_block(name=f"{mangled}_entry")
         body_bb = func.append_basic_block(name=f"{mangled}_body")
@@ -457,6 +459,11 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
             self.visit(stmt)
 
         if not self.builder.block.is_terminated:
+            # NOVO (Sprint 8b): emite defers pendentes antes do ret de
+            # fallthrough.
+            self._emit_all_defers()
+
+        if not self.builder.block.is_terminated:
             if func_type.return_type == self.void_ty:
                 self.builder.ret_void()
             elif isinstance(func_type.return_type, ir.PointerType):
@@ -465,6 +472,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
                 self.builder.ret(ir.Constant(func_type.return_type, 0))
 
         self.builder = old_builder
+        self.defer_stack = old_defer_stack
         self.symbol_table = old_symtab
         self.var_types = old_var_types
         self.current_func_name = old_current
@@ -524,6 +532,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         old_symtab = self.symbol_table
         old_var_types = self.var_types
         old_body_bb = getattr(self, 'current_body_bb', None)
+        old_defer_stack = getattr(self, 'defer_stack', None)
 
         # entry_bb: alloca + store dos args + branch para body_bb.
         # body_bb: onde o corpo é emitido. TCO salta de volta para cá.
@@ -533,6 +542,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         self.builder = ir.IRBuilder(entry_bb)
         self.symbol_table = {}
         self.var_types = {}
+        self.defer_stack = []   # NOVO: pilha de defers desta função
 
         for i, p in enumerate(node.params):
             p_name, p_type = p.name, p.type_ann
@@ -557,17 +567,23 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
             self.visit(stmt)
 
         if not self.builder.block.is_terminated:
-            if func_type.return_type == self.void_ty:
-                self.builder.ret_void()
-            elif isinstance(func_type.return_type, ir.IdentifiedStructType):
-                zero_fields = [ir.Constant(ft, 0) for ft in func_type.return_type.elements]
-                self.builder.ret(ir.Constant(func_type.return_type, zero_fields))
-            elif isinstance(func_type.return_type, ir.PointerType):
-                self.builder.ret(ir.Constant(func_type.return_type, None))
-            else:
-                self.builder.ret(ir.Constant(func_type.return_type, 0))
+            # NOVO: emite defers pendentes (top-level do body) antes do
+            # ret implícito. Blocos aninhados já consumiram os seus.
+            self._emit_all_defers()
+
+            if not self.builder.block.is_terminated:
+                if func_type.return_type == self.void_ty:
+                    self.builder.ret_void()
+                elif isinstance(func_type.return_type, ir.IdentifiedStructType):
+                    zero_fields = [ir.Constant(ft, 0) for ft in func_type.return_type.elements]
+                    self.builder.ret(ir.Constant(func_type.return_type, zero_fields))
+                elif isinstance(func_type.return_type, ir.PointerType):
+                    self.builder.ret(ir.Constant(func_type.return_type, None))
+                else:
+                    self.builder.ret(ir.Constant(func_type.return_type, 0))
 
         self.current_body_bb = old_body_bb
+        self.defer_stack = old_defer_stack   # NOVO: restaura
         self.symbol_table = old_symtab
         self.var_types = old_var_types
 

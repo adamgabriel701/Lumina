@@ -6,7 +6,7 @@ from lumina.ast import (
     TraitDecl, ImplBlock, ExternDecl, DestructureStmt, AddressOfExpr, DerefExpr,
     UnaryExpr, CastExpr, StructLiteralExpr, MatchExpr, LambdaExpr,
     DeferStmt, AssertStmt, BenchStmt, BreakStmt, ContinueStmt, NoneExpr,
-    NilExpr,
+    NilExpr, TypeAlias,
 )
 from lumina.ast.expressions import ArrayExpr, BoolExpr, PropagateExpr
 from lumina.ast.statements import MatchStmt
@@ -142,6 +142,10 @@ def _format_node_impl(node, indent_level=0):
     elif isinstance(node, ImportStmt):
         prefix_newline = "\n" if indent_level == 0 else ""
         return f'{prefix_newline}{indent}import "{node.filename}"\n'
+
+    elif isinstance(node, TypeAlias):
+        prefix_newline = "\n" if indent_level == 0 else ""
+        return f"{prefix_newline}{indent}type {node.name} = {node.target_type}\n"
 
     elif isinstance(node, ExternDecl):
         prefix_newline = "\n" if indent_level == 0 else ""

@@ -1,168 +1,268 @@
-# 🤝 Contributing
+# 🤝 Contribuindo com Lumina
 
-## Setup
+Obrigado pelo interesse! Este documento cobre setup, testes, estilo e o checklist de PR.
+
+---
+
+## Setup de desenvolvimento
+
+### 1. Clone e crie venv
 
 ```bash
 git clone https://github.com/adamgabriel701/Lumina.git
 cd Lumina
-pip install -e .
-pip install -r requirements-dev.txt
+python3.11 -m venv .venv
+source .venv/bin/activate
 ```
 
-Dependências de sistema:
+### 2. Pré-requisitos de sistema
 
 ```bash
-sudo apt install -y libgc-dev clang llvm python3.11
+# Ubuntu/Debian
+sudo apt install -y llvm-14 clang libgc-dev qemu-user
+
+# Fedora
+sudo dnf install -y llvm-devel clang gc-devel qemu-user
 ```
 
-## Rodar testes
+### 3. Instale em modo editável
 
 ```bash
-# Todos os testes (325)
-pytest tests/ -v
+pip install -e ".[dev]"
+```
 
-# Só um arquivo
-pytest tests/test_tco.py -v
-pytest tests/test_forin.py -v
-pytest tests/test_tuples.py -v
-pytest tests/test_lint.py -v
+### 4. Verifique que tudo funciona
 
-# Standalone (~5s)
+```bash
+pytest tests/ -q                    # 428 passed
+python3 run_tests.py                # 28/28
+./scripts/check_examples.sh --run   # 54 PASS / 17 SKIP / 0 FAIL
+```
+
+---
+
+## Estrutura do projeto
+
+Veja [Internals](internals.md) para detalhes de cada módulo.
+
+```
+lumina/               # Compilador
+lumina_cli/           # CLI
+lumina-vscode/        # Extensão VS Code + LSP
+std/                  # Standard Library (.lm)
+tests/                # Pytest
+examples/             # Exemplos prontos
+docs/                 # Esta documentação
+scripts/              # Shell helpers
+benchmarks/           # Benchmarks
+```
+
+---
+
+## Estilo de código
+
+### Python
+
+- **Seguimos o estilo do arquivo** — não reformate PRs inteiros.
+- Linhas até ~100 colunas.
+- Docstrings em **português** (consistência com o código atual).
+- Type hints onde ajuda (não obrigatório).
+- **Sem `print` de debug** deixado no código.
+
+### Lumina (`.lm`)
+
+- Indentação com **4 espaços**.
+- `lumina fmt` no seu arquivo antes de commitar.
+- Comentários `##` acima de funções/structs documentadas (`lumina doc` os lê).
+
+### Commits
+
+Formato [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+<tipo>(<escopo>): <resumo curto>
+
+<corpo opcional>
+
+<rodapé opcional>
+```
+
+Tipos usados:
+
+| Tipo | Uso |
+|---|---|
+| `feat` | Nova feature |
+| `fix` | Correção de bug |
+| `docs` | Documentação |
+| `test` | Testes |
+| `refactor` | Refatoração sem mudança de comportamento |
+| `perf` | Melhoria de performance |
+| `chore` | Tarefas (build, deps) |
+
+Exemplos:
+
+```
+feat(lang): type alias genérico com substituição de params
+
+fix(codegen): get_llvm_param_type força monomorphização antes de checar struct_types
+
+docs: Quickstart com exemplo Hello World antes das tabelas
+```
+
+---
+
+## Testes
+
+### Antes de abrir PR
+
+```bash
+# Rápido (~5s) — smoke test
 python3 run_tests.py
 
-# Compilar todos os exemplos
+# Médio (~30s) — testes de compilador
+pytest tests/ -q -x
+
+# Completo (~2 min) — inclui CLI e smoke de exemplos
+pytest tests/ -q
 ./scripts/check_examples.sh --run
 ```
 
-## LSP
+### Adicionando testes
 
-```bash
-cd lumina-vscode
-python3 -m pytest tests/test_lsp_keys.py -v
-```
-
-## Estrutura de branches
-
-- `main` — stable
-- `feature/<nome>` — nova feature
-- `fix/<nome>` — correção de bug
-
-## Fluxo de PR
-
-1. Fork + clone
-2. Branch: `git checkout -b feature/minha-feature`
-3. Adicione testes (ver `tests/test_*.py`)
-4. Rode `pytest tests/ -v` e `./scripts/check_examples.sh --run`
-5. Commit seguindo [Conventional Commits](https://www.conventionalcommits.org/)
-6. Push e abra PR
-
-## Conventional Commits
-
-```
-feat(codegen): TCO para mutual recursion via SCC dispatcher
-feat(parser): tuplas literais + destructuring
-feat(cli): lumina lint
-fix(parser): @attrs como strings em Function
-fix(codegen): bitcast para impl Box<T> em Box<int>
-docs: atualiza README + CHANGELOG
-test(forin): adiciona testes para `for x in arr`
-refactor(match): unifica em _match_chain
-chore: atualiza dependências
-```
-
-Escopos comuns: `lexer`, `parser`, `semantic`, `codegen`, `cli`, `lint`, `lsp`, `repl`, `docs`.
-
-## Adicionar testes
-
-Coloque em `tests/test_<área>.py`. Use `subprocess` para rodar `lumina_cli`:
+**Para um bug fix:** adicione um teste de regressão em `tests/test_<área>_bugs.py` ou no arquivo mais próximo. O padrão é:
 
 ```python
-def _run(src, timeout=30):
-    with tempfile.NamedTemporaryFile("w", suffix=".lm", delete=False) as f:
-        f.write(src)
-        path = f.name
-    try:
-        r1 = subprocess.run(
-            [sys.executable, "-m", "lumina_cli", "build", path],
-            capture_output=True, text=True, cwd=REPO_ROOT, timeout=timeout,
-        )
-        assert r1.returncode == 0, f"Build falhou:\n{r1.stdout}\n{r1.stderr}"
-        binary = path[:-3]
-        r2 = subprocess.run([binary], capture_output=True, text=True)
-        return r2.stdout, r2.returncode
-    finally:
-        for p in (path, path[:-3] + ".ll", path[:-3]):
-            if os.path.exists(p):
-                os.remove(p)
-
-
-def test_minha_feature():
-    out, rc = _run("fn main() -> int:\n    print(42)\n    return 0\n")
-    assert "42" in out
+def test_bug_descricao_curta():
+    src = (
+        'fn main() -> int:\n'
+        '    # código que reproduz o bug\n'
+        '    return 0\n'
+    )
+    out, rc = _run(src)  # compila + executa
+    assert "esperado" in out
 ```
 
-## Adicionar exemplos
+**Para uma feature nova:** crie `tests/test_<feature>.py` com casos positivos e negativos.
 
-`examples/<nome>.lm`. Se não terminar sozinho (servidor, socket), adicione em `tests/features/skip.txt`.
+**Para mudança no codegen:** se o IR importa, inspecione com `_build_ir(src)` (disponível em vários testes).
 
-Se tiver output esperado, crie `examples/<nome>.expected`:
+### Helpers comuns
 
-```
-linha 1
-linha 2
-```
-
-## Adicionar builtins
-
-Em `lumina/builtins.py::BUILTIN_FUNCTIONS`:
+A maioria dos arquivos de teste define:
 
 ```python
-BUILTIN_FUNCTIONS = frozenset({
-    "print", "input", ..., "meu_novo_builtin",
-})
+def _run(src):       # compila + executa, retorna (stdout, rc)
+def _build(src):     # só compila, retorna CompletedProcess
+def _build_ir(src):  # compila e retorna o IR
+def _lines(out, wanted):  # filtra linhas que casam
 ```
 
-E o branch no codegen em `codegen/expressions/calls.py::codegen_user_call`:
+Reuse-os em vez de reinventar.
+
+---
+
+## Adicionando uma feature de linguagem
+
+Checklist típico (ordem):
+
+1. **AST** (`lumina/ast/`) — novo nó, se necessário.
+2. **Lexer** (`lumina/lexer/`) — novo token, se necessário.
+3. **Parser** (`lumina/parser/`) — regra gramatical.
+4. **Semantic** (`lumina/semantic/`) — type checking, escopo.
+5. **Codegen** (`lumina/codegen/`) — geração de IR.
+6. **Formatters** (`lumina_cli/compiler/formatter.py`) — reemissão.
+7. **Testes** (`tests/test_<feature>.py`) — positivos e negativos.
+8. **Docs** (`docs/linguagem.md` ou `docs/stdlib.md`).
+9. **CHANGELOG.md** — entrada em `[Unreleased]`.
+
+### Exemplo: adicionar um builtin
+
+Builtins ficam em `lumina/builtins.py` (fonte única). Siga o padrão:
 
 ```python
-if func_name == "meu_novo_builtin":
-    # geração LLVM
+BUILTIN_FUNCTIONS = frozenset({...})
+
+BUILTIN_RET = {
     ...
+    "meu_builtin": "int",  # tipo de retorno
+}
 ```
 
-Se o builtin retorna valor, adicione também em `semantic/statements.py::BUILTIN_RET` para o `VarDecl` inferir o tipo corretamente.
+Depois, no codegen (`lumina/codegen/expressions/builtins.py`), adicione o branch:
 
-## Adicionar módulos da stdlib
+```python
+if func_name == "meu_builtin":
+    # emitir IR
+    return ...
+```
 
-Crie `std/<nome>.lm` em Lumina. Consumido via `import "std/<nome>"`.
+E um teste em `tests/test_std_<área>.py`.
 
-## Estilo
+---
 
-- **Python**: PEP 8. Nomes em snake_case.
-- **Lumina**: 4 espaços de indentação. Nomes em snake_case.
-- **Testes**: 1 assert por teste quando possível.
+## Adicionando um módulo `std/*`
 
-## Reportar bugs
+1. Crie `std/<nome>.lm`.
+2. Documente com `##` acima de cada função pública.
+3. Adicione um teste em `tests/test_std_<nome>.py` (padrão: compila + executa).
+4. Adicione em `docs/stdlib.md`.
+5. Adicione uma linha em `README.md` (seção Standard Library).
+6. Adicione em `CHANGELOG.md`.
 
-Abra uma [issue](https://github.com/adamgabriel701/Lumina/issues) com:
+---
 
-1. Arquivo `.lm` mínimo que reproduz
-2. Comando exato (`lumina run foo.lm`)
-3. Output esperado vs. obtido
-4. Versão: `lumina --help`
+## Checklist de PR
 
-## Áreas que precisam de ajuda
+Antes de abrir:
 
-Ver [`README.md` → Roadmap](../README.md#-roadmap). Em especial:
+- [ ] `pytest tests/ -q` passa (0 falhas)
+- [ ] `python3 run_tests.py` passa (28/28)
+- [ ] `./scripts/check_examples.sh --run` sem regressão (54 PASS / 17 SKIP / 0 FAIL)
+- [ ] `lumina fmt --check <arquivos alterados>` (se mexeu em `.lm`)
+- [ ] `lumina lint <arquivos alterados>` sem novos warnings
+- [ ] Testes de regressão adicionados (para bug fixes)
+- [ ] Docs atualizadas (linguagem, stdlib, ferramental, se aplicável)
+- [ ] `CHANGELOG.md` atualizado em `[Unreleased]`
+- [ ] Commit segue Conventional Commits
+- [ ] Descrição do PR explica **o quê** e **por quê**
 
-- **Safe-by-default global** — generalizar `@safe` para todos os MemberExpr
-- **Macros multi-statement** — expandir corpo com múltiplos statements
-- **Self-hosting** — compilar o próprio compilador em Lumina
-- **Package registry** — `lumina publish` + index JSON
-- **Code actions no LSP** — quick fixes (sugestão de `@derive` quando `==` falha)
-- **Inlay hints no LSP** — `: int` fantasma em `let x = 10`
-- **Genéricos reais** — `Result<T, E>`, `Vector<T>` funcional com tipo params
+---
 
-## Licença
+## Reportando bugs
 
-MIT. Ao contribuir, você concorda com os termos da [LICENSE](../LICENSE).
+Inclua:
+
+1. **Comando exato** que reproduz (`lumina build foo.lm`, `pytest tests/...`)
+2. **Saída completa** (stdout + stderr)
+3. **Versão** (`lumina --version`, `python3 --version`, `llvm-config --version`)
+4. **Plataforma** (Linux/macOS/WSL, arquitetura)
+5. Se possível, o `.lm` mínimo que reproduz o bug
+
+Bugs de **runtime** são os mais valiosos — se o programa compila mas dá resultado errado ou segfault, inclua o output esperado vs o obtido.
+
+---
+
+## Áreas onde ajuda é bem-vinda
+
+Do [Roadmap](../README.md#️-roadmap):
+
+- **Safe-by-default global** (sem `@safe` explícito)
+- **Macros com quasiquote**
+- **Self-hosting (bootstrapping)** — compilador em Lumina
+- **Package registry**
+- **Code actions (quick fixes) no LSP**
+- **Inlay hints no LSP**
+
+E sempre:
+
+- Mais exemplos em `examples/`
+- Documentação em `docs/`
+- Cobertura de testes em áreas cinzentas (codegen de tipos exóticos, cross-compile, FFI)
+
+---
+
+## Dúvidas?
+
+- Abra uma [issue](https://github.com/adamgabriel701/Lumina/issues)
+- Ou veja o [README principal](../README.md) para visão geral
+- Detalhes técnicos em [Internals](internals.md)

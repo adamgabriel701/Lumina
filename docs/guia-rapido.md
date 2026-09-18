@@ -1,15 +1,27 @@
 # 🚀 Guia Rápido
 
-## Pré-requisitos
+Do zero ao primeiro programa Lumina em 5 minutos.
 
-- **Python 3.11+** e `llvmlite`
-- **LLVM** e **Clang** no `PATH`
-- **Boehm GC** (`sudo apt install libgc-dev`)
-- *(Opcional WASM)* **WASI SDK** em `/opt/wasi-sdk`
-- *(Opcional Raylib)* **libraylib**
-- *(Opcional Cross-compile)* toolchain do target
+---
 
-## Instalação
+## 1. Pré-requisitos
+
+| Ferramenta | Por quê | Como instalar (Ubuntu/Debian) |
+|---|---|---|
+| **LLVM 14+** | Codegen (IR) | `sudo apt install llvm-14` |
+| **Clang** | Link com libc/libgc | `sudo apt install clang` |
+| **Boehm GC** | Garbage Collector | `sudo apt install libgc-dev` |
+| **Python 3.11+** | Compilador | `sudo apt install python3.11 python3-pip` |
+
+Em Fedora:
+
+```bash
+sudo dnf install -y llvm-devel clang gc-devel python3.11
+```
+
+---
+
+## 2. Instalação
 
 ```bash
 git clone https://github.com/adamgabriel701/Lumina.git
@@ -18,9 +30,13 @@ pip install -e .
 lumina --help
 ```
 
-## Primeiro programa
+Se `lumina --help` mostrar o menu, está pronto.
 
-`hello.lm`:
+---
+
+## 3. Primeiro programa
+
+Crie um arquivo `ola.lm`:
 
 ```lumina
 fn main() -> int:
@@ -28,80 +44,136 @@ fn main() -> int:
     return 0
 ```
 
+Rode:
+
 ```bash
-lumina run hello.lm
+lumina run ola.lm
+# Olá, Lumina!
 ```
 
-## Estrutura de projeto
+Ou use o template de projeto:
 
 ```bash
 lumina new meu_projeto
 cd meu_projeto
+lumina run
 ```
 
-Gera:
+---
 
-```
-meu_projeto/
-├── lumina.toml    # package + [link]
-└── main.lm        # entry point
-```
+## 4. Sintaxe essencial (5 min)
 
-## Comandos essenciais
-
-| Comando | O que faz |
-|---|---|
-| `lumina run arquivo.lm` | Compila e executa (propaga exit code) |
-| `lumina check arquivo.lm` | Lexer+parser+semantic (~100ms) |
-| `lumina test arquivo.lm` | Suíte nativa (exit = nº falhas) |
-| `lumina lint arquivo.lm` | Análise estática (unused, shadow, unreachable) |
-| `lumina fmt arquivo.lm` | Formata (preserva comentários) |
-| `lumina fmt arquivo.lm --check` | Verifica formatação (pre-commit) |
-| `lumina build app.lm --release` | Compila com `-O3` + `opt -O2` |
-| `lumina build app.lm --debug` | `-O0` + DWARF |
-| `lumina build app.lm --wasm` | WebAssembly |
-| `lumina build app.lm --no-gc` | Bare-metal (sem GC) |
-| `lumina repl` | REPL persistente |
-| `lumina playground` | Playground web (8080) |
-
-## Exemplo completo
+### Funções e tipos
 
 ```lumina
-struct Ponto:
-    x: int
-    y: int
-
 fn soma(a: int, b: int) -> int:
     return a + b
 
-fn main() -> int:
-    let p = Ponto { x: 10, y: 20 }
-    print("Ponto:", p.x, p.y)
-    print("Soma:", soma(p.x, p.y))
+fn nada() -> void:
+    print("nada")
+```
+
+### Variáveis
+
+```lumina
+let x = 10          # imutável
+mut y = 20          # mutável
+y = y + 1           # ok
+z := 30             # sintaxe curta (mutável)
+```
+
+### Controle de fluxo
+
+```lumina
+if x > 5:
+    print("grande")
+elif x == 5:
+    print("igual")
+else:
+    print("pequeno")
+
+for i in 0..10:
+    print(i)
+
+while x < 100:
+    x = x + 1
+```
+
+### Listas e iteração
+
+```lumina
+let nums = [10, 20, 30]
+for n in nums:
+    print(n)
+
+for i, n in nums:
+    print(i, n)
+```
+
+### Pattern matching
+
+```lumina
+enum Resultado:
+    Ok(int)
+    Err(str)
+
+fn tratar(r: Resultado) -> int:
+    match r:
+        case Ok(v):  return v
+        case Err(_): return -1
     return 0
 ```
 
-## REPL persistente
+### Strings
 
-```bash
-$ lumina repl
-lumina> mut counter = 0
-
-lumina> counter = counter + 1
-
-lumina> fn add(a: int, b: int) -> int:
-...     return a + b
-
-lumina> print(counter, add(2, 3))
-1 5
-lumina> :history
-lumina> exit
+```lumina
+let nome = "Lumina"
+let idade = 3
+print($"Nome: {nome}, idade: {idade}")     # F-string
+print(nome[0..3])                          # Slicing
 ```
 
-Comandos: `:history`, `:decls`, `:clear`, `:help`, `exit`.
+### Defer (cleanup)
 
-## Próximos passos
+```lumina
+fn processar() -> int:
+    defer print("fim")
+    print("início")
+    return 0
+# Saída: início / fim
+```
 
-- [Linguagem](linguagem.md) — sintaxe completa
-- [Standard Library](stdlib.md) — módulos disponíveis
-- [Ferramental](ferramental.md) — LSP, linter, formatter, testes
+---
+
+## 5. CLI essencial
+
+```bash
+lumina new nome         # criar projeto
+lumina run arquivo.lm   # compilar + executar
+lumina build arquivo.lm # só compilar
+lumina check arquivo.lm # lexer + parser + semantic (rápido)
+lumina test arquivo.lm  # suíte de testes nativa
+lumina repl             # REPL persistente
+lumina lint arquivo.lm  # análise estática (W001..W005)
+lumina fmt arquivo.lm   # formatar (preserva comentários)
+lumina clean            # limpar cache e binários
+```
+
+Flags de build:
+
+```bash
+lumina build app.lm --release    # -O3 + opt -O2
+lumina build app.lm --debug      # -O0 + DWARF
+lumina build app.lm --wasm       # WebAssembly
+lumina build app.lm --no-gc      # bare-metal (sem GC)
+lumina build app.lm --target=aarch64-linux-gnu
+```
+
+---
+
+## 6. Próximos passos
+
+- **[Linguagem](linguagem.md)** — referência completa da sintaxe
+- **[Standard Library](stdlib.md)** — `std/math`, `std/sort`, `std/io`...
+- **[Ferramental](ferramental.md)** — LSP, formatter, lint, REPL
+- **[Exemplos no repo](../examples/)** — 69 exemplos prontos

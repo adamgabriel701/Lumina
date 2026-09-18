@@ -1,51 +1,226 @@
-# 📖 Linguagem
+# 📖 Referência da Linguagem Lumina
 
-## Sintaxe básica
+Referência completa da sintaxe e semântica. Para tutoriais, veja [Guia Rápido](guia-rapido.md).
 
-Escopo por indentação (4 espaços). Sem `{}` nem `;`.
+---
+
+## Índice
+
+- [Tipos e Inferência](#tipos-e-inferência)
+- [Variáveis](#variáveis)
+- [Operadores](#operadores)
+- [Controle de Fluxo](#controle-de-fluxo)
+- [Funções](#funções)
+- [Tipos de Função](#tipos-de-função)
+- [Closures](#closures)
+- [Structs](#structs)
+- [Enums e Pattern Matching](#tipos-algébricos-adts)
+- [Generics](#generics)
+- [Genéricos Aninhados](#genéricos-aninhados)
+- [Impls e Traits](#impls-e-traits)
+- [Type Aliases](#type-aliases)
+- [Tuplas](#tuplas)
+- [`nil` vs `none`](#nil-vs-none)
+- [Macros](#macros)
+- [`@derive`](#derive)
+- [`@safe`](#safe)
+- [LLVM Attrs](#llvm-attrs)
+- [`defer`](#defer)
+- [Módulos e Imports](#módulos-e-imports)
+
+---
+
+## Tipos e Inferência
+
+Primitivos:
+
+| Tipo | LLVM | Descrição |
+|---|---|---|
+| `int` | `i64` | Inteiro com sinal 64-bit |
+| `float` | `f64` | Ponto flutuante 64-bit |
+| `bool` | `i1` | Booleano |
+| `str` | `i8*` | Ponteiro para string (null-terminated) |
+| `ptr` | `i64*` | Ponteiro genérico (`alloc(N)` retorna isso) |
+| `void` | `void` | Ausência de retorno |
+| `fn` / `fn(T) -> R` | `{i8*, i8*}` | Fat pointer (fn ptr + env) |
+
+Inferência:
 
 ```lumina
-fn main() -> int:
-    x := 10
-    if x > 5:
-        print("grande")
-    return 0
+let x = 10               # int
+let y = 3.14             # float
+let s = "hello"          # str
+let b = true             # bool
+let nums = [1, 2, 3]     # ptr
+let t = (1, "a")         # tuple → ptr (LiteralStructType)
+let r = Ok(42)           # Result<int, int> (inferido)
 ```
 
-## Tipos
-
-| Tipo | Descrição |
-|---|---|
-| `int` | Inteiro 64-bit (`i64`) |
-| `float` | Ponto flutuante 64-bit (`f64`) |
-| `bool` | Booleano (`i1`) |
-| `str` | Ponteiro para string (`i8*`) |
-| `ptr` | Ponteiro genérico |
-| `fn` | Function pointer |
-| `void` | Sem retorno |
-| `Struct` | Struct definida pelo usuário |
-| `Enum` | Enum definido pelo usuário |
-| `Tuple` | Tupla de tipos heterogêneos |
-
-### Inferência
+Promoção implícita:
 
 ```lumina
-let x = 10            # int
-let y = 3.14          # float
-let s = "oi"          # str
-let b = true          # bool
-let p = nil           # ptr (default)
-let t = (1, "dois")   # Tuple
+let x: float = 10        # int → float OK
+let y: int = 3.14        # ERRO (truncaria)
 ```
+
+---
 
 ## Variáveis
 
 ```lumina
-let x = 10            # imutável
-mut y = 20            # mutável
-z := 30               # mutável (sintaxe curta)
-let p: Ponto = nil    # anotação explícita
+let x = 10               # imutável
+mut y = 20               # mutável
+z := 30                  # açúcar para `mut z = 30`
+let p: Ponto             # declarar sem inicializar (zera campos)
 ```
+
+Regras:
+
+- `let` = imutável; reatribuir é erro de compilação.
+- `mut` = mutável.
+- `:=` = `mut` curto.
+- Escopo é por bloco (indentação).
+- Shadowing é permitido (mas `lumina lint` emite W002).
+
+```lumina
+fn main() -> int:
+    let x = 10
+    if true:
+        let x = 20      # sombreia a externa (W002 do lint)
+    return x            # 10
+```
+
+---
+
+## Operadores
+
+### Aritméticos
+
+```lumina
++ - * / %
+```
+
+### Comparação
+
+```lumina
+== != < > <= >=
+```
+
+### Lógicos (com short-circuit)
+
+```lumina
+and or not
+```
+
+### Bitwise
+
+```lumina
+& | ^ ~ << >>
+```
+
+### Atribuição composta
+
+```lumina
++= -= *= /= &= |= ^=
+```
+
+### Especiais
+
+| Operador | Nome | Uso |
+|---|---|---|
+| `\|>` | Pipe | `5 \|> dobrar` = `dobrar(5)` |
+| `?.` | Safe navigation | `u?.id` = 0 se `u == nil` |
+| `?` | Propagação | `expr?` em função que retorna `Result` |
+| `as` | Cast | `10 as float` |
+
+### Precedência (baixo → alto)
+
+```
+logical (and/or)
+bitwise_or
+bitwise_xor
+bitwise_and
+comparison
+shift
+range (..)
+additive
+term
+factor (unário, chamada, index)
+```
+
+---
+
+## Controle de Fluxo
+
+### `if` / `elif` / `else`
+
+```lumina
+if x > 10:
+    print("grande")
+elif x > 5:
+    print("médio")
+else:
+    print("pequeno")
+```
+
+### `while`
+
+```lumina
+while x < 100:
+    x = x + 1
+```
+
+### `for` (range)
+
+```lumina
+for i in 0..10:
+    print(i)
+```
+
+### `for` (iterável)
+
+```lumina
+for n in [1, 2, 3]:       # array literal
+    print(n)
+
+for c in "abc":           # string
+    print(c)
+
+for n in arr:             # array via variável
+    print(n)
+
+for i, n in arr:          # índice + valor
+    print(i, n)
+```
+
+### `break` / `continue`
+
+```lumina
+for i in 0..100:
+    if i == 5:
+        break
+    if i % 2 == 0:
+        continue
+    print(i)
+```
+
+### `switch` (alias de `match` sobre `int`)
+
+```lumina
+switch dia:
+    case 1: print("Domingo")
+    case 2: print("Segunda")
+    default: print("Outro")
+```
+
+### `assert`
+
+```lumina
+assert(1 == 1)          # OK
+assert(1 == 2)          # aborta o processo
+```
+
+---
 
 ## Funções
 
@@ -53,132 +228,226 @@ let p: Ponto = nil    # anotação explícita
 fn soma(a: int, b: int) -> int:
     return a + b
 
-fn log(msg: str):
-    print(msg)
+fn nada() -> void:
+    print("oi")
+
+fn com_default(a: int, b: int = 10) -> int:
+    return a + b
 ```
 
-### Parâmetros padrão
+### Argumentos nomeados
 
 ```lumina
-fn greet(name: str = "World") -> int:
-    print("Hello,", name)
-    return 0
+soma(b: 20, a: 10)      # ordem livre
 ```
 
-### Genéricos
+### Export (WASM)
 
 ```lumina
-fn identidade<T>(x: T) -> T:
-    return x
-
-struct Box<T>:
-    data: T
-
-fn put<T>(b: Box<T>, val: T):
-    b.data = val
+export fn fib(n: int) -> int:
+    if n <= 1:
+        return n
+    return fib(n - 1) + fib(n - 2)
 ```
 
-### `impl Box<T>:` — métodos em structs genéricas
+### `extern fn` (FFI)
 
 ```lumina
-struct Box<T>:
-    data: T
-
-impl Box<T>:
-    fn get() -> int:
-        return self.data
-    fn set(v: int):
-        self.data = v
+extern fn puts(s: str) -> int
+extern fn sqlite3_open(filename: str, db: str) -> int
 
 fn main() -> int:
-    mut b: Box<int>
-    b.set(42)
-    print(b.get())     # 42
+    puts("hello do libc")
     return 0
 ```
 
-O `<T>` é descartado para registro (`Box_get`, `Box_set`). Chamadas em `Box<int>`, `Box<str>`, etc. resolvem pelo nome base. Funciona porque `Box<int>` e `Box<str>` têm layout idêntico (8 bytes) no LLVM.
+---
 
-## Estruturas de controle
+## Tipos de Função
 
 ```lumina
-if x > 0:
-    print("positivo")
-elif x < 0:
-    print("negativo")
-else:
-    print("zero")
+type Callback = fn(int) -> int
 
-while i < 10:
-    i += 1
+fn apply(f: Callback, x: int) -> int:
+    return f(x)
 
-for i in 0..10:
-    print(i)
-
-switch n:
-    case 1: return "um"
-    case 2: return "dois"
-    default: return "?"
+fn apply2(f: fn(int, int) -> int, a: int, b: int) -> int:
+    return f(a, b)
 ```
 
-## `for x in arr` — iteráveis
+Regras:
 
-Itera sobre arrays literais e strings, sem precisar de `0..len`.
+- `fn` puro (sem assinatura) aceita **qualquer** função.
+- `fn(T) -> R` exige arity e tipos em compile-time.
+- Mistura tipado/untyped é permitida nos dois sentidos.
+- **Campos de struct** podem ter tipo `fn`:
 
 ```lumina
+struct Handler:
+    cb: fn(int) -> int
+
 fn main() -> int:
-    let nums = [10, 20, 30]
-    for n in nums:
-        print(n)
-
-    for n in [100, 200]:    # inline
-        print(n)
-
-    let s = "abc"
-    for c in s:
-        print(c)            # byte (int)
+    mut h: Handler
+    h.cb = fn(x: int) -> int: x * 2
+    print(h.cb(21))     # 42
     return 0
 ```
 
-Casos suportados:
+---
 
-- **Array literal via variável:** loop com N conhecido, GEP simples.
-- **Array inline:** `for x in [1, 2, 3]`.
-- **String:** `strlen` em runtime, elemento `i8`.
-- **`break` / `continue`:** funcionam normalmente.
-- **Nested:** `for a in outer: for b in inner: ...`.
+## Closures
 
-## Tuplas
+Sintaxe inline:
 
-Tuplas literais com tipos heterogêneos:
+```lumina
+let dobro = fn(x: int) -> int: x * 2
+```
+
+Sintaxe bloco:
+
+```lumina
+let add = fn(a: int, b: int) -> int:
+    let s = a + b
+    return s
+```
+
+Com captura (variável livre do escopo externo):
 
 ```lumina
 fn main() -> int:
-    let (a, b, c) = (1, 2, 3)
-    print(a + b + c)          # 6
-
-    let (nome, idade) = ("Adam", 30)
-    print(nome, idade)        # Adam 30
-
-    let (n, s) = (42, "hello")  # tipos diferentes
-    print(n)                  # 42
-    print(s)                  # hello
+    let offset = 10
+    let add = fn(x: int) -> int: x + offset
+    print(add(5))       # 15
     return 0
 ```
 
-`LiteralStructType` no LLVM: cada elemento mantém seu tipo. O destructuring funciona sobre tuplas, structs nomeadas e arrays `alloc`'d.
+**Captura por valor** — mutação posterior da variável externa não é vista:
 
-## Pattern Matching
+```lumina
+mut x = 10
+let get = fn() -> int: x
+x = 99
+print(get())            # 10, não 99
+```
 
-### Básico
+Closures como callback (HOFs):
+
+```lumina
+import "std/sort"
+
+let mult = 10
+sort_by(arr, 4, fn(a: int, b: int) -> int: (b - a) * mult)
+```
+
+**Implementação:** todo valor `fn` é um **fat pointer** `{fn_ptr, env_ptr}`. O `env_ptr` carrega as capturas. Funções nomeadas usadas como valor são wrapped em runtime com `env_ptr = NULL`. `&fn_name` devolve o fn ptr **cru** (FFI-compatível).
+
+---
+
+## Structs
+
+```lumina
+struct Ponto:
+    x: int
+    y: int
+
+struct Caixa:
+    valor: int
+    ponto: Ponto
+```
+
+Literal:
+
+```lumina
+let p = Ponto { x: 1, y: 2 }
+let c = Caixa { valor: 10, ponto: p }
+```
+
+Acesso:
+
+```lumina
+print(p.x)              # 1
+print(c.ponto.x)        # 1 (member chain)
+```
+
+Mutação:
+
+```lumina
+mut p: Ponto
+p.x = 10
+p.y = 20
+```
+
+Zerar sem inicializador:
+
+```lumina
+mut p: Ponto            # todos os campos = 0
+```
+
+Type check automático:
+
+```lumina
+let p = Ponto { x: "texto", y: 2 }   # ERRO em compile-time
+```
+
+---
+
+## Tipos Algébricos (ADTs)
+
+```lumina
+enum Result:
+    Ok(int)
+    Err(int)
+
+enum Par:
+    Dois(int, int)
+    Zero
+
+enum Color:
+    Red
+    Green
+    Blue
+```
+
+### Construção
+
+```lumina
+let r = Ok(42)
+let p = Dois(10, 20)
+let c = Red              # variante bare (sem payload)
+```
+
+Variante com payload usada bare é erro:
+
+```lumina
+let x = Ok                # ERRO: Ok espera payload
+```
+
+### Match
+
+```lumina
+match r:
+    case Ok(v):  print("ok:", v)
+    case Err(e): print("err:", e)
+```
+
+### Multi-payload com binding
 
 ```lumina
 match p:
     case Dois(a, b): print(a, b)
-    case Zero:       print("zero")
+    case Zero:       print(0, 0)
 ```
 
-### Multi-pattern + Wildcard
+### Guard
+
+```lumina
+match shape:
+    case Circle(r) if r > 10: return "grande"
+    case Circle(r):           return "pequeno"
+    case Square(s):           return "quadrado"
+```
+
+### Multi-pattern e wildcard
 
 ```lumina
 match n:
@@ -187,62 +456,120 @@ match n:
     case _:         return "grande"
 ```
 
-### Guard
+### Match em string
 
 ```lumina
-match n:
-    case x if x > 100: return "grande"
-    case x:            return "pequeno"
+match cmd:
+    case "run":  return 1
+    case "stop": return 0
+    default:     return -1
 ```
 
-### Variantes bare
+### Match expressão
 
 ```lumina
-enum Color:
-    Red
-    Green
-    Blue
-
-let c = Red      # constrói implicitamente
+let r = match x:
+    case 1: 10
+    case _: 20
 ```
 
-## Enums (ADTs)
+---
+
+## Generics
+
+Função genérica:
 
 ```lumina
-enum Result:
-    Ok(int)
-    Err(int)
+fn identidade<T>(x: T) -> T:
+    return x
 
-enum Multi:
-    Dois(int, int)
-    Zero
-    Um
+print(identidade(10))       # int
+print(identidade(3.14))     # float
 ```
 
-## Structs e métodos
+Struct genérica:
 
 ```lumina
-struct Ponto:
-    x: int
-    y: int
+struct Box<T>:
+    data: T
+```
 
-impl Ponto:
-    fn soma() -> int:
-        return self.x + self.y
+Enum genérico:
+
+```lumina
+enum Res<T, E>:
+    Ok(T)
+    Err(E)
+
+let r = Ok(42)              # Res<int, int> inferido
+let s = Ok("hi")            # Res<str, int> inferido
+```
+
+**Monomorphization:** cada instanciação gera uma cópia especializada (`identidade__int`, `identidade__float`).
+
+---
+
+## Genéricos Aninhados
+
+`Box<T>` como parâmetro de função:
+
+```lumina
+struct Box<T>:
+    data: T
+
+fn put<T>(b: Box<T>, val: T):
+    b.data = val
+
+fn get<T>(b: Box<T>) -> T:
+    return b.data
 
 fn main() -> int:
-    let p = Ponto { x: 1, y: 2 }
-    print(p.soma())    # 3
+    mut bi: Box<int>
+    mut bs: Box<str>
+    put(bi, 42)
+    put(bs, "hello")
+    print(get(bi))    # 42
+    print(get(bs))    # hello
     return 0
 ```
 
-## Traits
+Suportado via `unify_type` (semantic) + `substitute_generic` (codegen).
+
+---
+
+## Impls e Traits
+
+### `impl` simples
+
+```lumina
+struct Counter:
+    n: int
+
+impl Counter:
+    fn inc():
+        self.n = self.n + 1
+    fn get() -> int:
+        return self.n
+```
+
+### `impl` de trait
+
+```lumina
+trait Greeter:
+    fn greet() -> int
+
+impl Greeter for English:
+    fn greet() -> int:
+        return 0
+```
+
+### Trait com método default
 
 ```lumina
 trait Greeter:
     fn name() -> str
     fn greet():
-        print("Hello from", name())
+        print("Hi,", name())
 
 struct English:
     dummy: int
@@ -252,37 +579,176 @@ impl Greeter for English:
         return "Lumina"
 ```
 
-## `@derive`
+### `impl Box<T>:` (métodos em struct genérica)
+
+O `<T>` é descartado para registro — vira `Box_get`:
 
 ```lumina
-@derive(Eq, PartialEq, Debug, Clone, Default)
-struct Ponto:
+struct Box<T>:
+    data: T
+
+impl Box<T>:
+    fn get() -> int:
+        return self.data
+```
+
+### `impl Trait for Box<int>:` (especialização)
+
+Preserva o tipo completo — vira `Box_int__metodo`:
+
+```lumina
+struct Box<T>:
+    data: T
+
+trait Kind:
+    fn kind() -> int
+
+impl Kind for Box<int>:
+    fn kind() -> int:
+        return 1
+
+impl Kind for Box<str>:
+    fn kind() -> int:
+        return 2
+```
+
+As duas especializações coexistem. O lookup em chamadas tenta o nome completo primeiro e cai para o base.
+
+### Operator overloading
+
+```lumina
+struct Vec2:
     x: int
     y: int
+
+impl Vec2:
+    fn __add__(a: Vec2, b: Vec2) -> Vec2:
+        mut r: Vec2
+        r.x = a.x + b.x
+        r.y = a.y + b.y
+        return r
 ```
 
-Gera:
+Operadores suportados: `__add__`, `__sub__`, `__mul__`, `__div__`, `__eq__`, `__ne__`, `__lt__`, `__gt__`, `__le__`, `__ge__`.
 
-- `Eq` / `PartialEq` → `__eq__`, `__ne__`
-- `Debug` / `Display` → `__debug__`
-- `Clone` → `clone(self)`
-- `Default` → `new_Ponto()`
+---
 
-## `@safe` — null check opt-in
+## Type Aliases
+
+Simples:
 
 ```lumina
-@safe
-fn get_id(u: Usuario) -> int:
-    return u.id        # 0 se u == nil
-
-@safe
-fn first(arr: ptr) -> int:
-    return arr[0]      # 0 se arr == nil
+type MyInt = int
+type Callback = fn(int) -> int
+type P = Ponto
 ```
 
-Sem `@safe`, `u.id` é C-style (SIGSEGV se nil).
+Genéricos:
 
-## `@macro` — expansão de AST
+```lumina
+struct Pair<A, B>:
+    a: A
+    b: B
+
+type IPair<B> = Pair<int, B>
+```
+
+Uso em qualquer posição:
+
+```lumina
+fn soma(p: P) -> int:
+    return p.x + p.y
+
+fn apply(f: Callback, x: int) -> int:
+    return f(x)
+
+fn get(p: IPair<str>) -> int:
+    return p.a
+```
+
+Aliases encadeiam:
+
+```lumina
+type A = int
+type B = A
+type C = B        # C == int
+```
+
+A expansão acontece na **passada 0 do semantic** — o resto do pipeline nunca vê o alias.
+
+---
+
+## Tuplas
+
+Literais:
+
+```lumina
+let t = (1, 2, 3)
+let u = (42, "hello")       # tipos heterogêneos
+```
+
+Destructuring:
+
+```lumina
+let (a, b, c) = (1, 2, 3)
+
+# Sobre struct
+let (x, y) = ponto
+
+# Sobre array
+let (p, q) = arr
+```
+
+Parênteses **não** são tupla:
+
+```lumina
+let x = (1 + 2) * 3        # 9, não tupla
+```
+
+---
+
+## `nil` vs `none`
+
+| | `nil` | `none` |
+|---|---|---|
+| Representa | null pointer C-style | `Option::None` |
+| Tipo | `ptr` / `str` / `fn` / struct | `Option<T>` |
+| Uso | `if u == nil`, `u?.campo` | `match x: case None:` |
+
+`nil`:
+
+```lumina
+struct U:
+    id: int
+
+fn main() -> int:
+    let u: U = nil
+    if u == nil:
+        print("nil")
+    let v = u?.id           # 0 (safe nav)
+    return 0
+```
+
+`none`:
+
+```lumina
+fn main() -> int:
+    let x: Option = none
+    match x:
+        case Some(v): print(v)
+        case None:    print("none")
+    return 0
+```
+
+---
+
+## Macros
+
+Lumina tem **duas formas** de macro:
+
+### `@macro` de expressão (`nome(args)`)
+
+Corpo deve ser **um único** `return <expr>`:
 
 ```lumina
 @macro
@@ -291,121 +757,173 @@ fn dobro(x: int) -> int:
 
 fn main() -> int:
     let a = 5
-    print(dobro(a + 1))    # (a + 1) * 2
+    print(dobro(a + 1))     # (a + 1) * 2 = 12
     return 0
 ```
 
-Restrição: corpo deve ser um único `return <expr>`.
+Expansão inline no call site.
 
-## Erros: `Option`, `none`, `nil`
+### `@macro` de statement (`nome!(args)`)
+
+Corpo pode ter múltiplos statements:
 
 ```lumina
-# Option
-fn buscar(id: int) -> Option:
-    if id == 42:
-        return Some(100)
-    return none
+@macro
+fn soma_em(p: ptr, idx: int, val: int):
+    p[idx] = p[idx] + val
 
-# nil (null pointer C-style)
-fn get_id(u: Usuario) -> int:
-    if u == nil:
-        return -1
-    return u.id
-
-# Safe navigation
-let v = u?.id          # 0 se u == nil
+fn main() -> int:
+    mut arr = alloc(3)
+    arr[0] = 0
+    arr[1] = 0
+    arr[2] = 0
+    for i in 0..3:
+        soma_em!(arr, i, i + 1)
+    print(arr[0], arr[1], arr[2])   # 1 2 3
+    return 0
 ```
 
-## Operadores modernos
+`return` dentro da macro-stmt retorna da função **chamadora**:
 
-| Operador | Descrição |
+```lumina
+@macro
+fn early_exit(cond: int):
+    if cond == 0:
+        return 42
+
+fn f(x: int) -> int:
+    early_exit!(x)
+    return 100
+
+f(0)    # 42
+f(1)    # 100
+```
+
+---
+
+## `@derive`
+
+Sintetiza métodos de trait no `struct`:
+
+```lumina
+@derive(Eq, PartialEq, Debug, Display, Clone, Default)
+struct Ponto:
+    x: int
+    y: int
+```
+
+| Derive | Gera |
 |---|---|
-| `\|>` | Pipe: `5 \|> dobro` == `dobro(5)` |
-| `?.` | Safe navigation |
-| `?` | Propaga erro (`Result`) |
-| `as` | Cast explícito |
-| `:=` | Declaração curta |
+| `Eq` / `PartialEq` | `__eq__` (e `__ne__` para PartialEq) |
+| `Debug` / `Display` | `__debug__` (retorna `str`) |
+| `Clone` | `clone()` |
+| `Default` | função livre `new_Ponto()` |
 
-## Slicing
+Uso:
 
 ```lumina
-let s = "abcdef"
-print(s[1..4])   # bcd
-print(s[..3])    # abc
-print(s[2..])    # cdef
-print(s[..])     # abcdef
+let p1 = Ponto { x: 1, y: 2 }
+let p2 = p1.clone()
+print(p1 == p2)             # true
+print(p1.__debug__())       # Ponto { x: 1, y: 2 }
 ```
 
-## `defer` com escopo de bloco
+---
+
+## `@safe`
+
+Null check automático em `MemberExpr` e `IndexExpr`:
+
+```lumina
+struct U:
+    id: int
+
+@safe
+fn get_id(u: U) -> int:
+    return u.id             # 0 se u == nil
+
+fn main() -> int:
+    let u: U = nil
+    print(get_id(u))        # 0 (sem SIGSEGV)
+    return 0
+```
+
+Sem `@safe`, `u.id` com `u == nil` causa SIGSEGV (rápido mas perigoso).
+
+---
+
+## LLVM Attrs
+
+| Attr | Efeito |
+|---|---|
+| `@inline` | `alwaysinline` |
+| `@noinline` | `noinline` |
+| `@cold` | `cold` (ramo improvável) |
+| `@hot` | `inlinehint` (mapeado — LLVM `hot` é string attribute) |
+
+```lumina
+@inline
+fn dobro(x: int) -> int:
+    return x * 2
+```
+
+`@inline` + `@noinline` juntos = erro de compilação.
+
+---
+
+## `defer`
+
+Escopo de **bloco** (Go/Zig-style):
 
 ```lumina
 fn main() -> int:
     defer print("fim da função")
-    if 1 == 1:
+
+    if true:
         defer print("fim do if")
-        print("dentro")
+        print("dentro do if")
+        # Saída: dentro do if / fim do if
+
     for i in 0..2:
         defer print("fim da iteração")
         print(i)
+        # Saída: 0 / fim da iteração / 1 / fim da iteração
+
+    print("depois do loop")
     return 0
-
-# dentro / fim do if / 0 / fim da iteração / 1 / fim da iteração / fim da função
+# Saída: depois do loop / fim da função
 ```
 
-## `comptime` (constant folding)
+`defer` dentro de `if false` **não** roda.
+
+---
+
+## Módulos e Imports
 
 ```lumina
-let x = comptime(2 + 3 * 4)   # vira literal 14 no IR
+import "std/math"
+import "std/io"
+import "meu_modulo"
 ```
 
-## TCO (Tail Call Optimization)
+Resolução de caminhos:
 
-Self-recursion:
+- `std/X` → `std/X.lm`
+- `./foo` → `foo.lm` (relativo)
+- `meu_modulo` → `lumina_modules/meu_modulo.lm` (dependência)
 
-```lumina
-fn sum_rec(n: int, acc: int) -> int:
-    if n == 0:
-        return acc
-    return sum_rec(n - 1, acc + n)   # vira loop
+`std/prelude.lm` é auto-importado (`Option`, `Result`).
+
+### `[link]` no `lumina.toml`
+
+```toml
+[link]
+libs = ["m", "raylib"]
+extra_objects = ["helper.cpp"]
+extra_flags = ["-DFOO=1", "-Iinclude"]
+target = "wasm"
 ```
 
-Mutual recursion:
-
-```lumina
-fn is_even(n: int) -> int:
-    if n == 0: return 1
-    return is_odd(n - 1)
-
-fn is_odd(n: int) -> int:
-    if n == 0: return 0
-    return is_even(n - 1)
-```
-
-## Escape analysis
-
-`alloc(N)` com `N` constante e sem `return`/`free` viram `alloca` no stack:
-
-```lumina
-fn main() -> int:
-    let buf = alloc(10)     # vira alloca, não GC_malloc
-    buf[0] = 42
-    print(buf[0])           # 42
-    return 0
-```
-
-## FFI (extern)
-
-```lumina
-extern fn printf(fmt: str, ...) -> int
-extern fn malloc(size: int) -> ptr
-```
-
-Configurar libs em `[link]` no `lumina.toml`.
-
-## Símbolos reservados
-
-`fn`, `let`, `mut`, `const`, `if`, `elif`, `else`, `while`, `for`, `in`,
-`return`, `break`, `continue`, `defer`, `errdefer`, `match`, `case`,
-`default`, `switch`, `struct`, `enum`, `impl`, `trait`, `import`,
-`extern`, `assert`, `bench`, `test`, `comptime`, `export`, `as`,
-`true`, `false`, `none`, `nil`, `and`, `or`, `not`.
+O `cmd_build` procura por `[link]` em:
+1. Sidecar: `examples/engine.lm` → `examples/engine.toml`
+2. Raiz: `./lumina.toml`

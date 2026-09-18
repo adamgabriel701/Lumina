@@ -5,7 +5,7 @@
 [![Python Version](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![Status](https://img.shields.io/badge/Status-Alpha%20%2F%20Active-green.svg)](#)
 [![Language](https://img.shields.io/badge/Language-Lumina-6A0DAD.svg)](#)
-[![Tests](https://img.shields.io/badge/tests-392%20passed-brightgreen.svg)](#-testes-automatizados)
+[![Tests](https://img.shields.io/badge/tests-404%20passed-brightgreen.svg)](#-testes-automatizados)
 [![Examples](https://img.shields.io/badge/examples-54%20ran%20%7C%2017%20skip%20%7C%200%20fail-success.svg)](#)
 [![Cross-compile](https://img.shields.io/badge/cross--compile-aarch64%20%7C%20armv7%20%7C%20riscv64%20%7C%20wasm-blueviolet.svg)](#-cross-compilação)
 
@@ -34,6 +34,7 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
 * **Tipagem Estática com Inferência:** Deduz tipos em retornos, generics aninhados, lambdas, binárias, `Option<T>`, `nil`, **tuplas** e `comptime`.
 * **Generics com Monomorphization:** `<T>` gera cópias especializadas. **Aninhados** (`fn put<T>(b: Box<T>, val: T)`) suportados via `unify_type` + `substitute_generic`. **`impl Box<T>:`** permite métodos em structs genéricas, chamados de `Box<int>`, `Box<str>`, etc.
 * **Closures (tipo `fn` unificado em fat pointer):** Todo valor `fn` é `{fn_ptr, env_ptr}`. Lambdas com captura usam env != NULL; lambdas sem captura e funções nomeadas usam env = NULL (wrapped em runtime). Isso destrava `sort_by(arr, n, fn(a, b): (b-a)*mult)` com captura e HOFs em geral. `&fn_name` devolve o fn ptr cru, compatível com FFI.
+* **Tipos de função com assinatura (`fn(int) -> int`):** Params e retornos de `fn` são anotáveis e checados em compile-time. Chamar variável `fn` com arity/tipos errados falha em compile. `fn` puro continua aceitando qualquer valor.
 * **Tuplas:** `let (a, b, c) = (1, 2, 3)` — tuplas literais com tipos heterogêneos e destructuring sobre tuplas, structs e arrays.
 * **`for x in arr` e `for i, x in arr`:** itera sobre arrays literais (via variável ou inline), strings e `alloc(N)` com N constante.
 * **Tipos Algébricos (ADTs) & Pattern Matching:** `enum`s com multi-payload. `match`/`switch` com binding, guard, **multi-pattern** (`case A | B:`) e **wildcard** (`case _:`). **Variantes bare** (`let x = Stop`).
@@ -125,6 +126,7 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
 | 57 | **`@macro` (expansão de AST)** | ✅ |
 | 58 | **Defers emitidos em tail calls** | ✅ |
 | 59 | **Escape analysis** (alloca para alloc const sem escape) | ✅ |
+| 60 | **Tipos de função com assinatura (`fn(int) -> int`)** | ✅ |
 
 ### CLI
 
@@ -246,8 +248,9 @@ pytest tests/ -v
 | `cli/test_repl.py` | 10 | REPL persistente |
 | `features/test_examples_smoke.py` | 1 | Compila exemplos não-skipados |
 | `features/test_language_features.py` | 1 | Output exato de `uncertain_features.lm` |
+| `test_fn_types.py` | 12 | Assinatura `fn(T1, T2) -> R`, checagem de arity/tipos |
 
-**Total:** `392 passed`.
+**Total:** `404 passed`.
 
 ### 2. LSP (isolado)
 
@@ -836,7 +839,7 @@ Ativar cores semânticas em `settings.json`:
 * **`@safe`:** opt-in. Sem anotação, `u.id` continua C-style (SIGSEGV rápido). Null check só em `MemberExpr`/`IndexExpr`; não cobre FFI.
 * **`@macro`:** duas formas. `nome(args)` é macro de **expressão** — corpo deve ser um único `return <expr>`. `nome!(args)` é macro de **statement** — corpo pode ter múltiplos statements, inlineados no call site (inclusive `return`, que retorna da função chamadora). Substituição cobre statements (`VarDecl`, `AssignStmt`, `ReturnStmt`, `IfStmt`, `WhileStmt`, `ForStmt`, `DeferStmt`, `AssertStmt`) e expressões aninhadas.
 * **`impl Box<T>`:** o `<T>` é descartado para registro (`Box_get`); chamadas em `Box<int>` fazem bitcast. Funciona porque `Box<int>` e `Box<str>` têm layout idêntico (8 bytes) no LLVM.
-* **Closures:** captura por valor (mutação posterior da variável externa não é vista). O tipo `fn` é um fat pointer `{fn_ptr, env_ptr}` — closures com captura funcionam como callback (`sort_by`, `map`, `filter`). `&fn_name` devolve o fn ptr cru para FFI.
+* **Closures:** captura por valor (mutação posterior da variável externa não é vista). O tipo `fn` é um fat pointer `{fn_ptr, env_ptr}` — closures com captura funcionam como callback (`sort_by`, `map`, `filter`). `&fn_name` devolve o fn ptr cru para FFI. Assinaturas tipadas (`fn(int) -> int`) são validadas em compile-time; `fn` puro aceita qualquer valor.
 * **Escape sequences:** `\n`, `\t`, `\r`, `\0`, `\a`, `\b`, `\f`, `\v`, `\\`, `\"`, `\'` são processados em compile-time. Escapes desconhecidos são preservados como `\X` (backslash + letra).
 * **`std/async`:** FFI não suporta `makecontext` com ponteiro de função. `examples/coroutines.lm` é esqueleto.
 * **`std/iter` callbacks:** assinatura `i64 -> i64`.

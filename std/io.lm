@@ -10,10 +10,6 @@
 ## são builtins do compilador (ver `lumina/builtins.py`). Não é preciso
 ## declará-los como `extern fn` — o codegen já emite a chamada correta
 ## ao libc com a assinatura C (ex: fgets' `size` é i32, não i64).
-##
-## NOTA 2: usamos `chr(10)` em vez de `"\n"` porque o lexer da Lumina
-## preserva escapes de string como texto literal (backslash + letra).
-## `chr(10)` produz o byte real 0x0A (LF) em runtime.
 
 ## Lê uma linha de stdin. Remove o '\n' final, se houver.
 ## Retorna "" em EOF.
@@ -51,16 +47,16 @@ fn write(s: str):
     fputs(s, out)
     fflush(out)
 
-## Escreve `s` em stdout seguido de newline real.
+## Escreve `s` em stdout seguido de newline.
 fn write_line(s: str):
     let out = stdout()
     fputs(s, out)
-    fputs(chr(10), out)
+    fputs("\n", out)
     fflush(out)
 
-## Escreve `s` em stderr seguido de newline real.
+## Escreve `s` em stderr seguido de newline.
 fn eprintln(s: str):
     let err = stderr()
     fputs(s, err)
-    fputs(chr(10), err)
+    fputs("\n", err)
     fflush(err)

@@ -3,7 +3,7 @@ from ..lexer.tokens import TokenType
 from ..ast import (
     VarDecl, DestructureStmt, AssignStmt, ReturnStmt, IfStmt, WhileStmt,
     ForStmt, BreakStmt, ContinueStmt, DeferStmt, AssertStmt, BenchStmt,
-    Function, BinaryExpr,
+    Function, BinaryExpr, MacroCallStmt,
 )
 
 
@@ -22,7 +22,6 @@ class StatementParser(PatternParser):
         if (not self.current_token()
                 or self.check(TokenType.EOF)
                 or self.check(TokenType.DEDENT)):
-            # Comentários soltos antes de DEDENT/EOF. Por ora descartamos.
             self.pending_comments.clear()
             return None
 
@@ -76,12 +75,17 @@ class StatementParser(PatternParser):
         elif token.type == TokenType.SWITCH:
             return self.parse_switch()
         elif (token.type == TokenType.IDENT
+              and self.peek(1) and self.peek(1).type == TokenType.BANG
+              and self.peek(2) and self.peek(2).type == TokenType.LPAREN):
+            return self._parse_macro_call_stmt()
+        elif (token.type == TokenType.IDENT
               and self.peek(1) and self.peek(1).type == TokenType.COLON_ASSIGN):
             var_token = self.consume()
             self.consume()
             value = self.parse_expression()
             self.match(TokenType.NEWLINE)
-            return VarDecl(var_token.value, None, value, True, var_token.line, var_token.col)
+            return VarDecl(var_token.value, None, value, True,
+                           var_token.line, var_token.col)
         else:
             expr = self.parse_expression()
 
@@ -98,6 +102,26 @@ class StatementParser(PatternParser):
 
             self.match(TokenType.NEWLINE)
             return expr
+
+    def _parse_macro_call_stmt(self):
+        """Parseia `nome!(arg1, arg2, ...)` em posição de statement.
+
+        Consome IDENT, BANG, LPAREN, args, RPAREN, e opcionalmente NEWLINE.
+        """
+        name_token = self.consume()   # IDENT
+        self.consume()                # BANG
+        self.consume()                # LPAREN
+        args = []
+        if not self.check(TokenType.RPAREN):
+            while True:
+                args.append(self.parse_expression())
+                if not self.match(TokenType.COMMA):
+                    break
+        self.expect(TokenType.RPAREN)
+        self.match(TokenType.NEWLINE)
+        return MacroCallStmt(
+            name_token.value, args, name_token.line, name_token.col,
+        )
 
     def _parse_compound_assign(self, target_expr):
         compound_ops = {
@@ -130,7 +154,6 @@ class StatementParser(PatternParser):
             self.consume()
             names = []
             while True:
-                # NOVO: aceita trailing comma: `let (a,) = ...`
                 if self.check(TokenType.RPAREN):
                     break
                 names.append(self.expect(TokenType.IDENT).value)
@@ -165,18 +188,11 @@ class StatementParser(PatternParser):
         self.match(TokenType.NEWLINE)
         return ReturnStmt(values)
 
-    # ------------------------------------------------------------------
-    # If / Elif / Else
-    # ------------------------------------------------------------------
     def parse_if(self):
         self.consume(TokenType.IF)
         return self._parse_if_core()
 
     def _parse_if_core(self):
-        """Parseia `cond: bloco [elif ...] [else: bloco]`.
-
-        O token IF/ELIF inicial já foi consumido pelo chamador.
-        """
         condition = self.parse_expression()
         self.expect(TokenType.COLON)
         self.expect(TokenType.NEWLINE)
@@ -237,7 +253,6 @@ class StatementParser(PatternParser):
     def parse_for(self):
         self.consume(TokenType.FOR)
         first = self.expect(TokenType.IDENT).value
-        # NOVO: `for i, x in arr:` — índice + valor.
         second = None
         if self.check(TokenType.COMMA):
             self.consume()

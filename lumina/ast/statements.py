@@ -24,19 +24,15 @@ class StructDecl(Stmt):
 @dataclass
 class EnumDecl(Stmt):
     name: str
-    # variants: List[(nome, [tipos])]
-    #   - [tipos] é lista de strings (type names)
-    #   - [] (vazio)     → variante sem payload (ex: None, Zero)
-    #   - [T]            → single-payload (ex: Some(T), Ok(T))
-    #   - [T1, T2, ...]  → multi-payload (ex: Dois(int, int))
     variants: List[tuple]
     line: int = 0
     col: int = 0
 
+
 @dataclass
 class TraitDecl(Stmt):
     name: str
-    methods: List[Any]  # Lista de Function
+    methods: List[Any]
     line: int = 0
     col: int = 0
 
@@ -44,7 +40,7 @@ class TraitDecl(Stmt):
 @dataclass
 class ImplBlock(Stmt):
     struct_name: str
-    methods: List[Any]  # Lista de Function
+    methods: List[Any]
     trait_name: Optional[str] = None
     line: int = 0
     col: int = 0
@@ -76,8 +72,6 @@ class Function(Stmt):
     params: List[Param]
     return_type: str
     body: List[Any]
-    # Se type_params não é None, é uma função genérica — só é materializada
-    # on-demand pelo codegen (monomorphization leve).
     type_params: Optional[List[str]] = None
     line: int = 0
     col: int = 0
@@ -88,7 +82,7 @@ class Function(Stmt):
 @dataclass
 class ExternDecl(Stmt):
     name: str
-    params: List[tuple]  # (Nome, Tipo) — diferente de Function, é tuple mesmo
+    params: List[tuple]
     return_type: str
     is_wasm: bool = False
     line: int = 0
@@ -143,9 +137,6 @@ class ForStmt(Stmt):
 @dataclass
 class MatchStmt(Stmt):
     condition: Expr
-    # 4-tuple: (variant, binding, guard, body).
-    # NÃO usar MatchCase aqui — o parser e o codegen dependem da tuple.
-    # (MatchExpr em expressions.py usa MatchCase; MatchStmt não.)
     cases: List[tuple]
     default: Optional[List[Any]] = None
 
@@ -184,5 +175,22 @@ class BenchStmt(Stmt):
 class ErrorNode(Stmt):
     """Nó especial para erros de parsing, permitindo o parser continuar"""
     message: str
+    line: int = 0
+    col: int = 0
+
+
+@dataclass
+class MacroCallStmt(Stmt):
+    """Invocação de macro em posição de statement.
+
+    Sintaxe: `nome!(arg1, arg2, ...)`. Diferente de `nome(args)` (que
+    é uma chamada de função/expressão), esta forma inlina o corpo
+    inteiro da macro no call site, permitindo corpos multi-statement.
+
+    A macro é resolvida em compile-time pelo codegen; a substituição
+    de parâmetros é feita em `_substitute_in_stmt` e `_substitute_in_expr`.
+    """
+    name: str
+    args: List[Expr]
     line: int = 0
     col: int = 0

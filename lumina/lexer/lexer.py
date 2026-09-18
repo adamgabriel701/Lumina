@@ -1,6 +1,21 @@
 from .tokens import Token, TokenType, KEYWORDS
 
 
+_ESCAPE_MAP = {
+    'n': '\n',
+    't': '\t',
+    'r': '\r',
+    '0': '\0',
+    'a': '\x07',
+    'b': '\b',
+    'f': '\f',
+    'v': '\v',
+    '\\': '\\',
+    '"': '"',
+    "'": "'",
+}
+
+
 class Lexer:
     def __init__(self, source: str, filename: str = "<string>"):
         self.source = source.replace('\r\n', '\n').replace('\r', '\n')
@@ -40,9 +55,6 @@ class Lexer:
             if self.paren_depth > 0:
                 while True:
                     self._skip_whitespace()
-                    # Comentários dentro de parênteses: também guardamos como
-                    # COMMENT (o parser descarta dentro de expressões, mas
-                    # manter o token evita ter que diferenciar dois modos).
                     if self.peek() == '#':
                         start_line, start_col = self.line, self.col
                         text = ""
@@ -214,15 +226,24 @@ class Lexer:
         else:
             self.add_token(TokenType.NUMBER, num_str)
 
+    def _read_escape(self, val, allow_newline=False):
+        """Processa um escape `\\X`. Retorna o novo `val` (in-place update
+        seria possível, mas usar retorno simplifica).
+        """
+        self.advance()  # consome '\'
+        esc = self.advance()
+        if esc in _ESCAPE_MAP:
+            return val + _ESCAPE_MAP[esc]
+        # Escape desconhecido: preserva `\X` como texto literal.
+        return val + '\\' + esc
+
     def _string(self, interpolated=False):
-        self.advance()
+        self.advance()  # consome a aspa de abertura
         val = ""
         if interpolated:
             while self.peek() != '"' and self.peek() != '\0':
                 if self.peek() == '\\':
-                    val += self.advance()
-                    if self.peek() != '\0':
-                        val += self.advance()
+                    val = self._read_escape(val)
                 else:
                     val += self.advance()
             if self.peek() == '\0':
@@ -232,9 +253,7 @@ class Lexer:
         else:
             while self.peek() != '"' and self.peek() != '\0':
                 if self.peek() == '\\':
-                    val += self.advance()
-                    if self.peek() != '\0':
-                        val += self.advance()
+                    val = self._read_escape(val)
                 elif self.peek() == '\n':
                     self.error("String não terminada")
                 else:

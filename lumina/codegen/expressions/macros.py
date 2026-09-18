@@ -1,20 +1,31 @@
 """Expansão de macros (@macro) em compile-time.
 
-Uma macro é uma Function com attr 'macro'. Seu corpo deve ser
-UM único ReturnStmt cujo values[0] é uma expressão. No call site,
-o codegen substitui VariableExpr(param) pelo arg AST e visita.
+Uma macro é uma Function com attr 'macro'. Há duas formas de invocação:
 
-Sem statement expansion (if/while/etc.) — só expressões. Multi-
-statement macros ficam para uma sprint futura.
+  1. `nome(args)` — expressão. O corpo deve ser um único
+     `return <expr>`. O valor da expressão é inlineado no call site.
+
+  2. `nome!(args)` — statement. O corpo pode ter qualquer número de
+     statements. Cada statement é inlineado no call site, com os
+     parâmetros substituídos pelos argumentos.
+
+A substituição é feita em duas funções:
+  - `_substitute_in_expr(expr, mapping)` — para expressões
+  - `_substitute_in_stmt(stmt, mapping)` — para statements
 """
 import copy
 
 from ...ast import (
+    # Expressões
     VariableExpr, BinaryExpr, UnaryExpr, CallExpr, MemberExpr,
     IndexExpr, SliceExpr, CastExpr, AddressOfExpr, DerefExpr,
     StructLiteralExpr, NumberExpr, StringExpr, BoolExpr,
     NoneExpr, NilExpr, LambdaExpr, PropagateExpr, ComptimeExpr,
     InterpolatedStringExpr, ArrayExpr, MatchExpr, StructLiteralField,
+    Expr as AstExpr,
+    # Statements
+    VarDecl, AssignStmt, ReturnStmt, IfStmt, WhileStmt, ForStmt,
+    DeferStmt, AssertStmt, DestructureStmt,
 )
 
 
@@ -23,8 +34,11 @@ class MacrosMixin:
     def _is_macro(self, name):
         return name in getattr(self, 'macros', {})
 
+    # ==================================================================
+    # Expansão em posição de expressão (`nome(args)`)
+    # ==================================================================
     def _expand_macro_expr(self, macro_fn, arg_nodes):
-        """Expande macro_fn com os args. Retorna Expr substituído."""
+        """Expande macro_fn como expressão. Corpo deve ser `return <expr>`."""
         params = macro_fn.params
 
         if len(arg_nodes) != len(params):
@@ -36,26 +50,49 @@ class MacrosMixin:
                 getattr(macro_fn, 'line', 0), getattr(macro_fn, 'col', 0), '',
             )
 
-        # Corpo precisa ser 1 ReturnStmt
         body = macro_fn.body
         return_stmts = [s for s in body if type(s).__name__ == 'ReturnStmt']
         if len(body) != 1 or not return_stmts or not return_stmts[0].values:
             from ...errors import LuminaError
             raise LuminaError(
-                f"Macro '{macro_fn.name}' deve ter corpo `return <expr>` "
-                f"(um único statement). Macros multi-statement não são "
-                f"suportadas.",
+                f"Macro '{macro_fn.name}' usada como expressão deve ter "
+                f"corpo `return <expr>` (um único statement). Para corpo "
+                f"multi-statement, use `{macro_fn.name}!(...)` em posição "
+                f"de statement.",
                 self.filename if hasattr(self, 'filename') else '<repl>',
                 getattr(macro_fn, 'line', 0), getattr(macro_fn, 'col', 0), '',
             )
 
         expr = return_stmts[0].values[0]
-
-        # mapping param_name → arg AST
         mapping = {p.name: arg for p, arg in zip(params, arg_nodes)}
-
         return self._substitute_in_expr(expr, mapping)
 
+    # ==================================================================
+    # Expansão em posição de statement (`nome!(args)`)
+    # ==================================================================
+    def _expand_macro_stmt(self, macro_fn, arg_nodes):
+        """Expande macro_fn como sequência de statements.
+
+        Retorna uma lista de statements com os parâmetros substituídos.
+        O corpo inteiro da macro é inlineado.
+        """
+        params = macro_fn.params
+
+        if len(arg_nodes) != len(params):
+            from ...errors import LuminaError
+            raise LuminaError(
+                f"Macro '{macro_fn.name}' espera {len(params)} args, "
+                f"recebeu {len(arg_nodes)}.",
+                self.filename if hasattr(self, 'filename') else '<repl>',
+                getattr(macro_fn, 'line', 0), getattr(macro_fn, 'col', 0), '',
+            )
+
+        mapping = {p.name: arg for p, arg in zip(params, arg_nodes)}
+        return [self._substitute_in_stmt(s, mapping) for s in macro_fn.body]
+
+    # ==================================================================
+    # Substituição em expressões
+    # ==================================================================
     def _substitute_in_expr(self, expr, mapping):
         """Deep-copy de `expr` com VariableExpr(name) → mapping[name]."""
         if isinstance(expr, VariableExpr):
@@ -63,12 +100,10 @@ class MacrosMixin:
                 return copy.deepcopy(mapping[expr.name])
             return copy.deepcopy(expr)
 
-        # Folhas
         if isinstance(expr, (NumberExpr, StringExpr, BoolExpr,
                              NoneExpr, NilExpr)):
             return copy.deepcopy(expr)
 
-        # Binários
         if isinstance(expr, BinaryExpr):
             return BinaryExpr(
                 expr.op,
@@ -76,14 +111,12 @@ class MacrosMixin:
                 self._substitute_in_expr(expr.right, mapping),
             )
 
-        # Unários
         if isinstance(expr, UnaryExpr):
             return UnaryExpr(
                 expr.op,
                 self._substitute_in_expr(expr.val, mapping),
             )
 
-        # Chamadas
         if isinstance(expr, CallExpr):
             return CallExpr(
                 self._substitute_in_expr(expr.callee, mapping),
@@ -91,7 +124,6 @@ class MacrosMixin:
                 expr.is_method,
             )
 
-        # Membros
         if isinstance(expr, MemberExpr):
             return MemberExpr(
                 self._substitute_in_expr(expr.obj, mapping),
@@ -99,14 +131,12 @@ class MacrosMixin:
                 expr.is_safe,
             )
 
-        # Index
         if isinstance(expr, IndexExpr):
             return IndexExpr(
                 self._substitute_in_expr(expr.array, mapping),
                 self._substitute_in_expr(expr.index, mapping),
             )
 
-        # Slice
         if isinstance(expr, SliceExpr):
             return SliceExpr(
                 self._substitute_in_expr(expr.array, mapping),
@@ -114,14 +144,12 @@ class MacrosMixin:
                 self._substitute_in_expr(expr.end, mapping) if expr.end else None,
             )
 
-        # Cast
         if isinstance(expr, CastExpr):
             return CastExpr(
                 self._substitute_in_expr(expr.expr, mapping),
                 expr.target_type,
             )
 
-        # Ptr
         if isinstance(expr, AddressOfExpr):
             return AddressOfExpr(self._substitute_in_expr(expr.val, mapping))
 
@@ -131,7 +159,6 @@ class MacrosMixin:
         if isinstance(expr, PropagateExpr):
             return PropagateExpr(self._substitute_in_expr(expr.val, mapping))
 
-        # Struct literal
         if isinstance(expr, StructLiteralExpr):
             new_fields = [
                 StructLiteralField(
@@ -142,24 +169,104 @@ class MacrosMixin:
             ]
             return StructLiteralExpr(expr.struct_name, new_fields)
 
-        # Array literal
         if isinstance(expr, ArrayExpr):
             return ArrayExpr(
                 [self._substitute_in_expr(e, mapping) for e in expr.elements]
             )
 
-        # Interpolação
         if isinstance(expr, InterpolatedStringExpr):
             return InterpolatedStringExpr(
                 [self._substitute_in_expr(e, mapping) for e in expr.parts]
             )
 
-        # Comptime
         if isinstance(expr, ComptimeExpr):
             inner = self._substitute_in_expr(expr.expr, mapping)
             return ComptimeExpr(inner)
 
         # Fallback: deepcopy sem substituição
-        # (cobre LambdaExpr, MatchExpr, etc. — não esperados em macros
-        # por enquanto)
         return copy.deepcopy(expr)
+
+    # ==================================================================
+    # Substituição em statements
+    # ==================================================================
+    def _substitute_in_stmt(self, stmt, mapping):
+        """Deep-copy de `stmt` com substituição de params.
+
+        Cobre os statement types mais comuns dentro de macros
+        (VarDecl, AssignStmt, ReturnStmt, IfStmt, WhileStmt, ForStmt,
+        DeferStmt, AssertStmt) e delega a `_substitute_in_expr` para
+        bare expressions. Para tipos desconhecidos, faz deepcopy sem
+        substituição (o que preserva comportamento, mas pode não
+        substituir params — evita crash).
+        """
+        if stmt is None:
+            return None
+
+        # Bare expressions usadas como statements
+        if isinstance(stmt, AstExpr):
+            return self._substitute_in_expr(stmt, mapping)
+
+        if isinstance(stmt, VarDecl):
+            return VarDecl(
+                stmt.name,
+                stmt.var_type,
+                self._substitute_in_expr(stmt.value, mapping) if stmt.value else None,
+                stmt.is_mutable,
+                stmt.line,
+                stmt.col,
+            )
+
+        if isinstance(stmt, DestructureStmt):
+            return DestructureStmt(
+                list(stmt.names),
+                self._substitute_in_expr(stmt.value, mapping),
+                stmt.is_mutable,
+            )
+
+        if isinstance(stmt, AssignStmt):
+            return AssignStmt(
+                self._substitute_in_expr(stmt.target, mapping),
+                self._substitute_in_expr(stmt.value, mapping),
+            )
+
+        if isinstance(stmt, ReturnStmt):
+            return ReturnStmt(
+                [self._substitute_in_expr(v, mapping) for v in stmt.values],
+                stmt.line,
+                stmt.col,
+            )
+
+        if isinstance(stmt, IfStmt):
+            return IfStmt(
+                self._substitute_in_expr(stmt.condition, mapping),
+                [self._substitute_in_stmt(s, mapping) for s in stmt.then_body],
+                [self._substitute_in_stmt(s, mapping) for s in stmt.else_body]
+                if stmt.else_body else None,
+            )
+
+        if isinstance(stmt, WhileStmt):
+            return WhileStmt(
+                self._substitute_in_expr(stmt.condition, mapping),
+                [self._substitute_in_stmt(s, mapping) for s in stmt.body],
+            )
+
+        if isinstance(stmt, ForStmt):
+            return ForStmt(
+                stmt.var_name,
+                self._substitute_in_expr(stmt.start, mapping) if stmt.start else None,
+                self._substitute_in_expr(stmt.end, mapping) if stmt.end else None,
+                self._substitute_in_expr(stmt.iterable, mapping) if stmt.iterable else None,
+                [self._substitute_in_stmt(s, mapping) for s in stmt.body],
+            )
+
+        if isinstance(stmt, DeferStmt):
+            return DeferStmt(
+                [self._substitute_in_stmt(s, mapping) for s in stmt.body],
+                stmt.is_errdefer,
+            )
+
+        if isinstance(stmt, AssertStmt):
+            return AssertStmt(self._substitute_in_expr(stmt.condition, mapping))
+
+        # Fallback: deepcopy sem substituição
+        return copy.deepcopy(stmt)

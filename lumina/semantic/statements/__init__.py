@@ -1,8 +1,7 @@
 """Análise semântica de statements.
 
 O método `analyze_stmt` é o dispatcher de entrada — ele decide qual
-mixin trata cada tipo de statement. É também o método sobrescrito por
-`SemanticAnalyzer` para adicionar a checagem de exaustividade de match.
+mixin trata cada tipo de statement.
 
 Mixins:
   - HelpersMixin     — _require_assignable, _require_bool, _find_enum_of_variant, _infer_binary_type
@@ -10,11 +9,12 @@ Mixins:
   - ControlMixin     — IfStmt, WhileStmt, ForStmt
   - MatchStmtMixin   — MatchStmt (bindings + guards + escopo)
   - FlowMixin        — ReturnStmt, DeferStmt, AssertStmt, BenchStmt
+  - MacroStmtMixin   — MacroCallStmt (`nome!(args)`)
 """
 from ...ast import (
     VarDecl, DestructureStmt, AssignStmt, ReturnStmt, IfStmt, WhileStmt,
     ForStmt, MatchStmt, ContinueStmt, DeferStmt, BreakStmt, AssertStmt,
-    BenchStmt, ErrorNode,
+    BenchStmt, ErrorNode, MacroCallStmt,
 )
 
 from .helpers import HelpersMixin
@@ -22,6 +22,7 @@ from .var_decl import VarDeclMixin
 from .control import ControlMixin
 from .match import MatchStmtMixin
 from .flow import FlowMixin
+from .macro_stmt import MacroStmtMixin
 
 
 class StatementAnalyzer(
@@ -30,6 +31,7 @@ class StatementAnalyzer(
     ControlMixin,
     MatchStmtMixin,
     FlowMixin,
+    MacroStmtMixin,
 ):
     """Dispatcher + mixins de análise de statements."""
 
@@ -76,6 +78,7 @@ class StatementAnalyzer(
         if isinstance(node, BenchStmt):
             return self._analyze_bench(node)
 
-        # Fallback: delega para o visitor (cobre IfExpr, MatchExpr,
-        # literais como Expr-statement, etc.)
+        if isinstance(node, MacroCallStmt):
+            return self._analyze_macro_call_stmt(node)
+
         return self.visit(node)

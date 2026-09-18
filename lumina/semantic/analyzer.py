@@ -2,11 +2,13 @@
 
 O trabalho pesado está dividido em:
   - `ExpressionAnalyzer` (em `expressions/`) — type checking de expressões
-  - `StatementAnalyzer` (em `statements.py`) — type checking de statements
+  - `StatementAnalyzer` (em `statements/`) — type checking de statements
   - `DerivesMixin` (em `derives.py`) — expansão de `@derive(...)`
   - `TraitResolutionMixin` (em `trait_resolution.py`) — métodos default
 
-A classe `SemanticAnalyzer` apenas orquestra a ordem das passadas.
+A classe `SemanticAnalyzer` apenas orquestra a ordem das passadas e
+mantém o registro global de macros (`@macro`) para validar invocações
+`nome!(args)`.
 """
 from ..builtins import BUILTIN_FUNCTIONS
 from lumina.ast.statements import ErrorNode
@@ -42,7 +44,8 @@ class SemanticAnalyzer(
 
         self.builtin_functions = BUILTIN_FUNCTIONS
 
-        self.freed_vars = set()   # NOVO
+        self.freed_vars = set()
+        self.macros = {}   # name → Function (com attr 'macro')
 
     # ------------------------------------------------------------------
     # Análise principal
@@ -51,24 +54,27 @@ class SemanticAnalyzer(
         self._expand_derives(declarations)
         self._resolve_trait_defaults(declarations)
 
-        # ------------------------------------------------------------------
-        # Passada 1: registrar símbolos (funções, structs, enums, traits)
-        # ------------------------------------------------------------------
+        # Passada 0: coletar macros. Necessário para validar invocações
+        # `nome!(args)` (MacroCallStmt) e permitir que a análise dos
+        # corpos de macros aconteça como funções normais.
+        self.macros = {}
+        for decl in declarations:
+            if isinstance(decl, Function):
+                attrs = getattr(decl, 'attrs', None) or []
+                if 'macro' in attrs:
+                    self.macros[decl.name] = decl
+
+        # Passada 1: registrar símbolos.
         for decl in declarations:
             if isinstance(decl, ErrorNode):
                 continue
             if isinstance(decl, (Function, ExternDecl)):
                 self.functions.add(decl.name)
-                # ExternDecl também vai pro function_defs para que
-                # o semantic conheça o tipo de retorno de funções extern
-                # (getcwd, getenv, access, ...). Sem isso, `let v = getcwd(...)`
-                # infere "int" e `v == nil` falha.
-                if isinstance(decl, (Function, ExternDecl)):
-                    self.function_defs[decl.name] = decl
-                    if hasattr(decl, 'line'):
-                        self.definition_locations[decl.name] = (
-                            self.filename, decl.line, decl.col,
-                        )
+                self.function_defs[decl.name] = decl
+                if hasattr(decl, 'line'):
+                    self.definition_locations[decl.name] = (
+                        self.filename, decl.line, decl.col,
+                    )
             elif isinstance(decl, StructDecl):
                 self.structs.add(decl.name)
                 self.struct_defs[decl.name] = decl
@@ -117,9 +123,7 @@ class SemanticAnalyzer(
                                 getattr(decl, 'col', 0), self.source_code,
                             )
 
-        # ------------------------------------------------------------------
-        # Passada 2: processar VarDecls de topo (globais) ANTES das funções.
-        # ------------------------------------------------------------------
+        # Passada 2: VarDecls de topo (globais)
         for decl in declarations:
             if isinstance(decl, VarDecl):
                 if decl.var_type is not None:
@@ -139,11 +143,7 @@ class SemanticAnalyzer(
                         self.filename, decl.line, decl.col,
                     )
 
-        # ------------------------------------------------------------------
-        # Passada 3: analisar corpos de funções e métodos de impl.
-        # TraitDecl NÃO entra aqui — os métodos default já foram copiados
-        # para os ImplBlocks por `_resolve_trait_defaults`.
-        # ------------------------------------------------------------------
+        # Passada 3: corpos de funções e métodos de impl.
         for decl in declarations:
             if isinstance(decl, Function):
                 self.analyze_function(decl)
@@ -199,7 +199,7 @@ class SemanticAnalyzer(
             self.current_ret_type = saved_ret_type
 
     # ------------------------------------------------------------------
-    # Análise de MatchStmt (exaustividade) — delega para super()
+    # Análise de MatchStmt (exaustividade)
     # ------------------------------------------------------------------
     def analyze_stmt(self, node):
         if isinstance(node, MatchStmt):
@@ -208,19 +208,16 @@ class SemanticAnalyzer(
                 struct_def = self.struct_defs[cond_type]
                 if hasattr(struct_def, 'variants'):
                     if not node.default:
-                        # `c[0]` pode ser lista (multi-pattern `case A | B:`).
-                        # Achata tudo para uma lista plana de nomes cobertos.
                         covered = []
                         for c in node.cases:
                             v = c[0]
                             if isinstance(v, list):
                                 covered.extend(v)
-                            elif v is not None:  # `_` wildcard → variante None
+                            elif v is not None:
                                 covered.append(v)
 
                         all_variants = [v[0] for v in struct_def.variants]
                         missing = set(all_variants) - set(covered)
-                        # Wildcard `_` em qualquer posição cobre o resto
                         has_wildcard = any(c[0] is None for c in node.cases)
                         if missing and not has_wildcard:
                             raise LuminaError(

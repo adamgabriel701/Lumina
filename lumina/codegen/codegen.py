@@ -127,6 +127,8 @@ class LLVMCodegen(
         self.setup_libc_functions()
         self.alias_methods = set()   # nomes curtos de trait methods
 
+        self.macros = {}
+
     # ==================================================================
     # Geração do módulo
     # ==================================================================

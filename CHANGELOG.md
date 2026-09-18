@@ -13,6 +13,7 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 #### Linguagem
 - **Tipos de função com assinatura (`fn(int, int) -> int`)**: antes `fn` era opaco (`voidptr`); agora é possível anotar params e retornos. Lambdas e funções nomeadas propagam a assinatura automaticamente, e chamadas via variável `fn` são validadas em compile-time (arity + tipos). `fn` sem assinatura continua aceitando qualquer valor, e mistura tipado/untyped é permitida nos dois sentidos.
+- **`fn` como campo de struct**: `struct Handler: cb: fn(int) -> int`. Atribuir lambda (com ou sem captura) ou função nomeada ao campo; chamar via `h.cb(args)` faz indirect call e valida arity/tipos em compile-time. Habilita vtable manual, event handlers, callbacks armazenados.
 - **Closures como callback (tipo `fn` unificado em fat pointer)**: todo valor `fn` em Lumina agora é `{fn_ptr, env_ptr}`. Lambdas com captura usam env != NULL; lambdas sem captura e funções nomeadas usam env = NULL (wrapped em runtime). Isso destrava `sort_by(arr, n, fn(a, b): ...)` com captura, `map`/`filter` com captura em `std/iter`, e qualquer HOF. `&fn_name` devolve o fn ptr cru (FFI-compatível). Resolve o `xfail` histórico de `test_sort_closure_captures`.
 - **Closures** (captura por valor): `let offset = 10; let add = fn(x: int) -> int: x + offset`. O codegen detecta variáveis livres em `LambdaExpr`, gera um bloco `{fn_ptr, env_ptr}` no heap, e emite uma função `i64 __closure_N(i8* env, i64 a1, ..., i64 aN)` que lê os campos do env. Suporta lambda aninhada, captura dentro de loop, e chamada com N argumentos.
 - **Escape sequences em strings**: `\n`, `\t`, `\r`, `\0`, `\a`, `\b`, `\f`, `\v`, `\\`, `\"`, `\'` são processados pelo lexer em compile-time. Antes eram preservados como texto literal (`\` + letra). Escapes desconhecidos são mantidos como `\X` (backslash + letra) para não quebrar código existente.
@@ -56,6 +57,7 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Adicionado (tests)
 
+- `tests/test_fn_struct_fields.py` (7 testes) — campo fn-typed, lambda com captura, função nomeada, múltiplos campos fn, erro de arity e tipo.
 - `tests/test_fn_types.py` (12 testes) — parse de `fn(T1, T2) -> R`, chamada com arity e tipos validados, mistura tipado/untyped, propagação de retorno, assinatura com `str`.
 - `tests/test_macro_stmts.py` (8 testes) — `nome!(args)`, substituição em statements, validação de arity, rejeição de `nome!(args)` sem macro, `return` em macro-stmt retorna da função chamadora, uso em loop, macros expression continuam funcionando, macro multi-statement como expressão (sem `!`) é rejeitada.
 - `tests/test_std_io.py` (6 testes) — `read_line`, `read_int`, `read_line_eof`, `write`, `write_line`, `eprintln`.
@@ -68,7 +70,7 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - `tests/test_std_result.py` (9 testes).
 - `tests/test_escape_analysis.py` (4 testes).
 
-**Total: 404 passed** (antes 392 passed, do 0.4.0).
+**Total: 411 passed** (antes 404 passed, do 0.4.0).
 
 ### Mudado
 

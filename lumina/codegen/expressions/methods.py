@@ -16,6 +16,61 @@ class MethodCallsMixin:
         obj_node = node.args[0]
         obj_val = self.visit(obj_node)
 
+        # `obj.campo_fn(args)` — o "método" é um campo fn-typed.
+        # Carrega o valor do campo e faz indirect call via _call_closure.
+        if (isinstance(obj_val.type, ir.PointerType)
+                and isinstance(obj_val.type.pointee, ir.IdentifiedStructType)):
+            struct_name = obj_val.type.pointee.name
+            fields_map = self.struct_fields.get(struct_name, {})
+            if method_name in fields_map:
+                field_idx = fields_map[method_name]
+                elem_ptr = self.builder.gep(
+                    obj_val,
+                    [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, field_idx)],
+                    name=f"field_{method_name}_ptr",
+                )
+                field_ty = elem_ptr.type.pointee
+                # Só trata como campo fn se for voidptr (fat pointer)
+                if field_ty == self.voidptr_ty:
+                    closure_val = self.builder.load(elem_ptr, name=f"field_{method_name}_load")
+
+                    # Desempacota {fn_ptr, env_ptr} e chama
+                    closure_i8pp = self.builder.bitcast(
+                        closure_val, self.voidptr_ty.as_pointer(),
+                        name=f"field_{method_name}_c8pp",
+                    )
+                    fn_raw = self.builder.load(closure_i8pp, name=f"field_{method_name}_fn")
+                    env_slot = self.builder.gep(
+                        closure_i8pp, [ir.Constant(self.i64_ty, 1)],
+                        name=f"field_{method_name}_env_slot",
+                    )
+                    env_raw = self.builder.load(env_slot, name=f"field_{method_name}_env")
+
+                    n = len(node.args) - 1  # excluindo obj
+                    fn_ty = ir.FunctionType(
+                        self.i64_ty, [self.voidptr_ty] + [self.i64_ty] * n,
+                    )
+                    fn_ptr = self.builder.bitcast(
+                        fn_raw, fn_ty.as_pointer(),
+                        name=f"field_{method_name}_cast",
+                    )
+
+                    call_args = [env_raw]
+                    for arg_node in node.args[1:]:
+                        a = self.visit(arg_node)
+                        if a.type != self.i64_ty:
+                            if isinstance(a.type, ir.IntType):
+                                a = self.builder.sext(a, self.i64_ty, name="field_arg_sext")
+                            elif a.type == self.f64_ty:
+                                a = self.builder.fptosi(a, self.i64_ty, name="field_arg_fptosi")
+                            elif isinstance(a.type, ir.PointerType):
+                                a = self.builder.ptrtoint(a, self.i64_ty, name="field_arg_ptr")
+                        call_args.append(a)
+
+                    return self.builder.call(
+                        fn_ptr, call_args, name=f"field_{method_name}_call",
+                    )
+
         if isinstance(obj_val.type, ir.PointerType) and isinstance(
             obj_val.type.pointee, ir.IdentifiedStructType,
         ):

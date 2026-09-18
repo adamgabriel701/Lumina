@@ -64,7 +64,7 @@ class DeclarationParser(StatementParser):
             self._take_comments()
             fn = self.expect(TokenType.IDENT).value
             self.expect(TokenType.COLON)
-            ft = self.expect(TokenType.IDENT).value
+            ft = self.parse_type()
             fields[fn] = ft
             self.match(TokenType.NEWLINE)
         self.match(TokenType.DEDENT)

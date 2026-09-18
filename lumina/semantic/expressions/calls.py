@@ -105,6 +105,52 @@ class CallsMixin:
                     self.visit(arg)
                 return BUILTIN_RET[func_name]
 
+        # `obj.campo_fn(args)` — o "método" é na verdade um campo fn-typed.
+        # Precisa vir antes do branch `is_method` porque o parser não
+        # distingue `obj.metodo(x)` de `obj.campo(x)`.
+        if (node.is_method
+                and isinstance(node.callee, MemberExpr)
+                and len(node.args) >= 1):
+            obj_node = node.args[0]
+            obj_type = self.visit(obj_node)
+            if obj_type and obj_type != "Unknown":
+                base_type = obj_type.split('<')[0]
+                struct_def = self.struct_defs.get(base_type)
+                if struct_def is not None and hasattr(struct_def, 'fields'):
+                    field_type = struct_def.fields.get(func_name)
+                    if field_type and (field_type == "fn" or field_type.startswith("fn(")):
+                        # É um campo fn: trata como chamada indireta,
+                        # extraindo o valor do campo e chamando.
+                        sig = None
+                        if field_type.startswith("fn("):
+                            sig = parse_fn_type(field_type)
+                        if sig is not None:
+                            param_types, ret_type = sig
+                            n_expected = len(param_types)
+                            n_got = len(node.args) - 1  # excluindo o obj
+                            if n_got != n_expected:
+                                raise LuminaError(
+                                    f"Campo '{func_name}' espera {n_expected} "
+                                    f"args, recebeu {n_got}.",
+                                    self.filename, getattr(node, 'line', 0),
+                                    getattr(node, 'col', 0), self.source_code,
+                                )
+                            for arg_node, expected in zip(node.args[1:], param_types):
+                                actual = self.visit(arg_node)
+                                if actual and not is_assignable(expected, actual):
+                                    raise LuminaError(
+                                        f"Tipo inválido para parâmetro de "
+                                        f"'{func_name}': esperado '{expected}', "
+                                        f"obteve '{actual}'.",
+                                        self.filename, getattr(node, 'line', 0),
+                                        getattr(node, 'col', 0), self.source_code,
+                                    )
+                            return ret_type if ret_type != "void" else None
+                        # fn sem assinatura: só visita args e devolve None
+                        for arg in node.args[1:]:
+                            self.visit(arg)
+                        return None
+
         if node.is_method:
             if not node.args:
                 raise LuminaError(

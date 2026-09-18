@@ -1,5 +1,5 @@
 # Função que recebe um callback (ponteiro de função)
-fn aplicar_fn(val: int, callback: str) -> int:
+fn aplicar_fn(val: int, callback: fn(int) -> int) -> int:
     # Converte o ponteiro i8* de volta para i64 (int) e chama
     # Na Lumina atual, chamadas dinâmicas de ponteiros exigem cast
     # Vamos simular retornando o valor fixo para testar a criação da lambda

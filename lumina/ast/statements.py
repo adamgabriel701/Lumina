@@ -194,3 +194,18 @@ class MacroCallStmt(Stmt):
     args: List[Expr]
     line: int = 0
     col: int = 0
+
+@dataclass
+class TypeAlias(Stmt):
+    """`type Nome = <tipo>` — alias de tipo.
+
+    O `target_type` pode ser um primitivo, nome de struct, `fn(...) -> R`,
+    ou qualquer combinação (inclusive genéricos aninhados). A expansão
+    acontece na passada 0 do semantic: os tipos usados no AST são
+    reescritos antes da análise, então o resto do pipeline nunca vê
+    aliases.
+    """
+    name: str
+    target_type: str
+    line: int = 0
+    col: int = 0

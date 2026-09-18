@@ -41,6 +41,7 @@ class TokenType(Enum):
     COMPTIME = auto()
     EXPORT = auto()
     AS = auto()
+    TYPE = auto()
     TRUE = auto()
     FALSE = auto()
     NONE = auto()
@@ -157,6 +158,7 @@ KEYWORDS: Dict[str, TokenType] = {
     "comptime": TokenType.COMPTIME,
     "export": TokenType.EXPORT,
     "as": TokenType.AS,
+    "type": TokenType.TYPE,
     "true": TokenType.TRUE,
     "false": TokenType.FALSE,
     "none": TokenType.NONE,

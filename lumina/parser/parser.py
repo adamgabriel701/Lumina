@@ -69,6 +69,8 @@ class Parser(DeclarationParser):
                  self.check(TokenType.TEST) or self.check(TokenType.BENCH) or \
                  self.check(TokenType.IMPORT) or self.check(TokenType.EXTERN):
                 decl = self.parse_statement()
+            elif self.check(TokenType.TYPE):
+                decl = self.parse_type_alias()
             else:
                 t = self.current_token()
                 raise LuminaError(

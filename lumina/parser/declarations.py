@@ -4,7 +4,7 @@ from .statements import StatementParser
 from ..lexer.tokens import TokenType
 from ..ast import (
     Function, StructDecl, EnumDecl, TraitDecl, ImplBlock, ExternDecl,
-    ImportStmt, Param,
+    ImportStmt, Param, TypeAlias,
 )
 
 
@@ -16,6 +16,15 @@ class DeclarationParser(StatementParser):
         path = self.expect(TokenType.STRING).value
         self.match(TokenType.NEWLINE)
         return ImportStmt(path)
+
+    def parse_type_alias(self):
+        """`type Nome = <tipo>` no top level."""
+        self.consume(TokenType.TYPE)
+        name = self.expect(TokenType.IDENT).value
+        self.expect(TokenType.ASSIGN)
+        target = self.parse_type()
+        self.match(TokenType.NEWLINE)
+        return TypeAlias(name, target)
 
     def parse_extern(self):
         self.consume(TokenType.EXTERN)

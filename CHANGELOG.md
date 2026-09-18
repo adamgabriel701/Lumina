@@ -12,6 +12,8 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 ### Adicionado
 
 #### Linguagem
+- **`type Alias = <tipo>`**: permite abreviar tipos. `type Callback = fn(int) -> int`; use `Callback` em params, retornos, campos de struct, VarDecls e payloads de enum. Aliases encadeados (`A → B → C`) funcionam.
+- **`std/iter` e `std/sort` com assinaturas tipadas**: callbacks agora são `fn(int) -> int` e `fn(int, int) -> int`. Erros de arity/tipo em lambdas passadas como callback são detectados em compile-time.
 - **Tipos de função com assinatura (`fn(int, int) -> int`)**: antes `fn` era opaco (`voidptr`); agora é possível anotar params e retornos. Lambdas e funções nomeadas propagam a assinatura automaticamente, e chamadas via variável `fn` são validadas em compile-time (arity + tipos). `fn` sem assinatura continua aceitando qualquer valor, e mistura tipado/untyped é permitida nos dois sentidos.
 - **`fn` como campo de struct**: `struct Handler: cb: fn(int) -> int`. Atribuir lambda (com ou sem captura) ou função nomeada ao campo; chamar via `h.cb(args)` faz indirect call e valida arity/tipos em compile-time. Habilita vtable manual, event handlers, callbacks armazenados.
 - **Closures como callback (tipo `fn` unificado em fat pointer)**: todo valor `fn` em Lumina agora é `{fn_ptr, env_ptr}`. Lambdas com captura usam env != NULL; lambdas sem captura e funções nomeadas usam env = NULL (wrapped em runtime). Isso destrava `sort_by(arr, n, fn(a, b): ...)` com captura, `map`/`filter` com captura em `std/iter`, e qualquer HOF. `&fn_name` devolve o fn ptr cru (FFI-compatível). Resolve o `xfail` histórico de `test_sort_closure_captures`.

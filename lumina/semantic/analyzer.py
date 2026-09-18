@@ -14,13 +14,14 @@ from ..builtins import BUILTIN_FUNCTIONS
 from lumina.ast.statements import ErrorNode
 from ..ast import (
     Function, ExternDecl, StructDecl, EnumDecl, ImplBlock,
-    VarDecl, VariableExpr, TraitDecl, MatchStmt,
+    VarDecl, VariableExpr, TraitDecl, MatchStmt, TypeAlias,
 )
 from ..errors import LuminaError
 from .expressions import ExpressionAnalyzer
 from .statements import StatementAnalyzer
 from .derives import DerivesMixin
 from .trait_resolution import TraitResolutionMixin
+from .types import expand_type_alias
 
 
 class SemanticAnalyzer(
@@ -46,6 +47,7 @@ class SemanticAnalyzer(
 
         self.freed_vars = set()
         self.macros = {}   # name → Function (com attr 'macro')
+        self.type_aliases = {}
 
     # ------------------------------------------------------------------
     # Análise principal
@@ -53,6 +55,18 @@ class SemanticAnalyzer(
     def analyze(self, declarations):
         self._expand_derives(declarations)
         self._resolve_trait_defaults(declarations)
+
+        # Passada 0: coletar e expandir type aliases.
+        # A expansão mutaciona os tipos no AST (params, retornos, fields,
+        # payloads de enum, etc.) para que o resto do pipeline nunca
+        # veja aliases.
+        self.type_aliases = {}
+        for decl in declarations:
+            if isinstance(decl, TypeAlias):
+                self.type_aliases[decl.name] = decl.target_type
+
+        if self.type_aliases:
+            self._expand_type_aliases(declarations)
 
         # Passada 0: coletar macros. Necessário para validar invocações
         # `nome!(args)` (MacroCallStmt) e permitir que a análise dos
@@ -168,6 +182,51 @@ class SemanticAnalyzer(
             if name in scope:
                 return scope[name]
         return None
+
+    def _expand_type_aliases(self, declarations):
+        """Reescreve todos os tipos do AST expandindo type aliases."""
+        aliases = self.type_aliases
+
+        def expand(t):
+            return expand_type_alias(t, aliases)
+
+        def expand_params(params):
+            for p in params:
+                p.type_ann = expand(p.type_ann)
+
+        for decl in declarations:
+            if isinstance(decl, Function):
+                expand_params(decl.params)
+                decl.return_type = expand(decl.return_type)
+            elif isinstance(decl, ExternDecl):
+                new_params = []
+                for p in decl.params:
+                    if isinstance(p, tuple) and len(p) >= 2:
+                        new_params.append((p[0], expand(p[1])))
+                    else:
+                        new_params.append(p)
+                decl.params = new_params
+                decl.return_type = expand(decl.return_type)
+            elif isinstance(decl, StructDecl):
+                for fname, ftype in list(decl.fields.items()):
+                    decl.fields[fname] = expand(ftype)
+            elif isinstance(decl, EnumDecl):
+                new_variants = []
+                for vname, payloads in decl.variants:
+                    if isinstance(payloads, list):
+                        new_variants.append((vname, [expand(t) for t in payloads]))
+                    elif payloads:
+                        new_variants.append((vname, expand(payloads)))
+                    else:
+                        new_variants.append((vname, payloads))
+                decl.variants = new_variants
+            elif isinstance(decl, (TraitDecl, ImplBlock)):
+                for m in decl.methods:
+                    expand_params(m.params)
+                    m.return_type = expand(m.return_type)
+            elif isinstance(decl, VarDecl):
+                if decl.var_type is not None:
+                    decl.var_type = expand(decl.var_type)
 
     def check_escape(self, node):
         if isinstance(node, VariableExpr) and node.name in self.heap_allocs:

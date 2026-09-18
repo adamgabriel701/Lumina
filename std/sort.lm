@@ -1,39 +1,20 @@
-## std/sort.lm — Ordenação com e sem comparator.
-##
-## Uso:
-##   import "std/sort"
-##
-##   mut arr = alloc(5)
-##   arr[0] = 5; arr[1] = 2; arr[2] = 8; arr[3] = 1; arr[4] = 9
-##
-##   sort(arr, 5)                             # ascendente (i64)
-##   sort_by(arr, 5, fn(a: int, b: int) -> int: b - a)   # descendente
-##
-## Limitação: `sort` assume que `arr` é `i64*` (o retorno de `alloc`).
-## Para arrays de `u8`, converta antes.
+# std/sort.lm — Ordenação com e sem comparator.
+#
+# Callbacks de comparação têm assinatura `fn(int, int) -> int`.
+# Retornam < 0 se a < b, 0 se iguais, > 0 se a > b.
+#
+# Limitação: `sort` assume que `arr` é `i64*` (o retorno de `alloc`).
 
-# ---------------------------------------------------------------------
-# Comparators
-# ---------------------------------------------------------------------
-
-## Comparator padrão: ordem crescente de i64.
 fn _cmp_asc(a: int, b: int) -> int:
     return a - b
 
-## Compara dois i64. Retorna < 0 se `a < b`, 0 se iguais, > 0 se `a > b`.
-## Wrapper porque closures passadas de fora também usam essa assinatura.
-
-# ---------------------------------------------------------------------
-# Insertion sort (estável, pequeno)
-# ---------------------------------------------------------------------
-fn _insertion_sort(arr: ptr, n: int, cmp: fn):
+fn _insertion_sort(arr: ptr, n: int, cmp: fn(int, int) -> int):
     mut i = 1
     while i < n:
         let key = arr[i]
         mut j = i - 1
         while j >= 0:
             let aj = arr[j]
-            # cmp(aj, key) > 0  →  aj > key, precisa deslocar
             let c = cmp(aj, key)
             if c <= 0:
                 break
@@ -42,10 +23,7 @@ fn _insertion_sort(arr: ptr, n: int, cmp: fn):
         arr[j + 1] = key
         i = i + 1
 
-# ---------------------------------------------------------------------
-# QuickSort (in-place, Hoare partition)
-# ---------------------------------------------------------------------
-fn _partition(arr: ptr, low: int, high: int, cmp: fn) -> int:
+fn _partition(arr: ptr, low: int, high: int, cmp: fn(int, int) -> int) -> int:
     let pivot = arr[high]
     mut i = low - 1
     mut j = low
@@ -63,19 +41,15 @@ fn _partition(arr: ptr, low: int, high: int, cmp: fn) -> int:
     arr[high] = tmp2
     return i + 1
 
-fn _quicksort_rec(arr: ptr, low: int, high: int, cmp: fn):
+fn _quicksort_rec(arr: ptr, low: int, high: int, cmp: fn(int, int) -> int):
     if low >= high:
         return
     let pi = _partition(arr, low, high, cmp)
     _quicksort_rec(arr, low, pi - 1, cmp)
     _quicksort_rec(arr, pi + 1, high, cmp)
 
-# ---------------------------------------------------------------------
-# API pública
-# ---------------------------------------------------------------------
-
-## Ordena `arr` (i64) em ordem crescente, com insertion sort.
-## Para n > 16, usa quicksort. Estável.
+## Ordena `arr` (i64) em ordem crescente.
+## Insertion sort para n ≤ 16, quicksort acima.
 fn sort(arr: ptr, n: int):
     if n <= 1:
         return
@@ -85,8 +59,8 @@ fn sort(arr: ptr, n: int):
         _quicksort_rec(arr, 0, n - 1, _cmp_asc)
 
 ## Ordena `arr` com um comparator customizado.
-## `cmp(a, b)` deve retornar < 0, 0 ou > 0.
-fn sort_by(arr: ptr, n: int, cmp: fn):
+## `cmp(a, b)` retorna < 0, 0 ou > 0.
+fn sort_by(arr: ptr, n: int, cmp: fn(int, int) -> int):
     if n <= 1:
         return
     if n <= 16:

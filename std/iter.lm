@@ -1,14 +1,11 @@
 # std/iter.lm - Adaptadores funcionais para arrays.
 #
-# Limitação: como o codegen só suporta chamadas indiretas com
-# assinatura `i64 -> i64`, todas as funções de callback aqui recebem
-# e retornam `int`. Para predicados, use 1 = true / 0 = false.
-#
-# Não temos `fold` (reducer com 2 args) por causa da mesma limitação.
-# Use `sum`, `sum_by`, `product`, `min`, `max` para reduções comuns.
+# Todos os callbacks têm assinatura `fn(int) -> int`. Predicados
+# retornam != 0 para true. Assinaturas tipadas permitem checagem
+# em compile-time ao passar lambdas ou funções nomeadas.
 
 ## Conta quantos elementos satisfazem `pred` (!= 0).
-fn count_if(arr: ptr, n: int, pred: fn) -> int:
+fn count_if(arr: ptr, n: int, pred: fn(int) -> int) -> int:
     mut count = 0
     mut i = 0
     while i < n:
@@ -19,7 +16,7 @@ fn count_if(arr: ptr, n: int, pred: fn) -> int:
 
 ## Aplica `f` a cada elemento e retorna um novo array (heap).
 ## O tamanho do resultado é o mesmo do original (`n`).
-fn map(arr: ptr, n: int, f: fn) -> ptr:
+fn map(arr: ptr, n: int, f: fn(int) -> int) -> ptr:
     let out = alloc(n)
     mut i = 0
     while i < n:
@@ -30,7 +27,7 @@ fn map(arr: ptr, n: int, f: fn) -> ptr:
 ## Filtra elementos onde `pred` retorna != 0.
 ## O resultado tem tamanho `count_if(arr, n, pred)`.
 ## Use count_if() antes se precisar do tamanho exato.
-fn filter(arr: ptr, n: int, pred: fn) -> ptr:
+fn filter(arr: ptr, n: int, pred: fn(int) -> int) -> ptr:
     let out = alloc(n)
     mut count = 0
     mut i = 0
@@ -42,7 +39,7 @@ fn filter(arr: ptr, n: int, pred: fn) -> ptr:
     return out
 
 ## Aplica `f` a cada elemento e soma os resultados.
-fn sum_by(arr: ptr, n: int, f: fn) -> int:
+fn sum_by(arr: ptr, n: int, f: fn(int) -> int) -> int:
     mut total = 0
     mut i = 0
     while i < n:
@@ -51,7 +48,7 @@ fn sum_by(arr: ptr, n: int, f: fn) -> int:
     return total
 
 ## Retorna 1 se `pred` != 0 para TODOS os elementos; senão 0.
-fn all(arr: ptr, n: int, pred: fn) -> int:
+fn all(arr: ptr, n: int, pred: fn(int) -> int) -> int:
     mut i = 0
     while i < n:
         if pred(arr[i]) == 0:
@@ -60,7 +57,7 @@ fn all(arr: ptr, n: int, pred: fn) -> int:
     return 1
 
 ## Retorna 1 se `pred` != 0 para ALGUM elemento; senão 0.
-fn any(arr: ptr, n: int, pred: fn) -> int:
+fn any(arr: ptr, n: int, pred: fn(int) -> int) -> int:
     mut i = 0
     while i < n:
         if pred(arr[i]) != 0:
@@ -70,7 +67,7 @@ fn any(arr: ptr, n: int, pred: fn) -> int:
 
 ## Retorna o índice do primeiro elemento que satisfaz `pred`,
 ## ou -1 se nenhum.
-fn find_index(arr: ptr, n: int, pred: fn) -> int:
+fn find_index(arr: ptr, n: int, pred: fn(int) -> int) -> int:
     mut i = 0
     while i < n:
         if pred(arr[i]) != 0:
@@ -133,7 +130,7 @@ fn fill(arr: ptr, n: int, value: int):
         i += 1
 
 ## Aplica `f` a cada elemento in-place.
-fn for_each(arr: ptr, n: int, f: fn):
+fn for_each(arr: ptr, n: int, f: fn(int) -> int):
     mut i = 0
     while i < n:
         arr[i] = f(arr[i])

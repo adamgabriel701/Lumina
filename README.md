@@ -5,7 +5,7 @@
 [![Python Version](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![Status](https://img.shields.io/badge/Status-Alpha%20%2F%20Active-green.svg)](#)
 [![Language](https://img.shields.io/badge/Language-Lumina-6A0DAD.svg)](#)
-[![Tests](https://img.shields.io/badge/tests-411%20passed-brightgreen.svg)](#-testes-automatizados)
+[![Tests](https://img.shields.io/badge/tests-419%20passed-brightgreen.svg)](#-testes-automatizados)
 [![Examples](https://img.shields.io/badge/examples-54%20ran%20%7C%2017%20skip%20%7C%200%20fail-success.svg)](#)
 [![Cross-compile](https://img.shields.io/badge/cross--compile-aarch64%20%7C%20armv7%20%7C%20riscv64%20%7C%20wasm-blueviolet.svg)](#-cross-compilação)
 
@@ -128,6 +128,7 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
 | 59 | **Escape analysis** (alloca para alloc const sem escape) | ✅ |
 | 60 | **Tipos de função com assinatura (`fn(int) -> int`)** | ✅ |
 | 61 | **`fn` como campo de struct (callbacks armazenados)** | ✅ |
+| 62 | **Type alias (`type Nome = <tipo>`)** | ✅ |
 
 ### CLI
 
@@ -253,7 +254,7 @@ pytest tests/ -v
 | `test_fn_types.py` | 12 | Assinatura `fn(T1, T2) -> R`, checagem de arity/tipos |
 | `test_fn_struct_fields.py` | 7 | Campo fn-typed, lambda com captura, função nomeada, múltiplos campos |
 
-**Total:** `411 passed`.
+**Total:** `419 passed`.
 
 ### 2. LSP (isolado)
 

@@ -295,3 +295,32 @@ def unify_type(declared, actual, type_map):
         return False
 
     return all(unify_type(d, a, type_map) for d, a in zip(d_args, a_args))
+
+def expand_type_alias(type_str, aliases, _depth=0):
+    """Expande aliases recursivamente em `type_str`.
+
+    - Se `type_str` é um alias, expande o alvo (recursivo).
+    - Se é `fn(T1,T2) -> R`, expande params e retorno.
+    - Se tem `<...>`, expande args.
+    - Caso contrário, retorna `type_str` inalterado.
+    """
+    if not type_str or _depth > 32:
+        return type_str
+
+    if type_str in aliases:
+        return expand_type_alias(aliases[type_str], aliases, _depth + 1)
+
+    sig = parse_fn_type(type_str)
+    if sig is not None:
+        params, ret = sig
+        new_params = [expand_type_alias(p, aliases, _depth + 1) for p in params]
+        new_ret = expand_type_alias(ret, aliases, _depth + 1)
+        return f"fn({','.join(new_params)}) -> {new_ret}"
+
+    if "<" in type_str and type_str.endswith(">"):
+        base, args = parse_generic(type_str)
+        if args:
+            new_args = [expand_type_alias(a, aliases, _depth + 1) for a in args]
+            return f"{base}<{','.join(new_args)}>"
+
+    return type_str

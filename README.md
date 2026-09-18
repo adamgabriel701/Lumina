@@ -35,6 +35,7 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
 * **Generics com Monomorphization:** `<T>` gera cópias especializadas. **Aninhados** (`fn put<T>(b: Box<T>, val: T)`) suportados via `unify_type` + `substitute_generic`. **`impl Box<T>:`** permite métodos em structs genéricas, chamados de `Box<int>`, `Box<str>`, etc.
 * **Closures (tipo `fn` unificado em fat pointer):** Todo valor `fn` é `{fn_ptr, env_ptr}`. Lambdas com captura usam env != NULL; lambdas sem captura e funções nomeadas usam env = NULL (wrapped em runtime). Isso destrava `sort_by(arr, n, fn(a, b): (b-a)*mult)` com captura e HOFs em geral. `&fn_name` devolve o fn ptr cru, compatível com FFI.
 * **Tipos de função com assinatura (`fn(int) -> int`):** Params, retornos e **campos de struct** de `fn` são anotáveis e checados em compile-time. Chamar `h.cb(args)` (campo fn-typed) ou variável `fn` com arity/tipos errados falha em compile. `fn` puro continua aceitando qualquer valor.
+* **Type alias (`type Nome = <tipo>`):** abrevia tipos. `type Callback = fn(int) -> int`; use `Callback` em qualquer posição de tipo (params, retornos, campos, VarDecls, payloads). Aliases encadeiam (`A → B → C`).
 * **Tuplas:** `let (a, b, c) = (1, 2, 3)` — tuplas literais com tipos heterogêneos e destructuring sobre tuplas, structs e arrays.
 * **`for x in arr` e `for i, x in arr`:** itera sobre arrays literais (via variável ou inline), strings e `alloc(N)` com N constante.
 * **Tipos Algébricos (ADTs) & Pattern Matching:** `enum`s com multi-payload. `match`/`switch` com binding, guard, **multi-pattern** (`case A | B:`) e **wildcard** (`case _:`). **Variantes bare** (`let x = Stop`).
@@ -129,6 +130,7 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
 | 60 | **Tipos de função com assinatura (`fn(int) -> int`)** | ✅ |
 | 61 | **`fn` como campo de struct (callbacks armazenados)** | ✅ |
 | 62 | **Type alias (`type Nome = <tipo>`)** | ✅ |
+| 63 | **`std/iter` e `std/sort` com assinaturas tipadas** | ✅ |
 
 ### CLI
 
@@ -253,6 +255,7 @@ pytest tests/ -v
 | `features/test_language_features.py` | 1 | Output exato de `uncertain_features.lm` |
 | `test_fn_types.py` | 12 | Assinatura `fn(T1, T2) -> R`, checagem de arity/tipos |
 | `test_fn_struct_fields.py` | 7 | Campo fn-typed, lambda com captura, função nomeada, múltiplos campos |
+| `test_type_alias.py` | 8 | Alias de primitivo, fn, struct, encadeado, enum, VarDecl |
 
 **Total:** `419 passed`.
 
@@ -846,7 +849,7 @@ Ativar cores semânticas em `settings.json`:
 * **Closures:** captura por valor (mutação posterior da variável externa não é vista). O tipo `fn` é um fat pointer `{fn_ptr, env_ptr}` — closures com captura funcionam como callback (`sort_by`, `map`, `filter`). `&fn_name` devolve o fn ptr cru para FFI. Assinaturas tipadas (`fn(int) -> int`) são validadas em compile-time; `fn` puro aceita qualquer valor.
 * **Escape sequences:** `\n`, `\t`, `\r`, `\0`, `\a`, `\b`, `\f`, `\v`, `\\`, `\"`, `\'` são processados em compile-time. Escapes desconhecidos são preservados como `\X` (backslash + letra).
 * **`std/async`:** FFI não suporta `makecontext` com ponteiro de função. `examples/coroutines.lm` é esqueleto.
-* **`std/iter` callbacks:** assinatura `i64 -> i64`.
+* **`std/iter` callbacks:** assinatura `fn(int) -> int`. Chamadas com arity errada falham em compile-time.
 * **`std/result`:** `int`-only por enquanto (o prelude não é genérico).
 * **`std/sort`:** insertion sort para n ≤ 16, quicksort acima. Assume array `i64*` (retorno de `alloc`). Para arrays de bytes, converter antes.
 * **`std/io`:** `read_line` remove o `\n` final; `write_line` adiciona um.

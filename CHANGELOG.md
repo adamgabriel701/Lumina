@@ -12,8 +12,8 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 ### Adicionado
 
 #### Linguagem
-- **`type Alias = <tipo>`**: permite abreviar tipos. `type Callback = fn(int) -> int`; use `Callback` em params, retornos, campos de struct, VarDecls e payloads de enum. Aliases encadeados (`A → B → C`) funcionam.
-- **`std/iter` e `std/sort` com assinaturas tipadas**: callbacks agora são `fn(int) -> int` e `fn(int, int) -> int`. Erros de arity/tipo em lambdas passadas como callback são detectados em compile-time.
+- **`type Alias = <tipo>`**: abrevia tipos longos e dá nome semântico. `type Callback = fn(int) -> int`; use `Callback` em params, retornos, campos de struct, `VarDecl` (locais e top-level) e payloads de enum. Aliases encadeados (`A → B → C`) e aliases dentro de assinaturas (`type Pred = fn(Callback) -> int`) funcionam. A expansão acontece na passada 0 do semantic; o resto do pipeline nunca vê o alias.
+- **`std/iter` e `std/sort` com assinaturas tipadas**: callbacks passam a ser `fn(int) -> int` (`std/iter`) e `fn(int, int) -> int` (`std/sort`). Passar lambda com arity ou tipos errados é detectado em compile-time em vez de segfault em runtime.
 - **Tipos de função com assinatura (`fn(int, int) -> int`)**: antes `fn` era opaco (`voidptr`); agora é possível anotar params e retornos. Lambdas e funções nomeadas propagam a assinatura automaticamente, e chamadas via variável `fn` são validadas em compile-time (arity + tipos). `fn` sem assinatura continua aceitando qualquer valor, e mistura tipado/untyped é permitida nos dois sentidos.
 - **`fn` como campo de struct**: `struct Handler: cb: fn(int) -> int`. Atribuir lambda (com ou sem captura) ou função nomeada ao campo; chamar via `h.cb(args)` faz indirect call e valida arity/tipos em compile-time. Habilita vtable manual, event handlers, callbacks armazenados.
 - **Closures como callback (tipo `fn` unificado em fat pointer)**: todo valor `fn` em Lumina agora é `{fn_ptr, env_ptr}`. Lambdas com captura usam env != NULL; lambdas sem captura e funções nomeadas usam env = NULL (wrapped em runtime). Isso destrava `sort_by(arr, n, fn(a, b): ...)` com captura, `map`/`filter` com captura em `std/iter`, e qualquer HOF. `&fn_name` devolve o fn ptr cru (FFI-compatível). Resolve o `xfail` histórico de `test_sort_closure_captures`.
@@ -35,6 +35,10 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Corrigido
 
+- **`type` como keyword quebrou bindings C de socket.** `std/http.lm`, `std/net.lm` e `examples/server.lm` usavam `type` como nome de parâmetro em `extern fn socket(domain, type, protocol)`. Renomeado para `sock_type`.
+- **`_expand_type_aliases` não recursava em corpos de função.** `let cb: Callback = ...` dentro de `fn main` mantinha o tipo literal. Agora percorre `IfStmt`/`WhileStmt`/`ForStmt`/`MatchStmt`/`DeferStmt`/`BenchStmt` recursivamente.
+- **Whitelist de tipos do `VarDecl` rejeitava `fn(...) -> R`.** Só aceitava `fn` puro. Após a expansão do alias `Callback` → `fn(int) -> int`, a validação rejeitava com "Tipo fn(int) -> int não declarado". Corrigido em `statements/var_decl.py` e `analyzer.py`.
+- **`parse_struct` usava `expect(IDENT)` no tipo do campo.** `struct S: cb: fn(int) -> int` falhava com "Esperado IDENT, mas encontrei FN ('fn')". Corrigido para `parse_type()`.
 - **Closure com captura como callback segfaultava.** `sort_by(arr, n, fn(a, b): (b-a)*mult)` passava o bloco `{fn_ptr, env_ptr}` como se fosse um fn ptr cru, e o receptor chamava lixo. **Fix:** unificação do tipo `fn` em fat pointer `{fn_ptr, env_ptr}` + `_call_closure` em toda chamada indireta. Funções nomeadas usadas como valor são wrapped em runtime (`_wrap_fn_as_closure`), com wrapper `i64(i8*, i64, ...)` que adapta a assinatura original. `&fn_name` devolve o fn ptr cru para FFI.
 - **`_validate_macro` bloqueava macros multi-statement mesmo na declaração.** A validação exigia `return <expr>` no `generate_module`, então uma macro multi-statement nunca podia ser declarada — mesmo que só fosse usada via `nome!(args)`. **Fix:** a validação só verifica que o corpo não está vazio; a exigência de `return <expr>` fica inteiramente a cargo de `_expand_macro_expr` (usado quando a macro é chamada como expressão).
 - **`stdin`/`stdout`/`stderr` faltavam em `BUILTIN_RET`.** `std/io.lm` falhava no semantic com "Tipo inválido para parâmetro 'stream': esperado 'str', obteve 'int'" porque `stdout()` era inferido como `int` no `VarDecl`. **Fix:** `BUILTIN_RET` centralizado em `lumina/builtins.py` (fonte única) e `stdin`/`stdout`/`stderr` adicionados como `"str"`.
@@ -59,6 +63,7 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Adicionado (tests)
 
+- `tests/test_type_alias.py` (8 testes) — alias de primitivo, alias de `fn`, alias em campo/param/retorno/VarDecl/enum, encadeamento.
 - `tests/test_fn_struct_fields.py` (7 testes) — campo fn-typed, lambda com captura, função nomeada, múltiplos campos fn, erro de arity e tipo.
 - `tests/test_fn_types.py` (12 testes) — parse de `fn(T1, T2) -> R`, chamada com arity e tipos validados, mistura tipado/untyped, propagação de retorno, assinatura com `str`.
 - `tests/test_macro_stmts.py` (8 testes) — `nome!(args)`, substituição em statements, validação de arity, rejeição de `nome!(args)` sem macro, `return` em macro-stmt retorna da função chamadora, uso em loop, macros expression continuam funcionando, macro multi-statement como expressão (sem `!`) é rejeitada.
@@ -72,7 +77,7 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - `tests/test_std_result.py` (9 testes).
 - `tests/test_escape_analysis.py` (4 testes).
 
-**Total: 411 passed** (antes 404 passed, do 0.4.0).
+**Total: 419 passed** (antes 411 passed, do 0.4.0).
 
 ### Mudado
 

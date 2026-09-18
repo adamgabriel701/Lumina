@@ -5,13 +5,13 @@
 [![Python Version](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![Status](https://img.shields.io/badge/Status-Alpha%20%2F%20Active-green.svg)](#)
 [![Language](https://img.shields.io/badge/Language-Lumina-6A0DAD.svg)](#)
-[![Tests](https://img.shields.io/badge/tests-384%20passed-brightgreen.svg)](#-testes-automatizados)
+[![Tests](https://img.shields.io/badge/tests-392%20passed-brightgreen.svg)](#-testes-automatizados)
 [![Examples](https://img.shields.io/badge/examples-54%20ran%20%7C%2017%20skip%20%7C%200%20fail-success.svg)](#)
 [![Cross-compile](https://img.shields.io/badge/cross--compile-aarch64%20%7C%20armv7%20%7C%20riscv64%20%7C%20wasm-blueviolet.svg)](#-cross-compilação)
 
 **Lumina** é uma linguagem de programação de sistemas de propósito geral, focada em alta performance, ergonomia moderna, concorrência e segurança de memória. Combina a sintaxe limpa e expressiva baseada em indentação (estilo Python/Nim) com o poder de baixo nível e otimização industrial do backend **LLVM**.
 
-A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums com multi-payload e variantes bare), Generics com **Monomorphization** incluindo **genéricos aninhados** (`Box<T>` como parâmetro) e **`impl Box<T>`** (métodos em structs genéricas), **Closures** (lambdas que capturam variáveis externas, com tipo `fn` unificado em fat pointer), Traits com Métodos Padrão, Standard Library Bootstrapped, **Tuplas** com destructuring heterogêneo, Pattern Matching (multi-pattern `|`, wildcard `_`, guard, destructuring de structs), **`for x in arr`** e **`for i, x in arr`** sobre iteráveis, **Tail Call Optimization** para self- e mutual-recursion com propagação de `defer`, operador `nil` para null pointer real, **`defer` com escopo de bloco** (Go/Zig-style), **`@safe` opt-in** para null check automático, **`@macro`** para expansão de AST em compile-time, **escape analysis** (arrays locais no stack), Canais de Concorrência (CSP), operadores modernos (`|>`, `?.`, `?`, `as`, `:=`), interoperabilidade nativa com C/C++ (FFI), I/O Assíncrono (`epoll`/`O_NONBLOCK`), um **REPL persistente**, um Web Playground, um LSP completo (hover qualificado por escopo, references e rename cientes de escopo, semantic tokens), um **linter estático** (`lumina lint`), compilação incremental, testes nativos com relatório de cobertura, cross-compile para múltiplas arquiteturas, e é **Cross-Platform** (nativos x86_64/ARM/RISC-V, WebAssembly e Bare-Metal).
+A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums com multi-payload e variantes bare), Generics com **Monomorphization** incluindo **genéricos aninhados** (`Box<T>` como parâmetro) e **`impl Box<T>`** (métodos em structs genéricas), **Closures** (lambdas que capturam variáveis externas, com tipo `fn` unificado em fat pointer — usáveis como callback), Traits com Métodos Padrão, Standard Library Bootstrapped, **Tuplas** com destructuring heterogêneo, Pattern Matching (multi-pattern `|`, wildcard `_`, guard, destructuring de structs), **`for x in arr`** e **`for i, x in arr`** sobre iteráveis, **Tail Call Optimization** para self- e mutual-recursion com propagação de `defer`, operador `nil` para null pointer real, **`defer` com escopo de bloco** (Go/Zig-style), **`@safe` opt-in** para null check automático, **`@macro`** para expansão de AST em compile-time (com sintaxe `nome!(args)` para macros multi-statement), **escape analysis** (arrays locais no stack), **escape sequences** em strings (`\n`, `\t`, ...), Canais de Concorrência (CSP), operadores modernos (`|>`, `?.`, `?`, `as`, `:=`), interoperabilidade nativa com C/C++ (FFI), I/O Assíncrono (`epoll`/`O_NONBLOCK`), um **REPL persistente**, um Web Playground, um LSP completo (hover qualificado por escopo, references e rename cientes de escopo, semantic tokens), um **linter estático** (`lumina lint`), compilação incremental, testes nativos com relatório de cobertura, cross-compile para múltiplas arquiteturas, e é **Cross-Platform** (nativos x86_64/ARM/RISC-V, WebAssembly e Bare-Metal).
 
 📖 **Documentação navegável em [`docs/`](docs/README.md).**
 
@@ -29,6 +29,7 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
 * **`std/string` — StringBuilder:** `push_char`, `push_str`, `finish`, `clear`, com crescimento geométrico.
 * **`std/io` — Streams e stdin:** `read_line`, `read_int`, `read_char`, `write`, `write_line`, `eprintln`. `stdin`/`stdout`/`stderr`/`fgets`/`fputs`/`fflush`/`getchar` são builtins do compilador com assinatura C correta.
 * **`std/log` — Logging com Níveis:** `DEBUG`, `INFO`, `WARN`, `ERROR` com filtro em runtime.
+* **Escape Sequences:** `"\n"`, `"\t"`, `"\r"`, `"\0"`, `"\\"`, `"\""` processados pelo lexer em compile-time.
 * **`@derive` Attributes:** `@derive(Eq, PartialEq, Debug, Display, Clone, Default)`.
 * **Tipagem Estática com Inferência:** Deduz tipos em retornos, generics aninhados, lambdas, binárias, `Option<T>`, `nil`, **tuplas** e `comptime`.
 * **Generics com Monomorphization:** `<T>` gera cópias especializadas. **Aninhados** (`fn put<T>(b: Box<T>, val: T)`) suportados via `unify_type` + `substitute_generic`. **`impl Box<T>:`** permite métodos em structs genéricas, chamados de `Box<int>`, `Box<str>`, etc.
@@ -38,7 +39,9 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
 * **Tipos Algébricos (ADTs) & Pattern Matching:** `enum`s com multi-payload. `match`/`switch` com binding, guard, **multi-pattern** (`case A | B:`) e **wildcard** (`case _:`). **Variantes bare** (`let x = Stop`).
 * **`Option<T>`, `none` e `nil`:** `none` = `Option::None`. **`nil`** = null pointer real (C-style), compatível com `ptr`/`str`/`fn`/struct. `u?.campo` faz null check.
 * **`@safe`:** null check automático em `u.id` e `arr[i]` para funções anotadas.
-* **`@macro`:** funções expandidas em compile-time via substituição de AST. Corpo `return <expr>`.
+* **`@macro` (duas formas):**
+  - `nome(args)` — macro de **expressão**. Corpo deve ser um único `return <expr>`. Inlineia o valor no call site.
+  - `nome!(args)` — macro de **statement**. Corpo pode ter múltiplos statements. Inlineia o corpo inteiro (inclusive `return`, que retorna da função chamadora).
 * **`comptime` real (constant folding):** `comptime(2 + 3 * 4)` vira literal.
 * **Globais mutáveis:** Top-level `mut X = 0` vira `GlobalVariable` LLVM.
 * **Tail Call Optimization:** Self-recursion **e mutual recursion** (`f → g → f`) rodam em stack constante. **`defer` é emitido a cada iteração.**
@@ -83,43 +86,45 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
 | 18 | **`for i, x in arr`** (índice + valor) | ✅ |
 | 19 | **Closures** (lambda com captura) | ✅ |
 | 20 | **Closures como callback (tipo `fn` unificado)** | ✅ |
-| 21 | Match guard (int, enum, str) | ✅ |
-| 22 | Enum multi-payload | ✅ |
-| 23 | **Multi-pattern (`case A \| B:`)** | ✅ |
-| 24 | **Wildcard (`case _:`)** | ✅ |
-| 25 | **Variantes bare (`let x = Stop`)** | ✅ |
-| 26 | Cast explícito (`as`) | ✅ |
-| 27 | Ponteiros (`&x`, `*p`) | ✅ |
-| 28 | Lambdas (inline e bloco) | ✅ |
-| 29 | Trait com método default | ✅ |
-| 30 | Match em string | ✅ |
-| 31 | `Option<T>` + `NoneExpr` + **`nil` (null real)** | ✅ |
-| 32 | `comptime` (constant folding) | ✅ |
-| 33 | `SliceExpr` dedicado | ✅ |
-| 34 | Auto-formatter (comentários + `@attrs` + multi-pattern) | ✅ |
-| 35 | Operator Overloading | ✅ |
-| 36 | `@derive(...)` | ✅ |
-| 37 | `std/{vector,map,set,deque}` | ✅ |
-| 38 | `std/iter`, `std/test`, `std/log` | ✅ |
-| 39 | **`std/result`** (unwrap, map, and_then) | ✅ |
-| 40 | **`std/string`** (StringBuilder) | ✅ |
-| 41 | **`std/sort`** (sort, sort_by) | ✅ |
-| 42 | **`std/io`** (read_line, write_line, eprintln) | ✅ |
-| 43 | Globais mutáveis | ✅ |
-| 44 | LSP (hover/rename/references/outline/semantic tokens) | ✅ |
-| 45 | **LSP com escopo qualificado** | ✅ |
-| 46 | Cross-compile (`--target`) | ✅ |
-| 47 | `break` / `continue` | ✅ |
-| 48 | Short-circuit em `and` / `or` | ✅ |
-| 49 | Type check em campos de struct literal | ✅ |
-| 50 | TCO para self-recursion | ✅ |
-| 51 | **TCO para mutual recursion (SCC dispatcher)** | ✅ |
-| 52 | Boehm GC ativa | ✅ |
-| 53 | REPL persistente | ✅ |
-| 54 | **`@safe` (null check opt-in)** | ✅ |
-| 55 | **`@macro` (expansão de AST)** | ✅ |
-| 56 | **Defers emitidos em tail calls** | ✅ |
-| 57 | **Escape analysis** (alloca para alloc const sem escape) | ✅ |
+| 21 | **Escape sequences (`\n`, `\t`, ...)** | ✅ |
+| 22 | **Macros multi-statement (`nome!(args)`)** | ✅ |
+| 23 | Match guard (int, enum, str) | ✅ |
+| 24 | Enum multi-payload | ✅ |
+| 25 | **Multi-pattern (`case A \| B:`)** | ✅ |
+| 26 | **Wildcard (`case _:`)** | ✅ |
+| 27 | **Variantes bare (`let x = Stop`)** | ✅ |
+| 28 | Cast explícito (`as`) | ✅ |
+| 29 | Ponteiros (`&x`, `*p`) | ✅ |
+| 30 | Lambdas (inline e bloco) | ✅ |
+| 31 | Trait com método default | ✅ |
+| 32 | Match em string | ✅ |
+| 33 | `Option<T>` + `NoneExpr` + **`nil` (null real)** | ✅ |
+| 34 | `comptime` (constant folding) | ✅ |
+| 35 | `SliceExpr` dedicado | ✅ |
+| 36 | Auto-formatter (comentários + `@attrs` + multi-pattern) | ✅ |
+| 37 | Operator Overloading | ✅ |
+| 38 | `@derive(...)` | ✅ |
+| 39 | `std/{vector,map,set,deque}` | ✅ |
+| 40 | `std/iter`, `std/test`, `std/log` | ✅ |
+| 41 | **`std/result`** (unwrap, map, and_then) | ✅ |
+| 42 | **`std/string`** (StringBuilder) | ✅ |
+| 43 | **`std/sort`** (sort, sort_by) | ✅ |
+| 44 | **`std/io`** (read_line, write_line, eprintln) | ✅ |
+| 45 | Globais mutáveis | ✅ |
+| 46 | LSP (hover/rename/references/outline/semantic tokens) | ✅ |
+| 47 | **LSP com escopo qualificado** | ✅ |
+| 48 | Cross-compile (`--target`) | ✅ |
+| 49 | `break` / `continue` | ✅ |
+| 50 | Short-circuit em `and` / `or` | ✅ |
+| 51 | Type check em campos de struct literal | ✅ |
+| 52 | TCO para self-recursion | ✅ |
+| 53 | **TCO para mutual recursion (SCC dispatcher)** | ✅ |
+| 54 | Boehm GC ativa | ✅ |
+| 55 | REPL persistente | ✅ |
+| 56 | **`@safe` (null check opt-in)** | ✅ |
+| 57 | **`@macro` (expansão de AST)** | ✅ |
+| 58 | **Defers emitidos em tail calls** | ✅ |
+| 59 | **Escape analysis** (alloca para alloc const sem escape) | ✅ |
 
 ### CLI
 
@@ -183,10 +188,11 @@ Os bugs abaixo eram **silenciosos** — passavam pelo CI porque os testes origin
 | **`extern fn fgets` colidia com builtin** | `TypeError: Type of #2 arg mismatch: i64 != i32` | `generate_module` pula `ExternDecl` que colide com builtin | `test_std_io.py` |
 | **`getchar` retornava `i32`** | `ret i32 %getchar_call` não casava com `-> int` | `sext i32 → i64` em `calls.py` | `test_std_io.py` |
 | **`visit_ReturnStmt` sem `iN → i64`** | qualquer builtin que devolvesse i32 quebrava o ret | Normalização defensiva `iN → i64` | `test_std_io.py` |
-| **`"\n"` em fonte virava 2 bytes literais** | `fputs("\n", out)` imprimia `\n` literal | `std/io.lm` usa `chr(10)` (o lexer preserva escapes como texto) | `test_std_io.py` |
+| **`"\n"` em fonte virava 2 bytes literais** | `fputs("\n", out)` imprimia `\n` literal | Lexer processa escapes em compile-time | `test_std_io.py` / `test_lexer.py` |
 | **`read_line` com `buf[n-1] = 0`** | newline não era removido da linha lida | Loop explícito em `std/io.lm` | `test_std_io.py` |
 | **`_handle_indent` não era chamado** | todos os blocos indentados falhavam com "Esperado INDENT, mas encontrei X" | Restaurada chamada em `tokenize()` | `test_lexer.py::test_indent_dedent` |
 | **Closure com captura como callback** | `sort_by(arr, n, fn(a, b): (b-a)*mult)` segfaultava — o bloco `{fn_ptr, env_ptr}` era passado como se fosse fn ptr cru | Tipo `fn` unificado em fat pointer `{fn_ptr, env_ptr}`; `_call_closure` em toda indireta | `test_sort.py::test_sort_closure_captures` |
+| **`_validate_macro` rejeitava declaração multi-statement** | macro multi-statement não podia nem ser declarada, mesmo que usada só via `nome!(args)` | Validação só verifica corpo não-vazio; exigência de `return <expr>` fica no call site de expressão | `test_macro_stmts.py` |
 
 ---
 
@@ -196,7 +202,7 @@ Os bugs abaixo eram **silenciosos** — passavam pelo CI porque os testes origin
 
 ```bash
 pytest tests/ -v
-# 384 passed
+# 392 passed
 ```
 
 | Arquivo | Testes | Cobre |
@@ -216,6 +222,8 @@ pytest tests/ -v
 | `test_gc.py` | 6 | Boehm GC ativa |
 | `test_generic_impl.py` | 6 | `impl Box<T>:` |
 | `test_lint.py` | 14 | `lumina lint` (W001..W005) |
+| `test_macro_stmts.py` | **8** | **`nome!(args)` + substituição em statements** |
+| `test_macros.py` | 6 | `@macro` (expressão) |
 | `test_tco.py` | 7 | TCO self-recursion |
 | `test_tco_mutual.py` | 6 | TCO mutual recursion |
 | `test_match_guard_enum.py` | 4 | Guard em enum |
@@ -226,7 +234,6 @@ pytest tests/ -v
 | `test_nil.py` | 10 | `nil`, `== nil`, `?.` em nil |
 | `test_struct_field_types.py` | 6 | Type check em campos |
 | `test_safe_mode.py` | 6 | `@safe` |
-| `test_macros.py` | 6 | `@macro` |
 | `test_sort.py` | 10 | `std/sort` + `for i, x in arr` + closure como callback |
 | `test_std_result.py` | 9 | `std/result` helpers |
 | `test_std_io.py` | 6 | `std/io` (read_line, write_line, eprintln) |
@@ -240,7 +247,7 @@ pytest tests/ -v
 | `features/test_examples_smoke.py` | 1 | Compila exemplos não-skipados |
 | `features/test_language_features.py` | 1 | Output exato de `uncertain_features.lm` |
 
-**Total:** `384 passed`.
+**Total:** `392 passed`.
 
 ### 2. LSP (isolado)
 
@@ -412,7 +419,63 @@ fn main() -> int:
     return 0
 ```
 
-### 3. `std/sort` + `for i, x in arr`
+### 3. Escape sequences
+
+```lumina
+import "std/io"
+
+fn main() -> int:
+    write_line("linha 1")
+    write("com\ttab")
+    write("\n")
+    write("aspas: \"ok\" e barra: \\\n")
+    return 0
+```
+
+### 4. Macro de expressão
+
+```lumina
+@macro
+fn dobro(x: int) -> int:
+    return x * 2
+
+fn main() -> int:
+    let a = 5
+    print(dobro(a + 1))    # (a + 1) * 2 = 12
+    return 0
+```
+
+### 5. Macro multi-statement (`nome!(args)`)
+
+```lumina
+@macro
+fn soma_em(p: ptr, idx: int, val: int):
+    p[idx] = p[idx] + val
+
+@macro
+fn log_e_incrementa(p: ptr, msg: str):
+    print(msg)
+    p[0] = p[0] + 1
+
+fn main() -> int:
+    mut arr = alloc(3)
+    arr[0] = 0
+    arr[1] = 0
+    arr[2] = 0
+    for i in 0..3:
+        soma_em!(arr, i, i + 1)
+    print(arr[0], arr[1], arr[2])   # 1 2 3
+
+    mut counter = alloc(1)
+    counter[0] = 0
+    log_e_incrementa!(counter, "antes")
+    log_e_incrementa!(counter, "durante")
+    log_e_incrementa!(counter, "depois")
+    print(counter[0])               # 3
+    return 0
+```
+
+### 6. `std/sort` + `for i, x in arr`
 
 ```lumina
 import "std/sort"
@@ -436,7 +499,7 @@ fn main() -> int:
     return 0
 ```
 
-### 4. `for x in arr` + tuplas
+### 7. `for x in arr` + tuplas
 
 ```lumina
 fn main() -> int:
@@ -449,7 +512,7 @@ fn main() -> int:
     return 0
 ```
 
-### 5. `impl Box<T>:` — métodos em structs genéricas
+### 8. `impl Box<T>:` — métodos em structs genéricas
 
 ```lumina
 struct Box<T>:
@@ -468,7 +531,7 @@ fn main() -> int:
     return 0
 ```
 
-### 6. `std/result` + `map`
+### 9. `std/result` + `map`
 
 ```lumina
 import "std/result"
@@ -492,7 +555,7 @@ fn main() -> int:
     return 0
 ```
 
-### 7. `std/io` — read_line e write_line
+### 10. `std/io` — read_line e write_line
 
 ```lumina
 import "std/io"
@@ -506,7 +569,7 @@ fn main() -> int:
 
 `read_line` remove o `\n` final; `write_line` adiciona um. `eprintln` escreve em `stderr`.
 
-### 8. `@safe` — null check automático
+### 11. `@safe` — null check automático
 
 ```lumina
 struct Usuario:
@@ -522,20 +585,7 @@ fn main() -> int:
     return 0
 ```
 
-### 9. `@macro` — expansão de AST
-
-```lumina
-@macro
-fn dobro(x: int) -> int:
-    return x * 2
-
-fn main() -> int:
-    let a = 5
-    print(dobro(a + 1))    # (a + 1) * 2 = 12
-    return 0
-```
-
-### 10. TCO mutual recursion — 1M chamadas
+### 12. TCO mutual recursion — 1M chamadas
 
 ```lumina
 fn is_even(n: int) -> int:
@@ -553,7 +603,7 @@ fn main() -> int:
     return 0
 ```
 
-### 11. Escape analysis — array local no stack
+### 13. Escape analysis — array local no stack
 
 ```lumina
 fn main() -> int:
@@ -563,7 +613,7 @@ fn main() -> int:
     return 0
 ```
 
-### 12. `nil` (null real) vs `none` (Option)
+### 14. `nil` (null real) vs `none` (Option)
 
 ```lumina
 struct Usuario:
@@ -582,7 +632,7 @@ fn main() -> int:
     return 0
 ```
 
-### 13. Genéricos aninhados
+### 15. Genéricos aninhados
 
 ```lumina
 struct Box<T>:
@@ -604,7 +654,7 @@ fn main() -> int:
     return 0
 ```
 
-### 14. `defer` com escopo de bloco
+### 16. `defer` com escopo de bloco
 
 ```lumina
 fn main() -> int:
@@ -625,7 +675,7 @@ fn main() -> int:
 # depois do loop / fim da função
 ```
 
-### 15. Match — multi-pattern + wildcard + variantes bare
+### 17. Match — multi-pattern + wildcard + variantes bare
 
 ```lumina
 enum Color:
@@ -647,7 +697,7 @@ fn main() -> int:
     return 0
 ```
 
-### 16. `@derive` + Collections
+### 18. `@derive` + Collections
 
 ```lumina
 import "std/map"
@@ -672,7 +722,7 @@ fn main() -> int:
     return 0
 ```
 
-### 17. Traits + Operator Overloading
+### 19. Traits + Operator Overloading
 
 ```lumina
 struct Vector2:
@@ -723,9 +773,9 @@ fn main() -> int:
 Lumina/
 ├── lumina/                     # Compilador
 │   ├── ast/                    #   Árvore Sintática
-│   ├── lexer/                  #   Tokenizer (INDENT/DEDENT, COMMENT)
-│   ├── parser/                 #   Parser (@attrs, slices, tuples, generics, for-in)
-│   ├── semantic/               #   Análise semântica + unify_type + closures
+│   ├── lexer/                  #   Tokenizer (INDENT/DEDENT, COMMENT, escapes)
+│   ├── parser/                 #   Parser (@attrs, slices, tuples, generics, for-in, macro!)
+│   ├── semantic/               #   Análise semântica + unify_type + closures + macros
 │   ├── codegen/                #   LLVM IR (GC, TCO, defer, SCC, macros, @safe, escape, closures)
 │   ├── builtins.py             #   BUILTIN_FUNCTIONS + BUILTIN_RET (fonte única)
 │   └── errors.py
@@ -736,7 +786,7 @@ Lumina/
 ├── benchmarks/                 # Benchmark suite
 ├── examples/                   # 69 exemplos + sidecars [link]
 ├── scripts/                    # check_examples.sh, run_benchmarks.sh
-├── tests/                      # 384 testes em 35 arquivos
+├── tests/                      # 392 testes em 36 arquivos
 ├── docs/                       # Documentação navegável
 ├── run_tests.py                # Suite standalone (28 validações)
 ├── CHANGELOG.md
@@ -784,14 +834,15 @@ Ativar cores semânticas em `settings.json`:
 * **TCO:** self-recursion **e** mutual recursion diretas. Tail calls indiretas (via function pointer) não otimizadas.
 * **TCO + assinaturas incompatíveis:** SCCs com assinaturas diferentes caem no caminho normal (sem TCO).
 * **`@safe`:** opt-in. Sem anotação, `u.id` continua C-style (SIGSEGV rápido). Null check só em `MemberExpr`/`IndexExpr`; não cobre FFI.
-* **`@macro`:** corpo deve ser um único `return <expr>`. Multi-statement → erro claro.
+* **`@macro`:** duas formas. `nome(args)` é macro de **expressão** — corpo deve ser um único `return <expr>`. `nome!(args)` é macro de **statement** — corpo pode ter múltiplos statements, inlineados no call site (inclusive `return`, que retorna da função chamadora). Substituição cobre statements (`VarDecl`, `AssignStmt`, `ReturnStmt`, `IfStmt`, `WhileStmt`, `ForStmt`, `DeferStmt`, `AssertStmt`) e expressões aninhadas.
 * **`impl Box<T>`:** o `<T>` é descartado para registro (`Box_get`); chamadas em `Box<int>` fazem bitcast. Funciona porque `Box<int>` e `Box<str>` têm layout idêntico (8 bytes) no LLVM.
 * **Closures:** captura por valor (mutação posterior da variável externa não é vista). O tipo `fn` é um fat pointer `{fn_ptr, env_ptr}` — closures com captura funcionam como callback (`sort_by`, `map`, `filter`). `&fn_name` devolve o fn ptr cru para FFI.
+* **Escape sequences:** `\n`, `\t`, `\r`, `\0`, `\a`, `\b`, `\f`, `\v`, `\\`, `\"`, `\'` são processados em compile-time. Escapes desconhecidos são preservados como `\X` (backslash + letra).
 * **`std/async`:** FFI não suporta `makecontext` com ponteiro de função. `examples/coroutines.lm` é esqueleto.
 * **`std/iter` callbacks:** assinatura `i64 -> i64`.
 * **`std/result`:** `int`-only por enquanto (o prelude não é genérico).
 * **`std/sort`:** insertion sort para n ≤ 16, quicksort acima. Assume array `i64*` (retorno de `alloc`). Para arrays de bytes, converter antes.
-* **`std/io`:** escapes como `\n` são preservados como texto literal pelo lexer; use `chr(10)` para produzir o byte real. `read_line` remove o `\n` final; `write_line` adiciona um.
+* **`std/io`:** `read_line` remove o `\n` final; `write_line` adiciona um.
 * **`opt -O2`:** só em `--release`. Builds normais mantêm o IR cru para inspeção.
 * **REPL:** `mut x = 0` persiste; `let x = 10` é local à célula. O(N²) em sessões longas; use `:clear`.
 * **Boehm GC em WASM:** desabilitada (`--target=wasm` força `--no-gc`).
@@ -833,9 +884,10 @@ Ativar cores semânticas em `settings.json`:
 - [x] **`std/io`** (read_line, write_line, eprintln)
 - [x] **`BUILTIN_RET` centralizado** em `lumina/builtins.py`
 - [x] **Closures como callback** (tipo `Fn` distinto)
+- [x] **Escape sequences em strings** (`\n`, `\t`, `\r`, `\0`) processados pelo lexer
+- [x] **Macros multi-statement (sintaxe `nome!(args)`)**
 - [ ] Safe-by-default global (sem `@safe` explícito)
-- [ ] Macros multi-statement / quasiquote
-- [ ] Escape sequences em strings (`\n`, `\t`, `\r`, `\0`) processados pelo lexer
+- [ ] Macros com quasiquote
 - [ ] Self-hosting (bootstrapping)
 - [ ] Package registry
 - [ ] Code actions (quick fixes) no LSP

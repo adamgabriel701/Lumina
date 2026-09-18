@@ -14,6 +14,8 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 #### Linguagem
 - **Closures como callback (tipo `fn` unificado em fat pointer)**: todo valor `fn` em Lumina agora é `{fn_ptr, env_ptr}`. Lambdas com captura usam env != NULL; lambdas sem captura e funções nomeadas usam env = NULL (wrapped em runtime). Isso destrava `sort_by(arr, n, fn(a, b): ...)` com captura, `map`/`filter` com captura em `std/iter`, e qualquer HOF. `&fn_name` devolve o fn ptr cru (FFI-compatível). Resolve o `xfail` histórico de `test_sort_closure_captures`.
 - **Closures** (captura por valor): `let offset = 10; let add = fn(x: int) -> int: x + offset`. O codegen detecta variáveis livres em `LambdaExpr`, gera um bloco `{fn_ptr, env_ptr}` no heap, e emite uma função `i64 __closure_N(i8* env, i64 a1, ..., i64 aN)` que lê os campos do env. Suporta lambda aninhada, captura dentro de loop, e chamada com N argumentos.
+- **Escape sequences em strings**: `\n`, `\t`, `\r`, `\0`, `\a`, `\b`, `\f`, `\v`, `\\`, `\"`, `\'` são processados pelo lexer em compile-time. Antes eram preservados como texto literal (`\` + letra). Escapes desconhecidos são mantidos como `\X` (backslash + letra) para não quebrar código existente.
+- **Macros multi-statement (`nome!(args)`)**: sintaxe nova que inlineia o corpo inteiro da macro no call site. Diferente de `nome(args)` (macro de expressão, exige corpo `return <expr>`), `nome!(args)` aceita qualquer número de statements e é usado em posição de statement. Substituição de parâmetros cobre expressões e statements (`VarDecl`, `AssignStmt`, `ReturnStmt`, `IfStmt`, `WhileStmt`, `ForStmt`, `DeferStmt`, `AssertStmt`). Inclusive `return` dentro da macro retorna da função chamadora.
 - **`for i, x in arr`** — índice + valor no mesmo loop. Parser aceita `IDENT COMMA IDENT` após `for`; o `ForStmt` guarda `"i,x"` em `var_name`; o semantic declara ambos; o codegen emite slot para o índice e para o valor.
 - **`std/sort`** — `sort(arr, n)` (crescente) e `sort_by(arr, n, cmp)` (comparator). Insertion sort para `n ≤ 16`, quicksort acima. `is_sorted(arr, n)` verifica.
 - **`fn_name` como valor** — `sort(arr, n, _cmp_asc)` passa função por nome. Semantic retorna `"fn"`, codegen produz fat pointer `{wrapper, NULL}`.
@@ -25,16 +27,17 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - `std/sort.lm` — `_cmp_asc`, `_insertion_sort`, `_partition`, `_quicksort_rec`, `sort`, `sort_by`, `is_sorted`.
 - `std/string.lm` — `StringBuilder` com `push_char`, `push_str`, `finish`, `clear`, `size`.
 - `std/result.lm` — `unwrap`, `unwrap_or` (renomeado `default` → `fallback`), `is_ok`, `is_err`, `is_ok_and`, `expect`, `map`, `and_then`.
-- `std/io.lm` — `read_line` (remove `\n` final, retorna `""` em EOF), `read_int`, `read_char`, `write`, `write_line`, `eprintln`. Sem `extern fn` declarados (são builtins do compilador).
+- `std/io.lm` — `read_line` (remove `\n` final, retorna `""` em EOF), `read_int`, `read_char`, `write`, `write_line`, `eprintln`. Sem `extern fn` declarados (são builtins do compilador). Usa `"\n"` diretamente (o lexer agora processa o escape).
 
 ### Corrigido
 
 - **Closure com captura como callback segfaultava.** `sort_by(arr, n, fn(a, b): (b-a)*mult)` passava o bloco `{fn_ptr, env_ptr}` como se fosse um fn ptr cru, e o receptor chamava lixo. **Fix:** unificação do tipo `fn` em fat pointer `{fn_ptr, env_ptr}` + `_call_closure` em toda chamada indireta. Funções nomeadas usadas como valor são wrapped em runtime (`_wrap_fn_as_closure`), com wrapper `i64(i8*, i64, ...)` que adapta a assinatura original. `&fn_name` devolve o fn ptr cru para FFI.
+- **`_validate_macro` bloqueava macros multi-statement mesmo na declaração.** A validação exigia `return <expr>` no `generate_module`, então uma macro multi-statement nunca podia ser declarada — mesmo que só fosse usada via `nome!(args)`. **Fix:** a validação só verifica que o corpo não está vazio; a exigência de `return <expr>` fica inteiramente a cargo de `_expand_macro_expr` (usado quando a macro é chamada como expressão).
 - **`stdin`/`stdout`/`stderr` faltavam em `BUILTIN_RET`.** `std/io.lm` falhava no semantic com "Tipo inválido para parâmetro 'stream': esperado 'str', obteve 'int'" porque `stdout()` era inferido como `int` no `VarDecl`. **Fix:** `BUILTIN_RET` centralizado em `lumina/builtins.py` (fonte única) e `stdin`/`stdout`/`stderr` adicionados como `"str"`.
 - **`extern fn fgets` colidia com o builtin.** O `generate_module` registrava o extern com assinatura `i8*(i8*, i64, i8*)`, mas o branch de builtin em `calls.py` trunca `size` para `i32` (assinatura real do C). Resultado: `TypeError: Type of #2 arg mismatch: i64 != i32`. **Fix:** `generate_module` pula `ExternDecl` cujo nome está em `BUILTIN_FUNCTIONS` — o codegen de builtin já emite a assinatura correta.
 - **`getchar` retornava `i32` sem normalização.** `ret i32 %getchar_call` não casava com o tipo de retorno `-> int` da função Lumina (i64), gerando `value doesn't match function result type 'i64'` no clang. **Fix:** `sext i32 → i64` antes de retornar.
 - **`visit_ReturnStmt` sem normalização `iN → i64`.** Qualquer builtin que devolvesse `i32`/`i8`/`i16` quebrava no `ret`. **Fix:** branch defensivo em `flow.py::visit_ReturnStmt` com `zext` para `i1` e `sext` para os demais.
-- **`"\n"` em fonte Lumina virava 2 bytes literais.** O lexer preserva escapes como texto (`\` + `n`), então `fputs("\n", out)` imprimia `\n` literal em vez de newline. **Fix:** `std/io.lm` usa `chr(10)`.
+- **`"\n"` em fonte Lumina virava 2 bytes literais.** O lexer preservava escapes como texto (`\` + `n`), então `fputs("\n", out)` imprimia `\n` literal em vez de newline. **Fix:** lexer processa escapes em compile-time; `std/io.lm` usa `"\n"` diretamente.
 - **`read_line` com `buf[n-1] = 0` não surtia efeito.** Reescrevido com loop explícito que varre o buffer até NUL ou `\n` (ASCII 10), sobrescrevendo com NUL no primeiro caso.
 - **`_handle_indent` não era chamado em `tokenize()`.** Regressão que quebrava **todos** os blocos indentados — `fn`, `if`, `while`, `for`, `struct`, `enum`, `impl`, `trait`, `match` — com "Esperado INDENT, mas encontrei X". **Fix:** restaurado o branch `if self.at_line_start: self._handle_indent()` no loop principal.
 - `visit_VariableExpr` (semantic + codegen) checava `functions` antes de variantes de enum. Como variantes são adicionadas em `functions` no `analyze()`, `Red` bare virava `"fn"` em vez de `"Color"`. **Fix:** ordem invertida (variante antes de função).
@@ -52,6 +55,7 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Adicionado (tests)
 
+- `tests/test_macro_stmts.py` (8 testes) — `nome!(args)`, substituição em statements, validação de arity, rejeição de `nome!(args)` sem macro, `return` em macro-stmt retorna da função chamadora, uso em loop, macros expression continuam funcionando, macro multi-statement como expressão (sem `!`) é rejeitada.
 - `tests/test_std_io.py` (6 testes) — `read_line`, `read_int`, `read_line_eof`, `write`, `write_line`, `eprintln`.
 - `tests/test_closures.py` (10 testes).
 - `tests/test_sort.py` (10 testes — `test_sort_closure_captures` deixou de ser xfail).
@@ -62,10 +66,19 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - `tests/test_std_result.py` (9 testes).
 - `tests/test_escape_analysis.py` (4 testes).
 
-**Total: 384 passed** (antes 383 passed + 1 xfailed, do 0.3.0).
+**Total: 392 passed** (antes 384 passed, do 0.4.0; 383 passed + 1 xfailed, do 0.3.0).
 
 ### Mudado
 
+- `lumina/lexer/lexer.py` — `_read_escape` processa `\n`/`\t`/`\r`/`\0`/`\a`/`\b`/`\f`/`\v`/`\\`/`\"`/`\'` em compile-time. Escapes desconhecidos preservam `\X` como texto. Aplica-se a strings normais e interpoladas (`f"..."`).
+- `lumina/ast/statements.py` — novo nó `MacroCallStmt` (name, args, line, col) para `nome!(args)`.
+- `lumina/parser/statements.py` — detecta `IDENT BANG LPAREN` em statement position e produz `MacroCallStmt`.
+- `lumina/semantic/statements/macro_stmt.py` (novo) — valida que `nome!(args)` referencia uma `@macro` declarada e que a aridade bate.
+- `lumina/semantic/analyzer.py` — coleta `@macro` em `self.macros` (passada 0) para validar `MacroCallStmt`.
+- `lumina/codegen/statements/macro_stmt.py` (novo) — `visit_MacroCallStmt` inlineia o corpo inteiro da macro no call site.
+- `lumina/codegen/expressions/macros.py` — nova função `_substitute_in_stmt` que percorre `VarDecl`, `DestructureStmt`, `AssignStmt`, `ReturnStmt`, `IfStmt`, `WhileStmt`, `ForStmt`, `DeferStmt`, `AssertStmt` e delega expressões a `_substitute_in_expr`.
+- `lumina/codegen/traits.py::_validate_macro` — só valida que o corpo não está vazio. A exigência de `return <expr>` fica em `_expand_macro_expr` (call site expression).
+- `lumina/codegen/statements/__init__.py` — `MacroStmtMixin` adicionado à MRO.
 - `lumina/builtins.py` — `BUILTIN_RET` agora vive ao lado de `BUILTIN_FUNCTIONS` (fonte única de verdade). Consumido por `semantic/statements.py`, `semantic/expressions.py` e `codegen/codegen.py`.
 - `lumina/codegen/codegen.py::generate_module` — skip de `ExternDecl` que colide com builtin.
 - `lumina/codegen/codegen.py::__init__` — `_fn_wrappers` cacheia wrappers `i64(i8*, i64...)` para funções nomeadas usadas como valor.
@@ -78,7 +91,7 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - `lumina/codegen/statements/flow.py::visit_ReturnStmt` — normalização defensiva `iN → i64`.
 - `lumina/semantic/expressions.py::visit_VariableExpr` reordena os checks: variante → `fn` → variável.
 - `lumina/codegen/statements/control.py::_visit_for_iterable` — caso "índice + valor" quando `var_name` contém `,`.
-- `std/io.lm` — reescrito. Sem `extern fn` (usa builtins), `chr(10)` em vez de `"\n"`, `read_line` com loop explícito.
+- `std/io.lm` — reescrito. Sem `extern fn` (usa builtins), `"\n"` direto (lexer processa), `read_line` com loop explícito.
 
 ---
 

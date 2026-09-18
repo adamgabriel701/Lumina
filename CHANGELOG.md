@@ -12,11 +12,12 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 ### Adicionado
 
 #### Linguagem
-- **Closures** (captura por valor): `let offset = 10; let add = fn(x: int) -> int: x + offset`. O codegen detecta variáveis livres em `LambdaExpr`, gera um bloco `{fn_ptr, env_ptr}` no heap, e emite uma função `i64 __closure_N(i8* env, i64 a1, ..., i64 aN)` que lê os campos do env. Lambda sem captura continua sendo fn pointer cru (compatível com FFI). Suporta lambda aninhada, captura dentro de loop, e chamada com N argumentos.
+- **Closures como callback (tipo `fn` unificado em fat pointer)**: todo valor `fn` em Lumina agora é `{fn_ptr, env_ptr}`. Lambdas com captura usam env != NULL; lambdas sem captura e funções nomeadas usam env = NULL (wrapped em runtime). Isso destrava `sort_by(arr, n, fn(a, b): ...)` com captura, `map`/`filter` com captura em `std/iter`, e qualquer HOF. `&fn_name` devolve o fn ptr cru (FFI-compatível). Resolve o `xfail` histórico de `test_sort_closure_captures`.
+- **Closures** (captura por valor): `let offset = 10; let add = fn(x: int) -> int: x + offset`. O codegen detecta variáveis livres em `LambdaExpr`, gera um bloco `{fn_ptr, env_ptr}` no heap, e emite uma função `i64 __closure_N(i8* env, i64 a1, ..., i64 aN)` que lê os campos do env. Suporta lambda aninhada, captura dentro de loop, e chamada com N argumentos.
 - **`for i, x in arr`** — índice + valor no mesmo loop. Parser aceita `IDENT COMMA IDENT` após `for`; o `ForStmt` guarda `"i,x"` em `var_name`; o semantic declara ambos; o codegen emite slot para o índice e para o valor.
 - **`std/sort`** — `sort(arr, n)` (crescente) e `sort_by(arr, n, cmp)` (comparator). Insertion sort para `n ≤ 16`, quicksort acima. `is_sorted(arr, n)` verifica.
-- **`fn_name` como valor** — `sort(arr, n, _cmp_asc)` passa função por nome. Semantic retorna `"fn"`, codegen bitcast para `voidptr`.
-- **Indirect call com N args** — `fn_ty = i64 (i64) * n_args` em vez de `i64 (i64)`. `cmp(a, b)` agora passa ambos.
+- **`fn_name` como valor** — `sort(arr, n, _cmp_asc)` passa função por nome. Semantic retorna `"fn"`, codegen produz fat pointer `{wrapper, NULL}`.
+- **Indirect call com N args** — `fn_ty = i64 (i8*, i64, ..., i64)` via fat pointer. `cmp(a, b)` agora passa ambos.
 - **Variante com payload usada bare** agora é erro: `let x = Some` falha com mensagem clara em vez de compilar silenciosamente.
 - **`std/io`** — `read_line`, `read_int`, `read_char`, `write`, `write_line`, `eprintln`. Usa os builtins `stdin`/`stdout`/`stderr`/`fgets`/`fputs`/`fflush`/`getchar` diretamente.
 
@@ -28,6 +29,7 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Corrigido
 
+- **Closure com captura como callback segfaultava.** `sort_by(arr, n, fn(a, b): (b-a)*mult)` passava o bloco `{fn_ptr, env_ptr}` como se fosse um fn ptr cru, e o receptor chamava lixo. **Fix:** unificação do tipo `fn` em fat pointer `{fn_ptr, env_ptr}` + `_call_closure` em toda chamada indireta. Funções nomeadas usadas como valor são wrapped em runtime (`_wrap_fn_as_closure`), com wrapper `i64(i8*, i64, ...)` que adapta a assinatura original. `&fn_name` devolve o fn ptr cru para FFI.
 - **`stdin`/`stdout`/`stderr` faltavam em `BUILTIN_RET`.** `std/io.lm` falhava no semantic com "Tipo inválido para parâmetro 'stream': esperado 'str', obteve 'int'" porque `stdout()` era inferido como `int` no `VarDecl`. **Fix:** `BUILTIN_RET` centralizado em `lumina/builtins.py` (fonte única) e `stdin`/`stdout`/`stderr` adicionados como `"str"`.
 - **`extern fn fgets` colidia com o builtin.** O `generate_module` registrava o extern com assinatura `i8*(i8*, i64, i8*)`, mas o branch de builtin em `calls.py` trunca `size` para `i32` (assinatura real do C). Resultado: `TypeError: Type of #2 arg mismatch: i64 != i32`. **Fix:** `generate_module` pula `ExternDecl` cujo nome está em `BUILTIN_FUNCTIONS` — o codegen de builtin já emite a assinatura correta.
 - **`getchar` retornava `i32` sem normalização.** `ret i32 %getchar_call` não casava com o tipo de retorno `-> int` da função Lumina (i64), gerando `value doesn't match function result type 'i64'` no clang. **Fix:** `sext i32 → i64` antes de retornar.
@@ -52,7 +54,7 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 - `tests/test_std_io.py` (6 testes) — `read_line`, `read_int`, `read_line_eof`, `write`, `write_line`, `eprintln`.
 - `tests/test_closures.py` (10 testes).
-- `tests/test_sort.py` (10 testes, 1 xfail).
+- `tests/test_sort.py` (10 testes — `test_sort_closure_captures` deixou de ser xfail).
 - `tests/test_lint.py` (14 testes, do 0.3.0).
 - `tests/test_forin.py` (9 testes).
 - `tests/test_tuples.py` (7 testes).
@@ -60,21 +62,21 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - `tests/test_std_result.py` (9 testes).
 - `tests/test_escape_analysis.py` (4 testes).
 
-**Total: 383 passed, 1 xfailed** (antes 325 passed, do 0.3.0).
-
-O `1 xfailed` é `test_sort_closure_captures` — closures com captura passadas como callback ainda não funcionam (o tipo `fn` é `voidptr` e não distingue raw fn ptr de `{fn, env}`). Próximo passo: introduzir um tipo `Fn` distinto.
+**Total: 384 passed** (antes 383 passed + 1 xfailed, do 0.3.0).
 
 ### Mudado
 
 - `lumina/builtins.py` — `BUILTIN_RET` agora vive ao lado de `BUILTIN_FUNCTIONS` (fonte única de verdade). Consumido por `semantic/statements.py`, `semantic/expressions.py` e `codegen/codegen.py`.
 - `lumina/codegen/codegen.py::generate_module` — skip de `ExternDecl` que colide com builtin.
+- `lumina/codegen/codegen.py::__init__` — `_fn_wrappers` cacheia wrappers `i64(i8*, i64...)` para funções nomeadas usadas como valor.
+- `lumina/codegen/helpers.py` — `_make_fn_wrapper` (wrapper que adapta `i64(i8*, i64...)` → assinatura original) + `_wrap_fn_as_closure` (bloco `{wrapper, NULL}` no heap).
+- `lumina/codegen/expressions/aggregates.py::visit_LambdaExpr` — sempre chama `_emit_lambda_closure`; `_emit_lambda_plain` removido.
+- `lumina/codegen/expressions/members.py::visit_VariableExpr` — função nomeada usada como valor vira `_wrap_fn_as_closure`.
+- `lumina/codegen/expressions/operators.py::visit_AddressOfExpr` — `&fn_name` devolve fn ptr cru (FFI-compatível).
+- `lumina/codegen/expressions/calls.py` — toda chamada indireta passa por `_call_closure` (sem distinção `closure_vars` vs fn ptr cru).
 - `lumina/codegen/expressions/calls.py::getchar` — `sext i32 → i64`.
 - `lumina/codegen/statements/flow.py::visit_ReturnStmt` — normalização defensiva `iN → i64`.
 - `lumina/semantic/expressions.py::visit_VariableExpr` reordena os checks: variante → `fn` → variável.
-- `lumina/codegen/expressions/members.py::visit_VariableExpr` idem, e adiciona bitcast para fn ptr.
-- `lumina/codegen/expressions/calls.py` — `_call_closure` (desempacota `{fn, env}`) + indirect call com N args.
-- `lumina/codegen/expressions/aggregates.py` — `_emit_lambda_plain` (fn ptr) e `_emit_lambda_closure` (bloco `{fn, env}`).
-- `lumina/codegen/statements/var_decl.py` — `closure_vars` registra quais variáveis seguram closures.
 - `lumina/codegen/statements/control.py::_visit_for_iterable` — caso "índice + valor" quando `var_name` contém `,`.
 - `std/io.lm` — reescrito. Sem `extern fn` (usa builtins), `chr(10)` em vez de `"\n"`, `read_line` com loop explícito.
 

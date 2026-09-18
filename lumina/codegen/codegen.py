@@ -88,6 +88,7 @@ class LLVMCodegen(
 
         self.string_counter = 0
         self.lambda_counter = 0
+        self._fn_wrappers = {}      # cache de wrappers i64(i8*, i64...) p/ fn nomeadas
         self.heap_allocs = set()
 
         self.builtin_functions = BUILTIN_FUNCTIONS

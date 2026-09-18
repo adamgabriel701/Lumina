@@ -27,8 +27,8 @@ class MembersMixin:
         if ptr:
             return self.builder.load(ptr, name=node.name + "_load")
 
-        # NOVO: variante de enum bare (ex: `Red`, `Stop`) DEVE vir antes
-        # do check de functions_table, porque variantes são registradas lá.
+        # Variante de enum bare (ex: `Red`, `Stop`) — antes de funções,
+        # porque variantes são registradas em `functions_table`.
         lookup = self._find_enum_variant(node.name)
         if lookup is not None:
             enum_name, variant_idx = lookup
@@ -41,10 +41,11 @@ class MembersMixin:
                     return self._construct_enum(enum_name, variant_idx, [])
                 break
 
-        # Nome de função usado como valor (fn pointer).
+        # Função nomeada usada como valor → fat pointer {fn_ptr, NULL}.
+        # `&fn_name` (AddressOfExpr) devolve o ptr cru p/ FFI.
         if node.name in self.functions_table:
             func, _ = self.functions_table[node.name]
-            return self.builder.bitcast(func, self.voidptr_ty, name=node.name + "_fnptr")
+            return self._wrap_fn_as_closure(func, name_hint=node.name)
 
         # Globais mutáveis.
         gv = getattr(self, 'global_mut_vars', {}).get(node.name)

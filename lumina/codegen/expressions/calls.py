@@ -8,6 +8,14 @@ Responsabilidades:
 
 Os builtins simples ficam em `builtins.py`. Os builtins de arquivo
 ficam em `io_builtins.py`. Métodos e enums ficam em `methods.py`.
+
+ABI de `fn` (a partir de 0.4.0):
+  TODO valor `fn` é um fat pointer `{fn_ptr, env_ptr}` no heap.
+  O `fn_ptr` tem assinatura `i64 (i8* env, i64 a1, ..., i64 aN)`.
+  - Lambda com captura: env = struct com as variáveis capturadas.
+  - Lambda sem captura: env = NULL.
+  - Função nomeada usada como valor: wrapped em runtime com env = NULL.
+  `&fn_name` devolve o fn ptr CRU (sem env) — usado em FFI.
 """
 from llvmlite import ir
 from ...ast import VariableExpr, MemberExpr
@@ -27,9 +35,13 @@ class CallsMixin:
         else:
             return self.codegen_user_call(node, func_name)
 
+    # ==================================================================
+    # Helpers de coerção
+    # ==================================================================
     def _coerce_arg(self, arg_val, expected_ty, suffix=""):
-        """Coage um arg para o tipo esperado. Usado em chamadas normais
-        e no preenchimento de defaults.
+        """Coage um arg para o tipo esperado.
+
+        Usado em chamadas normais e no preenchimento de defaults.
         """
         if arg_val.type == expected_ty:
             return arg_val
@@ -61,10 +73,16 @@ class CallsMixin:
             return ir.Constant(ty, 0)
         return ir.Constant(ty, 0)
 
+    # ==================================================================
+    # Invocação de fat pointer
+    # ==================================================================
     def _call_closure(self, name, node):
         """Desempacota `{fn_ptr, env_ptr}` e chama com env como primeiro arg.
 
         ABI: `i64 fn(i8* env, i64 a1, ..., i64 aN)`.
+
+        Todos os valores `fn` são fat pointers, então toda chamada indireta
+        passa por aqui — inclusive funções nomeadas usadas como valor.
         """
         slot = self.symbol_table[name]
         closure_raw = self.builder.load(slot, name=f"{name}_closure")
@@ -95,6 +113,9 @@ class CallsMixin:
 
         return self.builder.call(fn_ptr, call_args, name=f"{name}_call")
 
+    # ==================================================================
+    # Dispatcher principal
+    # ==================================================================
     def codegen_user_call(self, node, func_name):
         # 0. Macro (@macro) → expande AST no call site
         if func_name in getattr(self, 'macros', {}):
@@ -102,50 +123,20 @@ class CallsMixin:
             expanded = self._expand_macro_expr(macro_fn, node.args)
             return self.visit(expanded)
 
-        # 1. Chamada indireta via variável local (function pointer / lambda)
+        # 1. Chamada indireta via variável local.
+        #
+        # Como TODO valor `fn` é um fat pointer `{fn_ptr, env_ptr}`, toda
+        # invocação indireta passa por `_call_closure` — que carrega os
+        # dois campos e passa o env como primeiro arg. Isso funciona
+        # uniformemente para:
+        #   - lambda com captura (env populado)
+        #   - lambda sem captura (env = NULL)
+        #   - função nomeada usada como valor (env = NULL)
+        #   - parâmetro `fn` recebendo qualquer um dos anteriores
         if (func_name not in self.functions_table
                 and func_name not in self.builtin_functions
                 and func_name in self.symbol_table):
-            n_args = len(node.args)
-
-            # 1a. Closure com env: desempacota {fn_ptr, env_ptr}.
-            if func_name in getattr(self, 'closure_vars', set()):
-                return self._call_closure(func_name, node)
-
-            # 1b. Function pointer cru.
-            fn_slot = self.symbol_table[func_name]
-            fn_ptr_raw = self.builder.load(fn_slot, name=f"{func_name}_load")
-
-            fn_ty = ir.FunctionType(self.i64_ty, [self.i64_ty] * n_args)
-
-            if fn_ptr_raw.type != fn_ty.as_pointer():
-                if fn_ptr_raw.type == self.voidptr_ty:
-                    fn_ptr = self.builder.bitcast(
-                        fn_ptr_raw, fn_ty.as_pointer(), name=f"{func_name}_cast",
-                    )
-                else:
-                    fn_int = self.builder.ptrtoint(
-                        fn_ptr_raw, self.i64_ty, name=f"{func_name}_int",
-                    )
-                    fn_ptr = self.builder.inttoptr(
-                        fn_int, fn_ty.as_pointer(), name=f"{func_name}_cast",
-                    )
-            else:
-                fn_ptr = fn_ptr_raw
-
-            call_args = []
-            for arg_node in node.args:
-                a = self.visit(arg_node)
-                if a.type != self.i64_ty:
-                    if isinstance(a.type, ir.IntType):
-                        a = self.builder.sext(a, self.i64_ty, name="ind_arg_sext")
-                    elif a.type == self.f64_ty:
-                        a = self.builder.fptosi(a, self.i64_ty, name="ind_arg_fptosi")
-                    elif isinstance(a.type, ir.PointerType):
-                        a = self.builder.ptrtoint(a, self.i64_ty, name="ind_arg_ptr")
-                call_args.append(a)
-
-            return self.builder.call(fn_ptr, call_args, name=f"{func_name}_indirect")
+            return self._call_closure(func_name, node)
 
         # 2. Chamada a função genérica → materializa cópia especializada
         gen_def = self.function_defs.get(func_name)

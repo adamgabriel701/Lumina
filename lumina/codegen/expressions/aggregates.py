@@ -105,67 +105,14 @@ class AggregatesMixin:
     # Lambdas
     # ==================================================================
     def visit_LambdaExpr(self, node):
-        free = list(getattr(node, 'free_vars', None) or [])
-        if not free:
-            return self._emit_lambda_plain(node)
+        """Toda lambda é uma closure `{fn_ptr, env_ptr}`.
+
+        Mesmo sem capturas, o env é uma struct vazia e o chamador
+        sempre desempacka via `_call_closure`. Isso unifica o ABI de
+        `fn` (fat pointer) e destrava closures com captura passadas
+        como callbacks.
+        """
         return self._emit_lambda_closure(node)
-
-    def _emit_lambda_plain(self, node):
-        if not hasattr(self, 'lambda_counter'):
-            self.lambda_counter = 0
-        func_name = f"__lambda_{self.lambda_counter}"
-        self.lambda_counter += 1
-
-        ret_ty = self.get_llvm_param_type(node.return_type)
-
-        param_types = []
-        for p in node.params:
-            if isinstance(p, tuple):
-                p_type = p[1]
-            else:
-                p_type = p.type_ann
-            param_types.append(self.get_llvm_param_type(p_type))
-
-        func_type = ir.FunctionType(ret_ty, param_types)
-        func = ir.Function(self.module, func_type, name=func_name)
-
-        old_builder = self.builder
-        old_symtab = self.symbol_table
-        block = func.append_basic_block(name="entry")
-        self.builder = ir.IRBuilder(block)
-        self.symbol_table = {}
-
-        for i, p in enumerate(node.params):
-            if isinstance(p, tuple):
-                p_name, p_type = p[0], p[1]
-            else:
-                p_name, p_type = p.name, p.type_ann
-
-            p_ty = self.get_llvm_param_type(p_type)
-            ptr = self.builder.alloca(p_ty, name=p_name)
-            self.builder.store(func.args[i], ptr)
-            self.symbol_table[p_name] = ptr
-
-        from ...ast.expressions import Expr as ExprBase
-        for stmt in node.body:
-            if isinstance(stmt, ExprBase):
-                val = self.visit(stmt)
-                if ret_ty != ir.VoidType() and val.type != ret_ty:
-                    val = self._coerce_for_store(val, ret_ty, name_hint="lambda_ret")
-                self.builder.ret(val)
-                break
-            else:
-                self.visit(stmt)
-
-        if not self.builder.block.is_terminated:
-            if ret_ty == ir.VoidType():
-                self.builder.ret_void()
-            else:
-                self.builder.ret(ir.Constant(ret_ty, 0))
-
-        self.builder = old_builder
-        self.symbol_table = old_symtab
-        return self.builder.bitcast(func, self.voidptr_ty, name="lambda_ptr")
 
     def _emit_lambda_closure(self, node):
         """Lambda com capturas.

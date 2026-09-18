@@ -205,12 +205,6 @@ def test_sort_with_index_iteration():
     assert "3 40" in out
 
 
-import pytest
-
-@pytest.mark.xfail(
-    reason="Closures com captura ainda não passam como callback para outra função",
-    strict=False,
-)
 def test_sort_closure_captures():
     """Comparator é closure que captura `mult`."""
     src = (

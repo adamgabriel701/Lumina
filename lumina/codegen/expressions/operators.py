@@ -365,6 +365,14 @@ class OperatorsMixin:
             ptr = self.symbol_table.get(node.val.name)
             if ptr:
                 return ptr
+            # `&fn_name` devolve o fn ptr CRU (sem env) — necessário para
+            # FFI (`pthread_create(t, 0, &worker, arg)`). O `fn_name` sozinho
+            # (sem `&`) vira um fat pointer.
+            if node.val.name in self.functions_table:
+                func, _ = self.functions_table[node.val.name]
+                return self.builder.bitcast(
+                    func, self.voidptr_ty, name=node.val.name + "_rawfn",
+                )
         return self.visit(node.val)
 
     def visit_DerefExpr(self, node):

@@ -1,6 +1,7 @@
 """Resolução de métodos default de traits e validação de macros."""
 from ..ast import Function as AstFunction, Param
 from ..errors import LuminaError
+from ..common.mangle import mangle_method
 
 
 class TraitsMixin:
@@ -30,7 +31,7 @@ class TraitsMixin:
             explicit_names = {m.name for m in decl.methods}
 
             for trait_method in trait_def.methods:
-                full_name = f"{decl.struct_name}_{trait_method.name}"
+                full_name = mangle_method(decl.struct_name, trait_method.name)
                 if full_name in explicit_names:
                     continue
                 if not trait_method.body:

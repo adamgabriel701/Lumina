@@ -13,6 +13,9 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 #### Linguagem
 - **`type Alias = <tipo>`**: abrevia tipos longos e dá nome semântico. `type Callback = fn(int) -> int`; use `Callback` em params, retornos, campos de struct, `VarDecl` (locais e top-level) e payloads de enum. Aliases encadeados (`A → B → C`) e aliases dentro de assinaturas (`type Pred = fn(Callback) -> int`) funcionam. A expansão acontece na passada 0 do semantic; o resto do pipeline nunca vê o alias.
+- **`type Alias<A, B> = ...` (aliases genéricos)**: aliases com parâmetros de tipo, com substituição de args. `type IPair<B> = Pair<int, B>` → use `IPair<str>` em qualquer posição de tipo (params, retornos, campos, `VarDecl`, payloads). O `expand_type_alias` faz substituição + recursão.
+- **Enums genéricos com inferência de type args**: `enum Res<T, E>: Ok(T); Err(E)` — os type args são inferidos no construtor (`Ok(42)` → `Res<int, int>`; `Has("hello")` → `Box<str>`), e o registro acontece sob chave **canônica** (`Res<int,int>`) **e** mangled (`Res_int_int_`). Habilita enums genéricos aninhados com `match` correto.
+- **`impl Trait for Box<int>` (especialização de trait em tipo genérico)**: além de `impl Box<T>:` (métodos na struct genérica, `<T>` descartado para registro → `Box_get`), agora `impl Trait for Box<int>:` preserva o tipo completo (mangle `Box_int__metodo`) e coexiste com `impl Trait for Box<str>:` (mangle `Box_str__metodo`). O lookup em chamadas tenta o nome completo primeiro e cai para o base como fallback.
 - **`std/iter` e `std/sort` com assinaturas tipadas**: callbacks passam a ser `fn(int) -> int` (`std/iter`) e `fn(int, int) -> int` (`std/sort`). Passar lambda com arity ou tipos errados é detectado em compile-time em vez de segfault em runtime.
 - **Tipos de função com assinatura (`fn(int, int) -> int`)**: antes `fn` era opaco (`voidptr`); agora é possível anotar params e retornos. Lambdas e funções nomeadas propagam a assinatura automaticamente, e chamadas via variável `fn` são validadas em compile-time (arity + tipos). `fn` sem assinatura continua aceitando qualquer valor, e mistura tipado/untyped é permitida nos dois sentidos.
 - **`fn` como campo de struct**: `struct Handler: cb: fn(int) -> int`. Atribuir lambda (com ou sem captura) ou função nomeada ao campo; chamar via `h.cb(args)` faz indirect call e valida arity/tipos em compile-time. Habilita vtable manual, event handlers, callbacks armazenados.
@@ -34,6 +37,17 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - `std/io.lm` — `read_line` (remove `\n` final, retorna `""` em EOF), `read_int`, `read_char`, `write`, `write_line`, `eprintln`. Sem `extern fn` declarados (são builtins do compilador). Usa `"\n"` diretamente (o lexer agora processa o escape).
 
 ### Corrigido
+
+#### Genéricos (sessão de fechamento)
+
+- **`get_llvm_param_type` retornava tipos diferentes para a mesma string dependendo da ordem das chamadas.** Durante `register_function`, `"Box<int>"` ainda não estava em `struct_types`, então caía no `get_llvm_type` que faz monomorphização on-demand e devolve **valor** (`Box_int_`). Na 2ª chamada (durante `generate_function_body`), já estava em `struct_types` e devolvia **ponteiro** (`Box_int_*`). Resultado: `alloca(Box_int_*)` cria `Box_int_**`, e `store(Box_int_, Box_int_**)` explode com `TypeError: cannot store %"Box_int_" to %"Box_int_"**`. **Fix:** `get_llvm_param_type` sempre chama `get_llvm_type` primeiro (forçando monomorphização) e devolve `.as_pointer()` se for `IdentifiedStructType`.
+- **`impl Box<T>:` era mangleado como `Box_T__get`, nunca encontrado.** O parser fazia `mangle_method("Box<T>", "get")` → `Box_T__get`, mas o codegen só procura por `Box_int__get` (especialização) e `Box_get` (base). **Fix:** `parse_impl` normaliza `impl Box<T>:` → `Box` quando todos os type args do alvo são type params únicos maiúsculos (`T`, `U`, `V`). `impl Getter for Box<int>:` mantém `Box<int>` (especialização). Cobre os dois casos sem ambiguidade.
+- **Semantic procurava `Box_get` mesmo quando existia `Box_int__get`.** O lookup em `visit_CallExpr` usava `f"{obj_type.split('<')[0]}_{func_name}"`. Com `impl Getter for Box<int>`, o método estava registrado como `Box_int__get` e o lookup buscava `Box_get`. **Fix:** lookup tenta o nome completo (`mangle_method(obj_type, func_name)`) e cai para o nome base; mesmo padrão em `_infer_call_expr_type`.
+- **`_resolve_trait_defaults` (codegen) usava f-string em vez de `mangle_method`.** `f"{decl.struct_name}_{trait_method.name}"` produzia `Box<T>_greet` quando o alvo era genérico. **Fix:** `mangle_method` (mesma função canônica usada pelo parser).
+- **`struct_defs` só registrava chave mangled.** `get_or_create_monomorphized_struct` e `get_or_create_monomorphized_enum` faziam apenas `self.struct_defs[mangled] = base_decl`, mas `_construct_enum` consulta por `self.struct_defs["Custom<int>"]` (chave canônica). **Fix:** registra sob **ambas** as chaves.
+- **`visit_VarDecl` forçava tipo default de enum genérico.** Em `let c = Wrap(42)`, semantic infere `var_type = "Custom"` (nome base, sem args). `is_struct_like` era `False`, então caía em `llvm_ty = get_llvm_type("Custom")`, que monomorphiza com defaults (`Custom<int>`) e devolve `Custom_int_` (valor). O `_construct_enum` produz `Custom_int_*` (ponteiro), e o `bitcast` final era `Custom_int_* → Custom_int_` (inválido). Pior: em `let b = Has("hello")`, `val.type = Box_str_*` mas `llvm_ty = Box_int_*` (defaults), causando `bitcast Box_str_* → Box_int_*` (structs diferentes). **Fix:** se `val.type` já é ponteiro para `IdentifiedStructType`, usa `val.type` como tipo do slot — o tipo real do valor sempre vence.
+
+#### Demais correções
 
 - **`type` como keyword quebrou bindings C de socket.** `std/http.lm`, `std/net.lm` e `examples/server.lm` usavam `type` como nome de parâmetro em `extern fn socket(domain, type, protocol)`. Renomeado para `sock_type`.
 - **`_expand_type_aliases` não recursava em corpos de função.** `let cb: Callback = ...` dentro de `fn main` mantinha o tipo literal. Agora percorre `IfStmt`/`WhileStmt`/`ForStmt`/`MatchStmt`/`DeferStmt`/`BenchStmt` recursivamente.
@@ -76,8 +90,11 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - `tests/test_generic_impl.py` (6 testes).
 - `tests/test_std_result.py` (9 testes).
 - `tests/test_escape_analysis.py` (4 testes).
+- `tests/test_generic_enums.py` (2 testes, sessão de fechamento) — enum genérico `Wrap(42)` e `Has("hello")`, com inferência de type args na construção e match correto.
+- `tests/test_impl_box_generic.py` (3 testes, sessão de fechamento) — `impl Trait for Box<int>`, duas especializações distintas coexistindo (`impl Kind for Box<int>` e `impl Kind for Box<str>`), e `impl Box<T>:` como fallback.
+- `tests/test_generic_type_alias.py` (4 testes, sessão de fechamento) — `type BI = Box<int>` em assinatura de função, em param de struct, encadeado (`A → B → C`) e com params (`type IPair<B> = Pair<int, B>`).
 
-**Total: 419 passed** (antes 411 passed, do 0.4.0).
+**Total: 428 passed** (antes 419; antes disso, 411).
 
 ### Mudado
 
@@ -103,6 +120,13 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - `lumina/semantic/expressions.py::visit_VariableExpr` reordena os checks: variante → `fn` → variável.
 - `lumina/codegen/statements/control.py::_visit_for_iterable` — caso "índice + valor" quando `var_name` contém `,`.
 - `std/io.lm` — reescrito. Sem `extern fn` (usa builtins), `"\n"` direto (lexer processa), `read_line` com loop explícito.
+- `lumina/codegen/types.py::get_llvm_param_type` — força monomorphização antes de checar `struct_types`; `IdentifiedStructType` sempre devolve `.as_pointer()`.
+- `lumina/codegen/types.py::get_or_create_monomorphized_{struct,enum}` — registra sob **chave canônica** (`Custom<int>`) **e** mangled (`Custom_int_`).
+- `lumina/parser/declarations.py::parse_impl` — normaliza `impl Box<T>:` → nome base `Box` quando todos os args são type params únicos maiúsculos; `impl Trait for Box<int>` preserva `Box<int>`.
+- `lumina/semantic/expressions/calls.py::visit_CallExpr` — lookup de método tenta nome completo (`mangle_method`) e cai para base.
+- `lumina/semantic/statements/var_decl.py::_infer_call_expr_type` — mesmo padrão de lookup.
+- `lumina/codegen/traits.py::_resolve_trait_defaults` — usa `mangle_method` (canônico) em vez de f-string.
+- `lumina/codegen/statements/var_decl.py::visit_VarDecl` — usa `val.type` quando já é ponteiro para `IdentifiedStructType` (cobre `Box<str>` vs `Box<int>` e enum genérico com nome base).
 
 ---
 

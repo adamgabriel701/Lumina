@@ -24,7 +24,9 @@ class StructDecl(Stmt):
 @dataclass
 class EnumDecl(Stmt):
     name: str
+    # variants: List[(nome, [tipos])]
     variants: List[tuple]
+    type_params: Optional[List[str]] = None
     line: int = 0
     col: int = 0
 
@@ -197,15 +199,13 @@ class MacroCallStmt(Stmt):
 
 @dataclass
 class TypeAlias(Stmt):
-    """`type Nome = <tipo>` — alias de tipo.
+    """`type Nome<T1, T2> = <tipo>` — alias de tipo (opcionalmente genérico).
 
-    O `target_type` pode ser um primitivo, nome de struct, `fn(...) -> R`,
-    ou qualquer combinação (inclusive genéricos aninhados). A expansão
-    acontece na passada 0 do semantic: os tipos usados no AST são
-    reescritos antes da análise, então o resto do pipeline nunca vê
-    aliases.
+    Se `type_params` é None/vazio, é um alias simples. Senão, o `target_type`
+    pode usar os parâmetros, e `Nome<int, str>` expande substituindo-os.
     """
     name: str
     target_type: str
+    type_params: Optional[List[str]] = None
     line: int = 0
     col: int = 0

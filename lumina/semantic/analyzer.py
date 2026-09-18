@@ -23,6 +23,7 @@ from .statements import StatementAnalyzer
 from .derives import DerivesMixin
 from .trait_resolution import TraitResolutionMixin
 from .types import expand_type_alias
+from ..common.mangle import mangle_method
 
 
 class SemanticAnalyzer(
@@ -58,13 +59,11 @@ class SemanticAnalyzer(
         self._resolve_trait_defaults(declarations)
 
         # Passada 0: coletar e expandir type aliases.
-        # A expansão mutaciona os tipos no AST (params, retornos, fields,
-        # payloads de enum, etc.) para que o resto do pipeline nunca
-        # veja aliases.
-        self.type_aliases = {}
+        self.type_aliases = {}  # name -> (params_list, target_type)
         for decl in declarations:
             if isinstance(decl, TypeAlias):
-                self.type_aliases[decl.name] = decl.target_type
+                params = list(getattr(decl, 'type_params', None) or [])
+                self.type_aliases[decl.name] = (params, decl.target_type)
 
         if self.type_aliases:
             self._expand_type_aliases(declarations)
@@ -116,7 +115,7 @@ class SemanticAnalyzer(
                         )
 
                     for trait_method in trait_def.methods:
-                        expected_name = f"{decl.struct_name}_{trait_method.name}"
+                        expected_name = mangle_method(decl.struct_name, trait_method.name)
                         if (expected_name not in self.functions
                                 and not trait_method.body):
                             raise LuminaError(

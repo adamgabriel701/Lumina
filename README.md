@@ -5,15 +5,49 @@
 [![Python Version](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![Status](https://img.shields.io/badge/Status-Alpha%20%2F%20Active-green.svg)](#)
 [![Language](https://img.shields.io/badge/Language-Lumina-6A0DAD.svg)](#)
-[![Tests](https://img.shields.io/badge/tests-419%20passed-brightgreen.svg)](#-testes-automatizados)
+[![Tests](https://img.shields.io/badge/tests-428%20passed-brightgreen.svg)](#-testes-automatizados)
 [![Examples](https://img.shields.io/badge/examples-54%20ran%20%7C%2017%20skip%20%7C%200%20fail-success.svg)](#)
 [![Cross-compile](https://img.shields.io/badge/cross--compile-aarch64%20%7C%20armv7%20%7C%20riscv64%20%7C%20wasm-blueviolet.svg)](#-cross-compilação)
 
 **Lumina** é uma linguagem de programação de sistemas de propósito geral, focada em alta performance, ergonomia moderna, concorrência e segurança de memória. Combina a sintaxe limpa e expressiva baseada em indentação (estilo Python/Nim) com o poder de baixo nível e otimização industrial do backend **LLVM**.
 
-A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums com multi-payload e variantes bare), Generics com **Monomorphization** incluindo **genéricos aninhados** (`Box<T>` como parâmetro) e **`impl Box<T>`** (métodos em structs genéricas), **Closures** (lambdas que capturam variáveis externas, com tipo `fn` unificado em fat pointer — usáveis como callback), Traits com Métodos Padrão, Standard Library Bootstrapped, **Tuplas** com destructuring heterogêneo, Pattern Matching (multi-pattern `|`, wildcard `_`, guard, destructuring de structs), **`for x in arr`** e **`for i, x in arr`** sobre iteráveis, **Tail Call Optimization** para self- e mutual-recursion com propagação de `defer`, operador `nil` para null pointer real, **`defer` com escopo de bloco** (Go/Zig-style), **`@safe` opt-in** para null check automático, **`@macro`** para expansão de AST em compile-time (com sintaxe `nome!(args)` para macros multi-statement), **escape analysis** (arrays locais no stack), **escape sequences** em strings (`\n`, `\t`, ...), Canais de Concorrência (CSP), operadores modernos (`|>`, `?.`, `?`, `as`, `:=`), interoperabilidade nativa com C/C++ (FFI), I/O Assíncrono (`epoll`/`O_NONBLOCK`), um **REPL persistente**, um Web Playground, um LSP completo (hover qualificado por escopo, references e rename cientes de escopo, semantic tokens), um **linter estático** (`lumina lint`), compilação incremental, testes nativos com relatório de cobertura, cross-compile para múltiplas arquiteturas, e é **Cross-Platform** (nativos x86_64/ARM/RISC-V, WebAssembly e Bare-Metal).
+A linguagem oferece tipagem estática com inferência, Garbage Collector nativo (Boehm GC), Tipos Algébricos (Enums com multi-payload e variantes bare), Generics com **Monomorphization** incluindo **genéricos aninhados** (`Box<T>` como parâmetro), **`impl Box<T>`** (métodos em structs genéricas), **`impl Trait for Box<int>`** (especialização em tipos concretos), **Closures** (lambdas que capturam variáveis externas, com tipo `fn` unificado em fat pointer — usáveis como callback), Traits com Métodos Padrão, Standard Library Bootstrapped, **Tuplas** com destructuring heterogêneo, Pattern Matching (multi-pattern `|`, wildcard `_`, guard, destructuring de structs), **`for x in arr`** e **`for i, x in arr`** sobre iteráveis, **Tail Call Optimization** para self- e mutual-recursion com propagação de `defer`, operador `nil` para null pointer real, **`defer` com escopo de bloco** (Go/Zig-style), **`@safe` opt-in** para null check automático, **`@macro`** para expansão de AST em compile-time (com sintaxe `nome!(args)` para macros multi-statement), **escape analysis** (arrays locais no stack), **escape sequences** em strings (`\n`, `\t`, ...), Canais de Concorrência (CSP), operadores modernos (`|>`, `?.`, `?`, `as`, `:=`), interoperabilidade nativa com C/C++ (FFI), I/O Assíncrono (`epoll`/`O_NONBLOCK`), um **REPL persistente**, um Web Playground, um LSP completo (hover qualificado por escopo, references e rename cientes de escopo, semantic tokens), um **linter estático** (`lumina lint`), compilação incremental, testes nativos com relatório de cobertura, cross-compile para múltiplas arquiteturas, e é **Cross-Platform** (nativos x86_64/ARM/RISC-V, WebAssembly e Bare-Metal).
 
 📖 **Documentação navegável em [`docs/`](docs/README.md).**
+
+---
+
+## ⚡ Quickstart
+
+```bash
+# 1. Instale os pré-requisitos de sistema (Ubuntu/Debian)
+sudo apt install -y llvm-14 clang libgc-dev python3.11 python3-pip
+
+# 2. Instale o compilador
+pip install -e .
+
+# 3. Crie um projeto e rode
+lumina new ola
+cd ola
+lumina run main.lm
+# Hello from ola!
+```
+
+Um programa completo em Lumina:
+
+```lumina
+fn fib(n: int) -> int:
+    if n <= 1:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+fn main() -> int:
+    for i in 0..10:
+        print(fib(i))
+    return 0
+```
+
+Veja mais em **[Exemplos de Código](#-exemplos-de-código)** e em **[`examples/`](examples/)**.
 
 ---
 
@@ -33,6 +67,9 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
 * **`@derive` Attributes:** `@derive(Eq, PartialEq, Debug, Display, Clone, Default)`.
 * **Tipagem Estática com Inferência:** Deduz tipos em retornos, generics aninhados, lambdas, binárias, `Option<T>`, `nil`, **tuplas** e `comptime`.
 * **Generics com Monomorphization:** `<T>` gera cópias especializadas. **Aninhados** (`fn put<T>(b: Box<T>, val: T)`) suportados via `unify_type` + `substitute_generic`. **`impl Box<T>:`** permite métodos em structs genéricas, chamados de `Box<int>`, `Box<str>`, etc.
+* **Enums Genéricos:** `enum Result<T, E>: Ok(T); Err(E)` — os type args são **inferidos** no construtor (`Ok(42)` → `Result<int, int>`), inclusive com payload `str`. Registro sob chave canônica (`Result<int,str>`) e mangled (`Result_int_str_`), mantendo ambos os lookups consistentes.
+* **`impl Trait for Box<int>`:** especialização de trait em tipos genéricos concretos. `impl Getter for Box<int>` e `impl Getter for Box<str>` coexistem com corpos distintos — o lookup tenta o nome completo (`Box_int__get`) e cai para o nome base (`Box_get`) como fallback.
+* **`type Alias<A, B> = ...`:** aliases **genéricos** com substituição de params. `type IPair<B> = Pair<int, B>` → use `IPair<str>` em qualquer posição de tipo. Aliases em assinatura de função (`fn get(b: BI) -> int`) funcionam; a expansão é feita na passada 0 do semantic.
 * **Closures (tipo `fn` unificado em fat pointer):** Todo valor `fn` é `{fn_ptr, env_ptr}`. Lambdas com captura usam env != NULL; lambdas sem captura e funções nomeadas usam env = NULL (wrapped em runtime). Isso destrava `sort_by(arr, n, fn(a, b): (b-a)*mult)` com captura e HOFs em geral. `&fn_name` devolve o fn ptr cru, compatível com FFI.
 * **Tipos de função com assinatura (`fn(int) -> int`):** Params, retornos e **campos de struct** de `fn` são anotáveis e checados em compile-time. Chamar `h.cb(args)` (campo fn-typed) ou variável `fn` com arity/tipos errados falha em compile. `fn` puro continua aceitando qualquer valor.
 * **Type alias (`type Nome = <tipo>`):** abrevia tipos. `type Callback = fn(int) -> int`; use `Callback` em qualquer posição de tipo (params, retornos, campos, VarDecls, payloads). Aliases encadeiam (`A → B → C`).
@@ -131,6 +168,9 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
 | 61 | **`fn` como campo de struct (callbacks armazenados)** | ✅ |
 | 62 | **Type alias (`type Nome = <tipo>`)** | ✅ |
 | 63 | **`std/iter` e `std/sort` com assinaturas tipadas** | ✅ |
+| 64 | **Enums genéricos com inferência de type args** | ✅ |
+| 65 | **`impl Trait for Box<int>` (especialização de trait)** | ✅ |
+| 66 | **`type Alias<A, B>` (aliases genéricos)** | ✅ |
 
 ### CLI
 
@@ -200,6 +240,11 @@ Os bugs abaixo eram **silenciosos** — passavam pelo CI porque os testes origin
 | **Closure com captura como callback** | `sort_by(arr, n, fn(a, b): (b-a)*mult)` segfaultava — o bloco `{fn_ptr, env_ptr}` era passado como se fosse fn ptr cru | Tipo `fn` unificado em fat pointer `{fn_ptr, env_ptr}`; `_call_closure` em toda indireta | `test_sort.py::test_sort_closure_captures` |
 | **`_validate_macro` rejeitava declaração multi-statement** | macro multi-statement não podia nem ser declarada, mesmo que usada só via `nome!(args)` | Validação só verifica corpo não-vazio; exigência de `return <expr>` fica no call site de expressão | `test_macro_stmts.py` |
 | **`parse_struct` usava `expect(IDENT)` no tipo do campo** | `struct S: cb: fn(int) -> int` falhava com "Esperado IDENT, mas encontrei FN ('fn')" | `parse_type()` (mesmo helper de params/enums/traits) | `test_fn_struct_fields.py` |
+| **`get_llvm_param_type` inconsistente** | `TypeError: cannot store %"Box_int_" to %"Box_int_"**` em `fn get(b: BI)` | `get_llvm_type` força monomorphização antes de checar `struct_types`; structs sempre devolvem ponteiro | `test_generic_type_alias.py::test_generic_alias_inside_fn_sig` |
+| **`impl Box<T>:` registrava `Box_T__get`** | `Método 'get' não implementado para 'Box'` | Parser normaliza `impl Box<T>:` → nome base `Box` (se args são todos type params únicos maiúsculos) | `test_impl_box_generic.py::test_generic_impl_still_works_as_fallback` |
+| **Semantic procurava `Box_get`, existia `Box_int__get`** | `Método 'get' não implementado` mesmo com `impl Getter for Box<int>` | Lookup tenta nome completo (`mangle_method`) e cai para base; mesma lógica no `_infer_call_expr_type` | `test_impl_box_generic.py::test_impl_trait_for_box_int` |
+| **`struct_defs["Custom<int>"]` não registrado** | `KeyError: 'Custom<int>'` em `_construct_enum` | `get_or_create_monomorphized_{struct,enum}` registra sob chave canônica **e** mangled | `test_generic_enums.py` |
+| **`visit_VarDecl` forçava tipo default de enum** | `bitcast Custom_int_* → Custom_int_` inválido em `let c = Wrap(42)` | Se `val.type` já é ponteiro para struct identificada, usa `val.type` como tipo do slot (cobre `Box<str>` vs `Box<int>`) | `test_generic_enums.py::test_generic_enum_str_payload` |
 
 ---
 
@@ -209,7 +254,7 @@ Os bugs abaixo eram **silenciosos** — passavam pelo CI porque os testes origin
 
 ```bash
 pytest tests/ -v
-# 392 passed
+# 428 passed
 ```
 
 | Arquivo | Testes | Cobre |
@@ -256,8 +301,11 @@ pytest tests/ -v
 | `test_fn_types.py` | 12 | Assinatura `fn(T1, T2) -> R`, checagem de arity/tipos |
 | `test_fn_struct_fields.py` | 7 | Campo fn-typed, lambda com captura, função nomeada, múltiplos campos |
 | `test_type_alias.py` | 8 | Alias de primitivo, fn, struct, encadeado, enum, VarDecl |
+| `test_generic_enums.py` | 2 | Enum genérico: `Wrap(42)`, `Has("hello")`, inferência de type args |
+| `test_impl_box_generic.py` | 3 | `impl Trait for Box<int>`, duas especializações distintas, `impl Box<T>` como fallback |
+| `test_generic_type_alias.py` | 4 | `type BI = Box<int>` em param, encadeado, genérico |
 
-**Total:** `419 passed`.
+**Total:** `428 passed`.
 
 ### 2. LSP (isolado)
 
@@ -323,6 +371,23 @@ sudo apt install -y gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf \
 ## 🚀 Como Usar (CLI)
 
 ### Instalação
+
+**Pré-requisitos:**
+
+- **LLVM 14+** com `llvm-config` no PATH (`sudo apt install llvm-14`)
+- **Clang** (`sudo apt install clang`)
+- **Boehm GC** (`sudo apt install libgc-dev`)
+- **Python 3.11+**
+
+```bash
+# Ubuntu/Debian
+sudo apt install -y llvm-14 clang libgc-dev python3.11 python3-pip
+
+# Fedora
+sudo dnf install -y llvm-devel clang gc-devel python3.11
+```
+
+Depois:
 
 ```bash
 pip install -e .
@@ -541,7 +606,67 @@ fn main() -> int:
     return 0
 ```
 
-### 9. `std/result` + `map`
+### 9. `impl Trait for Box<int>` — especialização
+
+```lumina
+struct Box<T>:
+    data: T
+
+trait Kind:
+    fn kind() -> int
+
+impl Kind for Box<int>:
+    fn kind() -> int:
+        return 1
+
+impl Kind for Box<str>:
+    fn kind() -> int:
+        return 2
+
+fn main() -> int:
+    mut bi: Box<int>
+    bi.data = 10
+    mut bs: Box<str>
+    bs.data = "hi"
+    print(bi.kind())     # 1
+    print(bs.kind())     # 2
+    return 0
+```
+
+### 10. Enum genérico com inferência
+
+```lumina
+enum Res<T, E>:
+    Ok(T)
+    Err(E)
+
+fn main() -> int:
+    let r = Ok(42)          # infere Res<int, int>
+    match r:
+        case Ok(v): print(v)
+        case Err(e): print(e)
+    return 0
+```
+
+### 11. Type alias genérico
+
+```lumina
+struct Pair<A, B>:
+    a: A
+    b: B
+
+type IPair<B> = Pair<int, B>
+
+fn main() -> int:
+    mut p: IPair<str>
+    p.a = 10
+    p.b = "hi"
+    print(p.a)     # 10
+    print(p.b)     # hi
+    return 0
+```
+
+### 12. `std/result` + `map`
 
 ```lumina
 import "std/result"
@@ -565,7 +690,7 @@ fn main() -> int:
     return 0
 ```
 
-### 10. `std/io` — read_line e write_line
+### 13. `std/io` — read_line e write_line
 
 ```lumina
 import "std/io"
@@ -579,7 +704,7 @@ fn main() -> int:
 
 `read_line` remove o `\n` final; `write_line` adiciona um. `eprintln` escreve em `stderr`.
 
-### 11. `@safe` — null check automático
+### 14. `@safe` — null check automático
 
 ```lumina
 struct Usuario:
@@ -595,7 +720,7 @@ fn main() -> int:
     return 0
 ```
 
-### 12. TCO mutual recursion — 1M chamadas
+### 15. TCO mutual recursion — 1M chamadas
 
 ```lumina
 fn is_even(n: int) -> int:
@@ -613,7 +738,7 @@ fn main() -> int:
     return 0
 ```
 
-### 13. Escape analysis — array local no stack
+### 16. Escape analysis — array local no stack
 
 ```lumina
 fn main() -> int:
@@ -623,7 +748,7 @@ fn main() -> int:
     return 0
 ```
 
-### 14. `nil` (null real) vs `none` (Option)
+### 17. `nil` (null real) vs `none` (Option)
 
 ```lumina
 struct Usuario:
@@ -642,7 +767,7 @@ fn main() -> int:
     return 0
 ```
 
-### 15. Genéricos aninhados
+### 18. Genéricos aninhados
 
 ```lumina
 struct Box<T>:
@@ -664,7 +789,7 @@ fn main() -> int:
     return 0
 ```
 
-### 16. `defer` com escopo de bloco
+### 19. `defer` com escopo de bloco
 
 ```lumina
 fn main() -> int:
@@ -685,7 +810,7 @@ fn main() -> int:
 # depois do loop / fim da função
 ```
 
-### 17. Match — multi-pattern + wildcard + variantes bare
+### 20. Match — multi-pattern + wildcard + variantes bare
 
 ```lumina
 enum Color:
@@ -707,7 +832,7 @@ fn main() -> int:
     return 0
 ```
 
-### 18. `@derive` + Collections
+### 21. `@derive` + Collections
 
 ```lumina
 import "std/map"
@@ -732,7 +857,7 @@ fn main() -> int:
     return 0
 ```
 
-### 19. Traits + Operator Overloading
+### 22. Traits + Operator Overloading
 
 ```lumina
 struct Vector2:
@@ -796,7 +921,7 @@ Lumina/
 ├── benchmarks/                 # Benchmark suite
 ├── examples/                   # 69 exemplos + sidecars [link]
 ├── scripts/                    # check_examples.sh, run_benchmarks.sh
-├── tests/                      # 392 testes em 36 arquivos
+├── tests/                      # 428 testes em 45 arquivos
 ├── docs/                       # Documentação navegável
 ├── run_tests.py                # Suite standalone (28 validações)
 ├── CHANGELOG.md
@@ -846,6 +971,8 @@ Ativar cores semânticas em `settings.json`:
 * **`@safe`:** opt-in. Sem anotação, `u.id` continua C-style (SIGSEGV rápido). Null check só em `MemberExpr`/`IndexExpr`; não cobre FFI.
 * **`@macro`:** duas formas. `nome(args)` é macro de **expressão** — corpo deve ser um único `return <expr>`. `nome!(args)` é macro de **statement** — corpo pode ter múltiplos statements, inlineados no call site (inclusive `return`, que retorna da função chamadora). Substituição cobre statements (`VarDecl`, `AssignStmt`, `ReturnStmt`, `IfStmt`, `WhileStmt`, `ForStmt`, `DeferStmt`, `AssertStmt`) e expressões aninhadas.
 * **`impl Box<T>`:** o `<T>` é descartado para registro (`Box_get`); chamadas em `Box<int>` fazem bitcast. Funciona porque `Box<int>` e `Box<str>` têm layout idêntico (8 bytes) no LLVM.
+* **`impl Trait for Box<int>`:** o tipo **completo** é preservado (mangle `Box_int__metodo`). Duas especializações (`Box<int>` e `Box<str>`) coexistem. O lookup em chamadas tenta o nome completo primeiro, cai para o base como fallback.
+* **Enums genéricos:** type args inferidos na construção (`Ok(42)` → `Ok<int>`). Registrados sob chave canônica (`Res<int,int>`) **e** mangled (`Res_int_int_`); ambos os lookups funcionam.
 * **Closures:** captura por valor (mutação posterior da variável externa não é vista). O tipo `fn` é um fat pointer `{fn_ptr, env_ptr}` — closures com captura funcionam como callback (`sort_by`, `map`, `filter`). `&fn_name` devolve o fn ptr cru para FFI. Assinaturas tipadas (`fn(int) -> int`) são validadas em compile-time; `fn` puro aceita qualquer valor.
 * **Escape sequences:** `\n`, `\t`, `\r`, `\0`, `\a`, `\b`, `\f`, `\v`, `\\`, `\"`, `\'` são processados em compile-time. Escapes desconhecidos são preservados como `\X` (backslash + letra).
 * **`std/async`:** FFI não suporta `makecontext` com ponteiro de função. `examples/coroutines.lm` é esqueleto.
@@ -893,23 +1020,6 @@ Ativar cores semânticas em `settings.json`:
 - [x] **`std/sort`**
 - [x] **`std/io`** (read_line, write_line, eprintln)
 - [x] **`BUILTIN_RET` centralizado** em `lumina/builtins.py`
-- [x] **Closures como callback** (tipo `Fn` distinto)
+- [x] **Closures como callback** (tipo `fn` unificado em fat pointer)
 - [x] **Escape sequences em strings** (`\n`, `\t`, `\r`, `\0`) processados pelo lexer
 - [x] **Macros multi-statement (sintaxe `nome!(args)`)**
-- [ ] Safe-by-default global (sem `@safe` explícito)
-- [ ] Macros com quasiquote
-- [ ] Self-hosting (bootstrapping)
-- [ ] Package registry
-- [ ] Code actions (quick fixes) no LSP
-- [ ] Inlay hints no LSP
-
----
-
-## 📜 Licença
-
-MIT. Veja [LICENSE](LICENSE).
-
-## 📚 Documentação
-
-- [`docs/README.md`](docs/README.md) — índice navegável
-- [`CHANGELOG.md`](CHANGELOG.md) — histórico detalhado

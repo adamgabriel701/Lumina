@@ -145,7 +145,9 @@ def _format_node_impl(node, indent_level=0):
 
     elif isinstance(node, TypeAlias):
         prefix_newline = "\n" if indent_level == 0 else ""
-        return f"{prefix_newline}{indent}type {node.name} = {node.target_type}\n"
+        params = getattr(node, 'type_params', None) or []
+        params_str = f"<{', '.join(params)}>" if params else ""
+        return f"{prefix_newline}{indent}type {node.name}{params_str} = {node.target_type}\n"
 
     elif isinstance(node, ExternDecl):
         prefix_newline = "\n" if indent_level == 0 else ""

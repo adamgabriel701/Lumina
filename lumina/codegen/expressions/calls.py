@@ -19,9 +19,30 @@ ABI de `fn` (a partir de 0.4.0):
 """
 from llvmlite import ir
 from ...ast import VariableExpr, MemberExpr
+from ...semantic.types import unify_type
 
 
 class CallsMixin:
+
+    def _infer_enum_type_args(self, enum_def, variant_idx, arg_nodes):
+        """Infere T1, T2, ... a partir dos args da chamada do construtor.
+
+        Para `Ok(5)` em `enum Result<T, E>: Ok(T); Err(E)`: unifica
+        `T` com o tipo de `5` → `T=int`. `E` fica desconhecido → default `int`.
+        """
+        type_params = getattr(enum_def, 'type_params', None) or []
+        if not type_params:
+            return []
+        variant = enum_def.variants[variant_idx]
+        variant_payloads = variant[1] if len(variant) > 1 else []
+        if not isinstance(variant_payloads, list):
+            variant_payloads = [variant_payloads] if variant_payloads else []
+        type_map = {}
+        for arg_node, ptype in zip(arg_nodes, variant_payloads):
+            arg_type = self._infer_arg_type_lumina(arg_node)
+            if arg_type:
+                unify_type(ptype, arg_type, type_map)
+        return [type_map.get(tp, "int") for tp in type_params]
 
     def visit_CallExpr(self, node):
         func_name = None
@@ -214,6 +235,12 @@ class CallsMixin:
                 enum_name, variant_idx = lookup
 
         if enum_name is not None:
+            enum_def = self.struct_defs.get(enum_name)
+            type_params = getattr(enum_def, 'type_params', None) or []
+            if type_params:
+                args = self._infer_enum_type_args(enum_def, variant_idx, node.args)
+                concrete_name = f"{enum_name}<{','.join(args)}>"
+                return self._construct_enum(concrete_name, variant_idx, node.args)
             return self._construct_enum(enum_name, variant_idx, node.args)
 
         # 4.5 Alias de método (trait default)

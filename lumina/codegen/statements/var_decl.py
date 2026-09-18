@@ -147,10 +147,17 @@ class VarDeclMixin:
         else:
             llvm_ty = self.get_llvm_type(var_type)
 
-        if val is not None and isinstance(val.type, ir.PointerType) and isinstance(val.type.pointee, ir.IdentifiedStructType):
-            struct_name = val.type.pointee.name
-            if var_type == struct_name or var_type == "int" or var_type == "ptr":
-                llvm_ty = val.type
+        # Se o valor já é um ponteiro para struct identificada, use esse
+        # tipo como tipo do slot. Cobre:
+        #   - structs comuns: `let p = Ponto { ... }` (Ponto*)
+        #   - enums genéricos com nome base: `let c = Wrap(42)` (Custom_int_*)
+        #   - enums genéricos com args diferentes dos defaults:
+        #     `let b = Has("hello")` → Box_str_* (não Box_int_*)
+        #   - `let x: ptr = some_struct` (mantém o ponteiro)
+        if (val is not None
+                and isinstance(val.type, ir.PointerType)
+                and isinstance(val.type.pointee, ir.IdentifiedStructType)):
+            llvm_ty = val.type
 
         elif val is not None and isinstance(val.type, ir.IdentifiedStructType):
             llvm_ty = val.type

@@ -247,8 +247,9 @@ class MatchStmtMixin:
                      ir.Constant(self.i32_ty, idx + 1)],
                     name=f"payload_ptr_{name}",
                 )
+                field_ty = pp.type.pointee
                 payload_val = self.builder.load(pp, name=f"payload_{name}")
-                var_ptr = self.builder.alloca(self.i64_ty, name=name)
+                var_ptr = self.builder.alloca(field_ty, name=name)
                 self.builder.store(payload_val, var_ptr)
                 self.symbol_table[name] = var_ptr
         else:

@@ -160,12 +160,17 @@ class VarDeclMixin:
             obj_node = call_node.args[0]
             if isinstance(obj_node, VariableExpr):
                 info = self.get_var_info(obj_node.name)
-                if info:
-                    struct_name = (info['type'].split('<')[0]
-                                   if info['type'] else "Unknown")
-                    real_method_name = f"{struct_name}_{func_name}"
-                    if real_method_name in self.function_defs:
-                        return self.function_defs[real_method_name].return_type
+                if info and info['type']:
+                    from ...common.mangle import mangle_method
+                    obj_t = info['type']
+                    base_name = obj_t.split('<')[0]
+                    candidates = []
+                    if "<" in obj_t:
+                        candidates.append(mangle_method(obj_t, func_name))
+                    candidates.append(f"{base_name}_{func_name}")
+                    for c in candidates:
+                        if c in self.function_defs:
+                            return self.function_defs[c].return_type
                     return "int"
 
         if func_name in self.function_defs:

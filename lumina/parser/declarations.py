@@ -6,6 +6,7 @@ from ..ast import (
     Function, StructDecl, EnumDecl, TraitDecl, ImplBlock, ExternDecl,
     ImportStmt, Param, TypeAlias,
 )
+from ..common.mangle import mangle_method
 
 
 class DeclarationParser(StatementParser):
@@ -18,13 +19,16 @@ class DeclarationParser(StatementParser):
         return ImportStmt(path)
 
     def parse_type_alias(self):
-        """`type Nome = <tipo>` no top level."""
+        """`type Nome[<T1, T2>] = <tipo>` no top level."""
         self.consume(TokenType.TYPE)
         name = self.expect(TokenType.IDENT).value
+        type_params = None
+        if self.check(TokenType.LT):
+            type_params = self.parse_type_params()
         self.expect(TokenType.ASSIGN)
         target = self.parse_type()
         self.match(TokenType.NEWLINE)
-        return TypeAlias(name, target)
+        return TypeAlias(name, target, type_params)
 
     def parse_extern(self):
         self.consume(TokenType.EXTERN)
@@ -86,6 +90,9 @@ class DeclarationParser(StatementParser):
     def parse_enum(self):
         self.consume(TokenType.ENUM)
         name = self.expect(TokenType.IDENT).value
+        type_params = None
+        if self.check(TokenType.LT):
+            type_params = self.parse_type_params()
         self.expect(TokenType.COLON)
         self.expect(TokenType.NEWLINE)
         while self.check(TokenType.NEWLINE):
@@ -111,7 +118,7 @@ class DeclarationParser(StatementParser):
             variants.append((vn, payloads))
             self.match(TokenType.NEWLINE)
         self.match(TokenType.DEDENT)
-        return EnumDecl(name, variants)
+        return EnumDecl(name, variants, type_params)
 
     def parse_trait(self):
         self.consume(TokenType.TRAIT)
@@ -180,15 +187,10 @@ class DeclarationParser(StatementParser):
     def parse_impl(self):
         """Parseia `impl <Tipo>:` ou `impl <Trait> for <Tipo>:`.
 
-        Suporta tipos genéricos:
-          - `impl Box<T>:`         → struct_name = "Box"
-          - `impl Vector<T>:`      → struct_name = "Vector"
-          - `impl Greeter for English:`  → trait_name = "Greeter", struct = "English"
-
-        O `<T>` é descartado porque o codegen sempre registra os métodos
-        com o nome base (`Box_get`, `Vector_push`, ...). Chamadas via
-        `b.get()` em `Box<int>` são resolvidas em `codegen_method_call`
-        tentando o nome exato primeiro, depois o base.
+        O `<Tipo>` é preservado completo (ex: `Box<int>`, `Box<T>`) para que
+        o semantic possa registrar especializações distintas de um mesmo
+        método (`Box_int__greet` vs `Box_str__greet`). O codegen resolve
+        `b.greet()` tentando o nome exato primeiro, depois o base.
         """
         self.consume(TokenType.IMPL)
         first_type = self.parse_type()
@@ -198,11 +200,18 @@ class DeclarationParser(StatementParser):
             trait_name = first_type
             self.consume()
             struct_name = self.parse_type()
-        # Descarta args genéricos do nome para registro.
-        if "<" in struct_name:
-            struct_name = struct_name.split("<")[0]
-        if trait_name and "<" in trait_name:
-            trait_name = trait_name.split("<")[0]
+
+        # NOVO: normaliza `impl Box<T>:` → nome base `Box` (fallback).
+        # `impl Getter for Box<int>:` mantém `Box<int>` (especialização).
+        # Regra: se TODOS os args do target são type params (letras únicas
+        # maiúsculas separadas por vírgula), stripamos o `<...>`.
+        if struct_name and "<" in struct_name:
+            args_inner = struct_name.split("<", 1)[1].rstrip(">")
+            args_list = [a.strip() for a in args_inner.split(",")]
+            if args_list and all(
+                len(a) == 1 and a.isupper() for a in args_list
+            ):
+                struct_name = struct_name.split("<")[0]
 
         self.expect(TokenType.COLON)
         self.expect(TokenType.NEWLINE)
@@ -219,13 +228,19 @@ class DeclarationParser(StatementParser):
                 func = self.parse_function()
 
                 original_name = func.name
-                func.name = f"{struct_name}_{original_name}"
+                # Mangling canônico: `Box<int>` → `Box_int_`, então
+                # `Box_int__greet`. Métodos com `<T>` genérico ficam sem
+                # sufixo de args (`Box_greet`), servindo de base fallback.
+                func.name = mangle_method(struct_name, original_name)
 
                 is_operator = (
                     original_name.startswith('__') and original_name.endswith('__')
                 )
                 if not is_operator:
-                    func.params.insert(0, Param('self', struct_name))
+                    # `self` recebe o tipo completo (Box<int>) para que o
+                    # codegen use o LLVM type correto.
+                    self_type = struct_name if "<" in struct_name else struct_name
+                    func.params.insert(0, Param('self', self_type))
 
                 if leading:
                     func.leading_comments = leading

@@ -38,6 +38,11 @@ class MembersMixin:
                     continue
                 payloads = v[1] if len(v) > 1 else []
                 if not payloads:
+                    type_params = getattr(enum_def, 'type_params', None) or []
+                    if type_params:
+                        default_args = ["int"] * len(type_params)
+                        concrete = f"{enum_name}<{','.join(default_args)}>"
+                        return self._construct_enum(concrete, variant_idx, [])
                     return self._construct_enum(enum_name, variant_idx, [])
                 break
 

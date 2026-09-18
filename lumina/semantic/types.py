@@ -299,17 +299,41 @@ def unify_type(declared, actual, type_map):
 def expand_type_alias(type_str, aliases, _depth=0):
     """Expande aliases recursivamente em `type_str`.
 
-    - Se `type_str` é um alias, expande o alvo (recursivo).
-    - Se é `fn(T1,T2) -> R`, expande params e retorno.
+    `aliases` é `{name: (params_list, target_type)}`. Se `params_list` é
+    vazio, o alias é simples. Caso contrário, é genérico: `Nome<args>`
+    substitui os params no `target_type` antes de recursar.
+
+    - Se `type_str` bate com um alias simples, expande o alvo.
+    - Se bate com `Alias<args>`, substitui os params no alvo e expande.
+    - Se é `fn(T1) -> R`, expande params e retorno.
     - Se tem `<...>`, expande args.
-    - Caso contrário, retorna `type_str` inalterado.
+    - Caso contrário, retorna inalterado.
     """
     if not type_str or _depth > 32:
         return type_str
 
-    if type_str in aliases:
-        return expand_type_alias(aliases[type_str], aliases, _depth + 1)
+    # Tenta primeiro 'Nome<args>' ou 'Nome'
+    base, args = parse_generic(type_str)
 
+    if base in aliases:
+        params, target = aliases[base]
+        if params:
+            # Alias genérico: precisa dos args
+            if not args:
+                # Sem args → erro do chamador; retorna como está
+                return type_str
+            if len(args) != len(params):
+                return type_str
+            subst = dict(zip(params, args))
+            expanded = substitute_generic(target, subst)
+            return expand_type_alias(expanded, aliases, _depth + 1)
+        else:
+            # Alias simples: sem args esperados
+            if args:
+                return type_str  # arg inesperado; deixa como está
+            return expand_type_alias(target, aliases, _depth + 1)
+
+    # Não é alias: expande componentes internos
     sig = parse_fn_type(type_str)
     if sig is not None:
         params, ret = sig
@@ -317,10 +341,8 @@ def expand_type_alias(type_str, aliases, _depth=0):
         new_ret = expand_type_alias(ret, aliases, _depth + 1)
         return f"fn({','.join(new_params)}) -> {new_ret}"
 
-    if "<" in type_str and type_str.endswith(">"):
-        base, args = parse_generic(type_str)
-        if args:
-            new_args = [expand_type_alias(a, aliases, _depth + 1) for a in args]
-            return f"{base}<{','.join(new_args)}>"
+    if args:
+        new_args = [expand_type_alias(a, aliases, _depth + 1) for a in args]
+        return f"{base}<{','.join(new_args)}>"
 
     return type_str

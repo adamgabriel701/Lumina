@@ -74,12 +74,13 @@ class MethodCallsMixin:
         if isinstance(obj_val.type, ir.PointerType) and isinstance(
             obj_val.type.pointee, ir.IdentifiedStructType,
         ):
-            struct_name = obj_val.type.pointee.name
+            struct_name = obj_val.type.pointee.name  # ex: "Box_int_"
 
-            # Nome exato primeiro; se for genérico monomorphizado
-            # (ex: "Box_int_"), cai para o base ("Box").
+            # Candidatos: nome exato primeiro, depois base.
+            # Ex: `struct_name = "Box_int_"`, `method = "greet"`:
+            #   candidates = ["Box_int__greet", "Box_greet"]
             candidates = [f"{struct_name}_{method_name}"]
-            base = struct_name.split("<")[0]
+            base = struct_name
             if "_" in base:
                 base = base.split("_")[0]
             if base != struct_name:
@@ -95,16 +96,14 @@ class MethodCallsMixin:
 
             if real_method_name is not None:
                 func, func_type = self.functions_table[real_method_name]
-
-                # Se caímos no método do base, o `self` do método tem
-                # tipo `Box*`, mas `obj_val` é `Box_int_*`. Bitcast.
+                # Se caímos no método do base, `self` do método é `Box*` mas
+                # `obj_val` é `Box_int_*`. Bitcast.
                 if used_base and len(func_type.args) >= 1:
                     expected_self = func_type.args[0]
                     if obj_val.type != expected_self:
                         obj_val = self.builder.bitcast(
                             obj_val, expected_self, name="self_base_cast",
                         )
-
                 args = [obj_val]
                 for arg_node in node.args[1:]:
                     args.append(self.visit(arg_node))
@@ -203,27 +202,32 @@ class MethodCallsMixin:
         return None
 
     def _construct_enum(self, enum_name, variant_idx, arg_nodes):
+        # Monomorphiza on-demand se for genérico.
+        if "<" in enum_name and enum_name not in self.struct_types:
+            self.get_or_create_monomorphized_enum(enum_name)
+
         struct_ty = self.struct_types[enum_name]
         struct_def = self.struct_defs[enum_name]
         max_p = self._enum_max_payloads(struct_def)
+
+        # Tipos concretos dos slots (elements[0] é o tag).
+        payload_tys = list(struct_ty.elements[1:]) if struct_ty.elements else []
 
         struct_size = 8 + max_p * 8
         if struct_size < 16:
             struct_size = 16
 
         enum_ptr = self.builder.call(
-            self.malloc,
-            [ir.Constant(self.i64_ty, struct_size)],
-            name=f"{enum_name.lower()}_lit",
+            self.malloc, [ir.Constant(self.i64_ty, struct_size)],
+            name=f"{self._mangle_name(enum_name)}_lit",
         )
         enum_ptr = self.builder.bitcast(
             enum_ptr, struct_ty.as_pointer(),
-            name=f"{enum_name.lower()}_cast",
+            name=f"{self._mangle_name(enum_name)}_cast",
         )
 
         tag_ptr = self.builder.gep(
-            enum_ptr,
-            [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 0)],
+            enum_ptr, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 0)],
             name="tag_ptr",
         )
         self.builder.store(ir.Constant(self.i32_ty, variant_idx), tag_ptr)
@@ -234,23 +238,15 @@ class MethodCallsMixin:
                 [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, i + 1)],
                 name=f"payload_ptr_{i}",
             )
+            target_ty = payload_tys[i] if i < len(payload_tys) else self.i64_ty
             if i < len(arg_nodes):
                 val = self.visit(arg_nodes[i])
-                if val.type != self.i64_ty:
-                    if isinstance(val.type, ir.PointerType):
-                        val = self.builder.ptrtoint(
-                            val, self.i64_ty, name=f"payload_cast_{i}",
-                        )
-                    elif val.type == self.f64_ty:
-                        val = self.builder.fptosi(
-                            val, self.i64_ty, name=f"payload_cast_{i}",
-                        )
-                    elif isinstance(val.type, ir.IntType):
-                        val = self.builder.sext(
-                            val, self.i64_ty, name=f"payload_cast_{i}",
-                        )
+                val = self._coerce_for_store(val, target_ty, name_hint=f"payload_{i}")
                 self.builder.store(val, payload_ptr)
             else:
-                self.builder.store(ir.Constant(self.i64_ty, 0), payload_ptr)
+                self.builder.store(self._zero_for_type(target_ty), payload_ptr)
 
         return enum_ptr
+
+    def _mangle_name(self, name):
+        return name.replace("<", "_").replace(">", "_").replace(",", "_").replace(" ", "")

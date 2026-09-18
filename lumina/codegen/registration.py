@@ -4,6 +4,7 @@ Também contém a aplicação de atributos LLVM (`@inline`, `@cold`, ...)
 e o helper `_llvm_ty_to_str` usado por outros mixins.
 """
 from llvmlite import ir
+from ..common.mangle import mangle_type
 
 
 class RegistrationMixin:
@@ -46,7 +47,13 @@ class RegistrationMixin:
     def register_enum(self, node):
         if node.name in self.struct_types:
             return
-        # Layout: { i32 tag, i64 payload_0, ..., i64 payload_{N-1} }
+
+        # Enums genéricos não são registrados direto — monomorphizados
+        # on-demand por `get_or_create_monomorphized_enum`.
+        if getattr(node, 'type_params', None):
+            self.struct_defs[node.name] = node
+            return
+
         struct_ty = self.module.context.get_identified_type(node.name)
         self.struct_types[node.name] = struct_ty
         self.struct_defs[node.name] = node
@@ -59,11 +66,10 @@ class RegistrationMixin:
         for i in range(max_p):
             fields_map[f"payload_{i}"] = i + 1
         if max_p >= 1:
-            fields_map["payload"] = 1  # alias retrocompatível
+            fields_map["payload"] = 1
         self.struct_fields[node.name] = fields_map
 
     def register_function(self, node):
-        # Funções genéricas NÃO são registradas — materializadas on-demand
         if getattr(node, 'type_params', None):
             self.function_defs[node.name] = node
             return

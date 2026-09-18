@@ -171,12 +171,18 @@ class CallsMixin:
                         getattr(node, 'col', 0), self.source_code,
                     )
             elif obj_type != "Unknown":
-                struct_name = obj_type.split('<')[0]
-                real_method_name = f"{struct_name}_{func_name}"
-                if real_method_name not in self.functions:
+                # NOVO: tenta nome completo (Box_int__get), depois base (Box_get).
+                from ...common.mangle import mangle_method
+                base_name = obj_type.split('<')[0]
+                candidates = []
+                if "<" in obj_type:
+                    candidates.append(mangle_method(obj_type, func_name))
+                candidates.append(f"{base_name}_{func_name}")
+
+                if not any(c in self.functions for c in candidates):
                     raise LuminaError(
                         f"Método '{func_name}' não implementado para a struct "
-                        f"'{struct_name}'.",
+                        f"'{base_name}'.",
                         self.filename, getattr(node, 'line', 0),
                         getattr(node, 'col', 0), self.source_code,
                     )

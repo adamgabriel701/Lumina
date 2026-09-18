@@ -1,12 +1,4 @@
-"""Fonte única de verdade para funções nativas (builtins).
-
-Estas funções são reconhecidas pelo semantic e pelo codegen sem precisar
-de declaração prévia. Consumido em:
-  - lumina/semantic/analyzer.py  → valida chamadas
-  - lumina/semantic/expressions.py / statements.py → tipo de retorno
-  - lumina/codegen/codegen.py    → evita registrar externs duplicados
-  - lumina/codegen/expressions/calls.py → branch de codegen
-"""
+"""Fonte única de verdade para funções nativas (builtins)."""
 
 BUILTIN_FUNCTIONS = frozenset({
     "print",
@@ -24,6 +16,7 @@ BUILTIN_FUNCTIONS = frozenset({
     "argv",
     "chr",
     "http_response",
+    "black_box",        # NOVO: barreira anti-DCE
     # FILE* globals do libc
     "stdin",
     "stdout",
@@ -35,21 +28,6 @@ BUILTIN_FUNCTIONS = frozenset({
     "getchar",
 })
 
-
-# Tipos de retorno dos builtins (linguagem Lumina).
-#
-# Fonte única de verdade — antes este dict estava duplicado em
-# lumina/semantic/statements.py e lumina/semantic/expressions.py,
-# o que causava divergência (`chr`/`atoi` foram adicionados só no
-# codegen uma vez; `stdin`/`stdout`/`stderr` ficaram de fora do
-# semantic por completo).
-#
-# Convenção:
-#   - "void"  → sem valor útil (print, free, write_file)
-#   - "int"   → i64
-#   - "float" → f64
-#   - "str"   → i8* (strings e FILE*)
-#   - "ptr"   → i8* (buffers genéricos)
 BUILTIN_RET = {
     "print": "void",
     "input": "str",
@@ -66,11 +44,10 @@ BUILTIN_RET = {
     "argv": "str",
     "chr": "str",
     "http_response": "str",
-    # FILE* globals do libc — devolvem FILE* (tratamos como str)
+    "black_box": "int",     # NOVO
     "stdin": "str",
     "stdout": "str",
     "stderr": "str",
-    # I/O de stream do libc
     "fgets": "str",
     "fputs": "int",
     "fflush": "int",

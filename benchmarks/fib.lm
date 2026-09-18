@@ -4,6 +4,8 @@ fn fib(n: int) -> int:
     return fib(n - 1) + fib(n - 2)
 
 fn main() -> int:
-    let result = fib(35)
-    print("Fib(35) =", result)
+    mut n = 35
+    if len(argv(1)) > 0:
+        n = atoi(argv(1))
+    print("", fib(n))
     return 0

@@ -82,6 +82,32 @@ class RegistrationMixin:
         if func_name in self.functions_table:
             return
 
+        # NOVO: `fn main() -> int:` sem params ganha a assinatura C real
+        # `i32 (i32, i8**)`. Sem isso, argv não tem como chegar em Lumina.
+        # Globais `__lumina_argc`/`__lumina_argv` são populadas no entry
+        # de main (ver function_body.py).
+        if (func_name == "main"
+                and len(node.params) == 0
+                and node.return_type in ("int", "void")):
+            i8pp_ty = self.i8_ty.as_pointer().as_pointer()
+            func_type = ir.FunctionType(self.i32_ty, [self.i32_ty, i8pp_ty])
+            func = ir.Function(self.module, func_type, name="main")
+            self.functions_table[func_name] = (func, func_type)
+            self.functions_table[node.name] = (func, func_type)
+            self.function_defs[node.name] = node
+
+            if "__lumina_argc" not in self.module.globals:
+                argc_gv = ir.GlobalVariable(
+                    self.module, self.i32_ty, name="__lumina_argc",
+                )
+                argc_gv.initializer = ir.Constant(self.i32_ty, 0)
+            if "__lumina_argv" not in self.module.globals:
+                argv_gv = ir.GlobalVariable(
+                    self.module, i8pp_ty, name="__lumina_argv",
+                )
+                argv_gv.initializer = ir.Constant(i8pp_ty, None)
+            return
+
         ret_ty = self.get_llvm_param_type(node.return_type)
         param_types = []
         for p in node.params:
@@ -95,7 +121,6 @@ class RegistrationMixin:
         self.functions_table[node.name] = (func, func_type)
         self.function_defs[node.name] = node
 
-        # Sprint 10: aplica atributos LLVM por função
         attrs = getattr(node, 'attrs', None) or []
         self._apply_llvm_attrs(func, attrs)
 

@@ -120,7 +120,6 @@ class AggregatesMixin:
         Emite:
           1. Env struct (LiteralStructType) alocado no heap.
           2. Função `i64 __closure_N(i8* env, i64 a1, ..., i64 aN)`.
-             Dentro dela, lê os campos do env para slots no stack.
           3. Bloco closure `{i8* fn, i8* env}` alocado no heap.
         Retorna ponteiro para o bloco closure (i8*).
         """
@@ -173,6 +172,22 @@ class AggregatesMixin:
         param_tys = [self.voidptr_ty] + [self.i64_ty] * len(node.params)
         func_ty = ir.FunctionType(self.i64_ty, param_tys)
         func = ir.Function(self.module, func_ty, name=func_name)
+
+        # ==================================================================
+        # NOVO: registra a closure em functions_table e aponta
+        # `current_func_name` para ela. Sem isso, o `visit_ReturnStmt`
+        # dentro do body usa o tipo de retorno da função EXTERNA — que
+        # agora é i32 para `main`, emitindo `ret i32` numa função que
+        # espera i64. Bug visível em lambda_test.lm e nas closures.
+        # ==================================================================
+        self.functions_table[func_name] = (func, func_ty)
+        old_current_func = getattr(self, 'current_func_name', None)
+        old_body_bb = getattr(self, 'current_body_bb', None)
+        self.current_func_name = func_name
+        # `current_body_bb` também precisa apontar para algo dentro da
+        # closure (não do outer), senão TCO tenta pular para o body do
+        # main. Como closures não têm TCO ainda, basta desligar.
+        self.current_body_bb = None
 
         old_builder = self.builder
         old_symtab = self.symbol_table
@@ -246,6 +261,8 @@ class AggregatesMixin:
         self.var_types = old_var_types
         self.defer_stack = old_defer_stack
         self.closure_vars = old_closure_vars
+        self.current_func_name = old_current_func
+        self.current_body_bb = old_body_bb
 
         # 5) Bloco closure {fn, env}
         closure_raw = self.builder.call(

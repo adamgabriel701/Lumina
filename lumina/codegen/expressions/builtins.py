@@ -111,6 +111,23 @@ class BuiltinsMixin:
                 s = self.builder.inttoptr(s, self.voidptr_ty, name="atoi_cast")
             return self.builder.call(self.atoi, [s], name="atoi_call")
 
+        if func_name == "black_box":
+            # Barreira anti-DCE. Emite `asm sideeffect "", "=r,0"(v)` — a
+            # sintaxe padrão do `std::hint::black_box` do Rust. O LLVM não
+            # pode provar que o resultado é igual ao input porque a inline
+            # asm é opaca, então o valor (e tudo que o produziu) fica vivo.
+            v = self.visit(node.args[0])
+            if v.type != self.i64_ty:
+                if isinstance(v.type, ir.PointerType):
+                    v = self.builder.ptrtoint(v, self.i64_ty, name="bb_ptoi")
+                elif v.type == self.f64_ty:
+                    v = self.builder.bitcast(v, self.i64_ty, name="bb_bitcast")
+                elif isinstance(v.type, ir.IntType) and v.type.width < 64:
+                    v = self.builder.sext(v, self.i64_ty, name="bb_sext")
+            asm_ty = ir.FunctionType(self.i64_ty, [self.i64_ty])
+            asm = ir.InlineAsm(asm_ty, "", "=r,0", side_effect=True)
+            return self.builder.call(asm, [v], name="black_box_call")
+
         if func_name == "int":
             v = self.visit(node.args[0])
             if v.type == self.voidptr_ty:
@@ -202,5 +219,20 @@ class BuiltinsMixin:
             # o tipo de retorno declarado (`-> int`). `sext` preserva
             # o -1 do EOF.
             return self.builder.sext(raw, self.i64_ty, name="getchar_sext")
+
+        if func_name == "argv":
+            # argv(i) → i-ésimo argumento da linha de comando (str).
+            # `__lumina_argv` é uma global i8** populada no entry de main.
+            # Fora de main (ou no JIT antes de main rodar), retorna NULL —
+            # `atoi(NULL)` já retorna 0, então é seguro.
+            idx = self.visit(node.args[0])
+            if idx.type != self.i64_ty:
+                idx = self.builder.sext(idx, self.i64_ty, name="argv_sext")
+            argv_gv = self.module.globals.get("__lumina_argv")
+            if argv_gv is None:
+                return ir.Constant(self.voidptr_ty, None)
+            argv_val = self.builder.load(argv_gv, name="argv_load")
+            elem_ptr = self.builder.gep(argv_val, [idx], name="argv_elem_ptr")
+            return self.builder.load(elem_ptr, name="argv_elem")
 
         return None

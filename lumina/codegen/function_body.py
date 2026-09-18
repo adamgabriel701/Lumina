@@ -47,6 +47,19 @@ class FunctionBodyMixin:
         if self.use_gc and node.name == "main":
             self.builder.call(self.gc_init, [], name="gc_init_call")
 
+        # NOVO: salva argc/argv em globais para o builtin `argv(i)`.
+        # Só se aplica ao `main` sem params (o único que recebe a assinatura
+        # C `i32 (i32, i8**)`).
+        if (node.name == "main"
+                and len(node.params) == 0
+                and len(func.args) == 2):
+            argc_gv = self.module.globals.get("__lumina_argc")
+            argv_gv = self.module.globals.get("__lumina_argv")
+            if argc_gv is not None:
+                self.builder.store(func.args[0], argc_gv)
+            if argv_gv is not None:
+                self.builder.store(func.args[1], argv_gv)
+
         self.builder.branch(body_bb)
 
         self.builder.position_at_end(body_bb)

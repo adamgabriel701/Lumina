@@ -1,28 +1,42 @@
 package main
 
-import "fmt"
+import (
+    "fmt"
+    "os"
+    "strconv"
+)
 
 func main() {
     n := 200
+    if len(os.Args) > 1 {
+        if v, err := strconv.Atoi(os.Args[1]); err == nil {
+            n = v
+        }
+    }
     size := n * n
+
     a := make([]int64, size)
     b := make([]int64, size)
     c := make([]int64, size)
-    
+
     for i := 0; i < size; i++ {
         a[i] = int64(i % 10)
         b[i] = int64((i * 2) % 10)
     }
-    
+
     for i := 0; i < n; i++ {
         for j := 0; j < n; j++ {
-            var sum int64 = 0
+            var s int64
             for k := 0; k < n; k++ {
-                sum += a[i * n + k] * b[k * n + j]
+                s += a[i*n+k] * b[k*n+j]
             }
-            c[i * n + j] = sum
+            c[i*n+j] = s
         }
     }
-    fmt.Printf("Matriz C[0][0]: %d\n", c[0])
-    fmt.Printf("Matriz C[199][199]: %d\n", c[199 * n + 199])
+
+    var total int64
+    for _, v := range c {
+        total += v
+    }
+    fmt.Println(total)
 }

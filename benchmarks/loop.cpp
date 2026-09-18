@@ -1,11 +1,14 @@
-#include <iostream>
+#include <cstdio>
+#include <cstdlib>
+#include <cstdint>
 
-int main() {
-    long long sum = 0;
-    long long max = 100000000;
-    for (long long i = 0; i < max; i++) {
-        sum += i;
+int main(int argc, char **argv) {
+    uint64_t n = argc > 1 ? std::strtoull(argv[1], nullptr, 10) : 100000000ULL;
+    uint64_t acc = 0;
+    for (uint64_t i = 1; i <= n; i++) {
+        acc += i;
+        asm volatile("" : "+r"(acc));   // barreira: impede Gauss-sum
     }
-    std::cout << "Sum = " << sum << std::endl;
+    std::printf("%llu\n", (unsigned long long)acc);
     return 0;
 }

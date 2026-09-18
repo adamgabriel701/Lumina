@@ -1,3 +1,6 @@
+/* matrix_i64.c — mesma lógica de matrix.c, mas com índices i64 puros.
+ * O cast `(size_t)i * n + k` em matrix.c impede o gcc de vetorizar.
+ * Aqui tudo é i64, alinhado com o `matrix.lm`. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -14,6 +17,7 @@ int main(int argc, char **argv) {
     for (int64_t i = 0; i < size; i++) {
         a[i] = i % 10;
         b[i] = (i * 2) % 10;
+        c[i] = 0;
     }
 
     for (int64_t i = 0; i < n; i++)

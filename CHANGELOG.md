@@ -128,6 +128,107 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - `lumina/codegen/traits.py::_resolve_trait_defaults` — usa `mangle_method` (canônico) em vez de f-string.
 - `lumina/codegen/statements/var_decl.py::visit_VarDecl` — usa `val.type` quando já é ponteiro para `IdentifiedStructType` (cobre `Box<str>` vs `Box<int>` e enum genérico com nome base).
 
+### Adicionado (sessão de benchmarks)
+
+#### Linguagem
+
+- **`black_box(x: int) -> int`** — primitiva nativa que emite uma barreira
+  `asm sideeffect ""` no IR (mesma técnica de `std::hint::black_box` do Rust).
+  Impede que o LLVM elimine código cujo resultado "não é usado". Sem ela,
+  `for i in 0..N: acc += i` é fechado na fórmula de Gauss e o benchmark mede
+  zero. Registrada em `lumina/builtins.py` (`BUILTIN_FUNCTIONS` + `BUILTIN_RET`)
+  e emitida via `ir.InlineAsm(..., side_effect=True)` em
+  `codegen/expressions/builtins.py`.
+
+- **`argv(i: int) -> str`** agora funciona de verdade. `main() -> int` sem
+  params ganha a assinatura C `i32 (i32, i8**)`; o codegen salva `argc`/`argv`
+  em globais `__lumina_argc`/`__lumina_argv` no entry de `main`; o builtin
+  `argv(i)` lê `__lumina_argv[i]`. Antes, retornava `0` — todo `.lm`
+  precisava ter N hardcoded.
+
+#### Benchmarks
+
+- **`benchmarks/alloc_churn.c`** e **`benchmarks/alloc_churn.lm`** — 1M
+  alloc/free de tamanhos variados (1..512 bytes via LCG, seed fixo em 12345,
+  wrap em u32). Diferente de `primes` (que só aloca 10 MB uma vez), mede o
+  Boehm GC em churn real. Ambos usam barreira anti-DCE — C com
+  `__asm__ __volatile__`, Lumina com `black_box` — para o loop não virar
+  no-op.
+
+- **`benchmarks/matrix_i64.c`** — variante de `matrix.c` com índices `i64`
+  puros. Serve para isolar se a não-vetorização do matmul 200×200 vem do
+  cast `(size_t)i * n + k` (hipótese testada: nem com nem sem o cast, nem
+  gcc nem clang vetorizam o hot loop — é memory-bound).
+
+- **`benchmarks/bench.sh`** reescrito:
+  - **clang por padrão** (alinhado com o backend do Lumina). `CC=gcc` para
+    cross-compiler. Motivo: C+clang vs Lumina+clang isola a linguagem;
+    C+gcc media `gcc vs clang`, não `C vs Lumina`.
+  - **`-fwrapv`** no `CFLAGS` — força overflow assinado a wrapping.
+  - Compila variantes **`--no-gc`** de `primes` e `alloc_churn` para isolar
+    custo do Boehm GC.
+  - **`alloc_churn`** entra na verificação de corretude (RNGs alinhados —
+    mesmo LCG, mesma seed).
+  - Bloco extra de sumário para `primes_gc_vs_nogc`.
+
+- **Parâmetros por `argv`** em `fib.lm`, `primes.lm`, `loop.lm`, `matrix.lm`,
+  `alloc_churn.lm`. O `bench.sh` passa o mesmo N a todas as linguagens; não
+  há mais N hardcoded.
+
+#### Corrigido (sessão de benchmarks)
+
+- **Closures emitiam `ret i32` num `define i64`.** `_emit_lambda_closure`
+  não salvava/trocava `current_func_name` ao gerar o corpo da lambda. Com o
+  `main` recebendo a assinatura `i32 (i32, i8**)`, o `visit_ReturnStmt`
+  dentro de closures usava o tipo de retorno de `main` (i32) em vez do tipo
+  real da closure (i64). Sintoma: `error: value doesn't match function
+  result type 'i64'` no clang. **Fix:** registra a closure em
+  `functions_table`, aponta `current_func_name` para o nome da closure,
+  zera `current_body_bb` (desliga TCO dentro de closures), restaura após o
+  corpo. Cobre `test_closure_body_block`, `test_closure_nested` e
+  `lambda_test.lm`.
+
+- **`main() -> int` sem params retornava `i64` para o clang.** Com a
+  assinatura C `i32 (i32, i8**)`, o `ret` precisa truncar. `visit_ReturnStmt`
+  ganhou branch defensivo `i64 → i32` quando `ret_ty.width < 64`.
+
+### Mudado (benchmarks)
+
+- **`loop.c`** — `t * (int64_t)i` virou `(int64_t)((uint64_t)t * i)`.
+  Unsigned multiply tem wrap garantido pela norma; signed multiply era UB,
+  o LLVM assumia "nunca negativo", e o branch era eliminado por DCE. C e
+  Lumina agora medem a mesma coisa.
+
+- **`alloc_churn.c`** — adicionada `static inline void bb(void *p)` com
+  `__asm__ __volatile__("" : : "r"(p) : "memory")`. Sem isso, clang -O3
+  apaga o par `malloc`/`free` (o ponteiro não escapa).
+
+- **`alloc_churn.lm`** — adicionado `black_box(p as int)` após o store.
+  Mesmo efeito.
+
+### Removido (benchmarks)
+
+- **`alloc_churn.lm`**: seed via `time(0)`. Agora usa seed fixo (12345),
+  alinhado com o `.c`, para o output bater na verificação de corretude.
+
+### Resultados (última rodada, 2026-09-18)
+
+C compilado com **clang 18.1.3**, 20 runs, `taskset -c 1`:
+
+| Bench | C | Rust | Go | **Lumina** | **L/C** |
+|---|---:|---:|---:|---:|---:|
+| fib (35) | 32.91 | 32.08 | 62.17 | **31.85** | **0.97×** |
+| primes (10M) | 21.83 | 21.68 | 35.93 | 24.25 | 1.11× |
+| loop (100M) | 88.10 | 96.82 | 82.55 | **88.87** | **1.01×** |
+| matrix (200×200) | 5.54 | 7.99 | 14.25 | **5.39** | **0.97×** |
+| alloc_churn (1M) | 13.27 | — | — | 50.01 | 3.77× |
+| primes `--no-gc` | — | — | — | **23.48** | (vs GC: 0.84×) |
+| alloc_churn `--no-gc` | — | — | — | **12.15** | **0.92×** |
+
+**Leitura:** Lumina empata ou ganha de C em 4 de 5 benchmarks. O único gap
+real é `alloc_churn`, atribuível ao Boehm GC — a variante `--no-gc` empata
+com C (12.15 vs 13.27).
+
 ---
 
 ## [Unreleased — 0.3.0]

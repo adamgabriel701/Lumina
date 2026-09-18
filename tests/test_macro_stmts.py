@@ -55,17 +55,19 @@ def _build_fails(src, timeout=30):
 
 
 def test_macro_stmt_simple():
-    """Corpo com 3 statements — soma acumulada."""
+    """Corpo com 3 statements — usa ptr para devolver o resultado."""
     src = (
         '@macro\n'
-        'fn soma_tres(a: int, b: int, c: int) -> int:\n'
+        'fn soma_tres(p: ptr, a: int, b: int, c: int):\n'
         '    let s1 = a + b\n'
         '    let s2 = s1 + c\n'
-        '    return s2\n'
+        '    p[0] = s2\n'
         '\n'
         'fn main() -> int:\n'
-        '    let r = soma_tres(1, 2, 3)\n'
-        '    print(r)\n'
+        '    mut out = alloc(1)\n'
+        '    out[0] = 0\n'
+        '    soma_tres!(out, 1, 2, 3)\n'
+        '    print(out[0])\n'
         '    return 0\n'
     )
     out, rc = _run(src)

@@ -99,6 +99,12 @@ def test_macro_composes_with_other_calls():
 
 
 def test_macro_rejects_multistatement():
+    """Macro multi-statement chamada como **expressão** (sem `!`) falha.
+
+    Declarar uma macro com corpo multi-statement é válido (ela pode ser
+    usada em statement via `nome!(...)`). O que falha é tentar usá-la
+    como expressão — isso exigiria um valor de retorno que ela não tem.
+    """
     src = (
         '@macro\n'
         'fn bad(x: int) -> int:\n'
@@ -106,7 +112,8 @@ def test_macro_rejects_multistatement():
         '    return y * 2\n'
         '\n'
         'fn main() -> int:\n'
-        '    return 0\n'
+        '    let r = bad(3)\n'   # ← sem `!`, chamada como expressão
+        '    return r\n'
     )
     with tempfile.NamedTemporaryFile("w", suffix=".lm", delete=False) as f:
         f.write(src)
@@ -116,8 +123,13 @@ def test_macro_rejects_multistatement():
             [sys.executable, "-m", "lumina_cli", "build", path],
             capture_output=True, text=True, cwd=REPO_ROOT,
         )
-        assert r.returncode != 0, "macro multi-statement deveria falhar"
-        assert "return <expr>" in r.stdout or "return <expr>" in r.stderr
+        assert r.returncode != 0, (
+            f"macro multi-statement como expressão deveria falhar:\n{r.stdout}"
+        )
+        combined = r.stdout + r.stderr
+        assert "return <expr>" in combined or "posição de statement" in combined, (
+            f"mensagem de erro não menciona a sintaxe correta:\n{combined}"
+        )
     finally:
         for p in (path, path[:-3] + ".ll", path[:-3]):
             if os.path.exists(p):

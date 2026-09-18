@@ -101,6 +101,9 @@ class CallExpr(Expr):
     callee: Expr
     args: List[Expr]
     is_method: bool = False
+    # NOVO: argumentos nomeados. Cada item é (name, expr).
+    # O semantic resolve pra posicional; codegen nunca vê isso.
+    kwargs: List = field(default_factory=list)
 
 
 @dataclass

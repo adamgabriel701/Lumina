@@ -21,6 +21,38 @@ class ExpressionParser(ParserBase):
     (não só em tipos). Isso destrava vários exemplos e std/async_fs.lm.
     """
 
+    def _parse_call_args(self):
+        """Parseia lista de args até (mas não incluindo) ')'.
+
+        Retorna `(args, kwargs)`:
+          - `args`: List[Expr] — posicionais
+          - `kwargs`: List[(name, Expr)] — nomeados
+
+        Regra: uma vez que um nomeado aparece, todos os seguintes
+        devem ser nomeados (evita ambiguidade).
+        """
+        args = []
+        kwargs = []
+        if not self.check(TokenType.RPAREN):
+            while True:
+                if (self.check(TokenType.IDENT)
+                        and self.peek(1)
+                        and self.peek(1).type == TokenType.COLON):
+                    name = self.consume().value
+                    self.consume()  # COLON
+                    kwargs.append((name, self.parse_expression()))
+                else:
+                    if kwargs:
+                        t = self.current_token()
+                        raise LuminaError(
+                            "Argumento posicional após nomeado",
+                            self.filename, t.line, t.col, self.source_code,
+                        )
+                    args.append(self.parse_expression())
+                if not self.match(TokenType.COMMA):
+                    break
+        return args, kwargs
+
     def parse_expression(self):
         node = self.parse_logical()
         while self.check(TokenType.PIPE):
@@ -256,15 +288,10 @@ class ExpressionParser(ParserBase):
                 return StructLiteralExpr(name, fields)
             if self.check(TokenType.LPAREN):
                 self.consume()
-                args = []
-                if not self.check(TokenType.RPAREN):
-                    while True:
-                        args.append(self.parse_expression())
-                        if not self.match(TokenType.COMMA):
-                            break
+                args, kwargs = self._parse_call_args()
                 self.expect(TokenType.RPAREN)
                 callee_node = VariableExpr(name, token.line, token.col)
-                node = CallExpr(callee_node, args)
+                node = CallExpr(callee_node, args, kwargs=kwargs)
             else:
                 node = VariableExpr(name, token.line, token.col)
             return self.parse_postfix(node)
@@ -296,41 +323,38 @@ class ExpressionParser(ParserBase):
         while True:
             if self.match(TokenType.LBRACKET):
                 node = self._parse_slice_or_index(node)
-            elif self.check(TokenType.QUESTION) and self.peek(1) and self.peek(1).type == TokenType.DOT:
-                self.consume()
-                self.consume()
+            elif (self.check(TokenType.QUESTION)
+                  and self.peek(1)
+                  and self.peek(1).type == TokenType.DOT):
+                # `?.` — safe navigation
+                self.consume()  # ?
+                self.consume()  # .
                 member_name = self.expect(TokenType.IDENT).value
                 if self.check(TokenType.LPAREN):
                     self.consume()
                     member_node = MemberExpr(node, member_name, is_safe=True)
-                    args = [node]
-                    if not self.check(TokenType.RPAREN):
-                        while True:
-                            args.append(self.parse_expression())
-                            if not self.match(TokenType.COMMA):
-                                break
+                    args, kwargs = self._parse_call_args()
                     self.expect(TokenType.RPAREN)
-                    node = CallExpr(member_node, args, is_method=True)
+                    args = [node] + args
+                    node = CallExpr(member_node, args, is_method=True, kwargs=kwargs)
                 else:
                     node = MemberExpr(node, member_name, is_safe=True)
             elif self.check(TokenType.DOT):
+                # `.` — member access
                 self.consume()
                 member_name = self.expect(TokenType.IDENT).value
                 if self.check(TokenType.LPAREN):
                     self.consume()
                     member_node = MemberExpr(node, member_name, is_safe=False)
-                    args = [node]
-                    if not self.check(TokenType.RPAREN):
-                        while True:
-                            args.append(self.parse_expression())
-                            if not self.match(TokenType.COMMA):
-                                break
+                    args, kwargs = self._parse_call_args()
                     self.expect(TokenType.RPAREN)
-                    node = CallExpr(member_node, args, is_method=True)
+                    args = [node] + args
+                    node = CallExpr(member_node, args, is_method=True, kwargs=kwargs)
                 else:
                     node = MemberExpr(node, member_name, is_safe=False)
             else:
                 break
+
         if self.match(TokenType.QUESTION):
             node = PropagateExpr(node)
         if self.check(TokenType.AS):

@@ -58,6 +58,7 @@ def run_cli(repo_root):
     """Executa `python -m lumina_cli <args>` e retorna CompletedProcess."""
     def _run(*args, check=False, timeout=60, cwd=None):
         cmd = [sys.executable, "-m", "lumina_cli", *args]
+        env = {**os.environ, "LUMINA_NO_COVERAGE": "1"}
         return subprocess.run(
             cmd,
             capture_output=True,
@@ -65,6 +66,7 @@ def run_cli(repo_root):
             cwd=cwd or repo_root,
             timeout=timeout,
             check=check,
+            env=env,
         )
     return _run
 

@@ -5,7 +5,7 @@
 [![Python Version](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![Status](https://img.shields.io/badge/Status-Alpha%20%2F%20Active-green.svg)](#)
 [![Language](https://img.shields.io/badge/Language-Lumina-6A0DAD.svg)](#)
-[![Tests](https://img.shields.io/badge/tests-344%20passed%20%7C%201%20xfailed-brightgreen.svg)](#-testes-automatizados)
+[![Tests](https://img.shields.io/badge/tests-383%20passed%20%7C%201%20xfailed-brightgreen.svg)](#-testes-automatizados)
 [![Examples](https://img.shields.io/badge/examples-54%20ran%20%7C%2017%20skip%20%7C%200%20fail-success.svg)](#)
 [![Cross-compile](https://img.shields.io/badge/cross--compile-aarch64%20%7C%20armv7%20%7C%20riscv64%20%7C%20wasm-blueviolet.svg)](#-cross-compilação)
 
@@ -20,13 +20,14 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
 ## ✨ Funcionalidades Principais
 
 * **Sintaxe Limpa & Ergonômica:** Escopo definido por indentação significativa. Sem chaves `{}` ou `;`.
-* **Standard Library Bootstrapped:** Módulos como `std/math`, `std/str`, `std/string`, `std/result`, `std/sort`, `std/vector`, `std/map`, `std/set`, `std/deque`, `std/iter`, `std/test` e `std/log` são escritos 100% na própria Lumina.
+* **Standard Library Bootstrapped:** Módulos como `std/math`, `std/str`, `std/string`, `std/result`, `std/sort`, `std/vector`, `std/map`, `std/set`, `std/deque`, `std/iter`, `std/test`, `std/log` e `std/io` são escritos 100% na própria Lumina.
 * **Coleções Nativas:** `Vector`, `Map`, `Set` e `Deque` — todos com **crescimento automático**.
 * **Adaptadores Funcionais (`std/iter`):** `map`, `filter`, `count_if`, `sum`, `sum_by`, `product`, `min`, `max`, `all`, `any`, `find_index`, `copy`, `fill`, `for_each`, `reverse`.
 * **`std/sort` — Ordenação:** `sort(arr, n)` e `sort_by(arr, n, cmp)` com insertion sort (n ≤ 16) + quicksort.
 * **`std/test` — Framework de Testes:** `check_eq`, `check_ne`, `check_true`, `check_false`, `check_str_eq`.
 * **`std/result` — Helpers:** `unwrap`, `unwrap_or`, `is_ok`, `is_err`, `is_ok_and`, `expect`, `map`, `and_then`.
 * **`std/string` — StringBuilder:** `push_char`, `push_str`, `finish`, `clear`, com crescimento geométrico.
+* **`std/io` — Streams e stdin:** `read_line`, `read_int`, `read_char`, `write`, `write_line`, `eprintln`. `stdin`/`stdout`/`stderr`/`fgets`/`fputs`/`fflush`/`getchar` são builtins do compilador com assinatura C correta.
 * **`std/log` — Logging com Níveis:** `DEBUG`, `INFO`, `WARN`, `ERROR` com filtro em runtime.
 * **`@derive` Attributes:** `@derive(Eq, PartialEq, Debug, Display, Clone, Default)`.
 * **Tipagem Estática com Inferência:** Deduz tipos em retornos, generics aninhados, lambdas, binárias, `Option<T>`, `nil`, **tuplas** e `comptime`.
@@ -102,21 +103,22 @@ A linguagem oferece tipagem estática com inferência, Garbage Collector nativo 
 | 38 | **`std/result`** (unwrap, map, and_then) | ✅ |
 | 39 | **`std/string`** (StringBuilder) | ✅ |
 | 40 | **`std/sort`** (sort, sort_by) | ✅ |
-| 41 | Globais mutáveis | ✅ |
-| 42 | LSP (hover/rename/references/outline/semantic tokens) | ✅ |
-| 43 | **LSP com escopo qualificado** | ✅ |
-| 44 | Cross-compile (`--target`) | ✅ |
-| 45 | `break` / `continue` | ✅ |
-| 46 | Short-circuit em `and` / `or` | ✅ |
-| 47 | Type check em campos de struct literal | ✅ |
-| 48 | TCO para self-recursion | ✅ |
-| 49 | **TCO para mutual recursion (SCC dispatcher)** | ✅ |
-| 50 | Boehm GC ativa | ✅ |
-| 51 | REPL persistente | ✅ |
-| 52 | **`@safe` (null check opt-in)** | ✅ |
-| 53 | **`@macro` (expansão de AST)** | ✅ |
-| 54 | **Defers emitidos em tail calls** | ✅ |
-| 55 | **Escape analysis** (alloca para alloc const sem escape) | ✅ |
+| 41 | **`std/io`** (read_line, write_line, eprintln) | ✅ |
+| 42 | Globais mutáveis | ✅ |
+| 43 | LSP (hover/rename/references/outline/semantic tokens) | ✅ |
+| 44 | **LSP com escopo qualificado** | ✅ |
+| 45 | Cross-compile (`--target`) | ✅ |
+| 46 | `break` / `continue` | ✅ |
+| 47 | Short-circuit em `and` / `or` | ✅ |
+| 48 | Type check em campos de struct literal | ✅ |
+| 49 | TCO para self-recursion | ✅ |
+| 50 | **TCO para mutual recursion (SCC dispatcher)** | ✅ |
+| 51 | Boehm GC ativa | ✅ |
+| 52 | REPL persistente | ✅ |
+| 53 | **`@safe` (null check opt-in)** | ✅ |
+| 54 | **`@macro` (expansão de AST)** | ✅ |
+| 55 | **Defers emitidos em tail calls** | ✅ |
+| 56 | **Escape analysis** (alloca para alloc const sem escape) | ✅ |
 
 ### CLI
 
@@ -176,6 +178,13 @@ Os bugs abaixo eram **silenciosos** — passavam pelo CI porque os testes origin
 | `fn_name` usado como valor | `sort(arr, n, _cmp_asc)` → "Variável não declarada" | Semantic retorna `"fn"`, codegen bitcast p/ voidptr | `test_sort.py` |
 | Indirect call com N args | `cmp(a, b)` só passava `a` | `fn_ty = i64 (i64) * n_args` | `test_sort.py` |
 | `impl Box<T>:` chamando método base | `%"Box"* != %"Box_int_"*` | Bitcast no `codegen_method_call` fallback | `test_generic_impl.py` |
+| **`stdin`/`stdout`/`stderr` fora de `BUILTIN_RET`** | `std/io.lm` falhava com "Tipo inválido para parâmetro 'stream': esperado 'str', obteve 'int'" | `BUILTIN_RET` centralizado em `lumina/builtins.py` | `test_std_io.py` |
+| **`extern fn fgets` colidia com builtin** | `TypeError: Type of #2 arg mismatch: i64 != i32` | `generate_module` pula `ExternDecl` que colide com builtin | `test_std_io.py` |
+| **`getchar` retornava `i32`** | `ret i32 %getchar_call` não casava com `-> int` | `sext i32 → i64` em `calls.py` | `test_std_io.py` |
+| **`visit_ReturnStmt` sem `iN → i64`** | qualquer builtin que devolvesse i32 quebrava o ret | Normalização defensiva `iN → i64` | `test_std_io.py` |
+| **`"\n"` em fonte virava 2 bytes literais** | `fputs("\n", out)` imprimia `\n` literal | `std/io.lm` usa `chr(10)` (o lexer preserva escapes como texto) | `test_std_io.py` |
+| **`read_line` com `buf[n-1] = 0`** | newline não era removido da linha lida | Loop explícito em `std/io.lm` | `test_std_io.py` |
+| **`_handle_indent` não era chamado** | todos os blocos indentados falhavam com "Esperado INDENT, mas encontrei X" | Restaurada chamada em `tokenize()` | `test_lexer.py::test_indent_dedent` |
 
 ---
 
@@ -185,7 +194,7 @@ Os bugs abaixo eram **silenciosos** — passavam pelo CI porque os testes origin
 
 ```bash
 pytest tests/ -v
-# 344 passed, 1 xfailed
+# 383 passed, 1 xfailed
 ```
 
 O `1 xfailed` é `test_sort_closure_captures` — closures com captura passadas como callback para outra função ainda não funcionam (o tipo `fn` é `voidptr` e não distingue raw fn ptr de bloco `{fn, env}`). Marcado como esperado-falha.
@@ -199,7 +208,7 @@ O `1 xfailed` é `test_sort_closure_captures` — closures com captura passadas 
 | `test_codegen_bugs.py` | 19 | Regressão no codegen (IR + runtime) |
 | `test_semantic_bugs.py` | 13 | Regressão no semantic |
 | `test_runtime_bugs.py` | 9 | Runtime end-to-end |
-| `test_closures.py` | **10** | **Closures (captura, escopo, nested)** |
+| `test_closures.py` | 10 | Closures (captura, escopo, nested) |
 | `test_defer_scope.py` | 7 | Escopo de defer (bloco + TCO) |
 | `test_enum_bare_variant.py` | 4 | Variantes bare |
 | `test_escape_analysis.py` | 4 | Escape analysis (alloca vs GC) |
@@ -218,8 +227,9 @@ O `1 xfailed` é `test_sort_closure_captures` — closures com captura passadas 
 | `test_struct_field_types.py` | 6 | Type check em campos |
 | `test_safe_mode.py` | 6 | `@safe` |
 | `test_macros.py` | 6 | `@macro` |
-| `test_sort.py` | **10 (1 xfail)** | **`std/sort` + `for i, x in arr`** |
+| `test_sort.py` | 10 (1 xfail) | `std/sort` + `for i, x in arr` |
 | `test_std_result.py` | 9 | `std/result` helpers |
+| `test_std_io.py` | 6 | `std/io` (read_line, write_line, eprintln) |
 | `test_tuples.py` | 7 | Tuplas literais + destructuring |
 | `test_fmt_comments.py` | 8 | Formatter com comentários |
 | `cli/test_build.py` | 2 | `new` → `build` → `run` |
@@ -230,7 +240,7 @@ O `1 xfailed` é `test_sort_closure_captures` — closures com captura passadas 
 | `features/test_examples_smoke.py` | 1 | Compila exemplos não-skipados |
 | `features/test_language_features.py` | 1 | Output exato de `uncertain_features.lm` |
 
-**Total:** `344 passed, 1 xfailed`.
+**Total:** `383 passed, 1 xfailed`.
 
 ### 2. LSP (isolado)
 
@@ -465,7 +475,21 @@ fn main() -> int:
     return 0
 ```
 
-### 6. `@safe` — null check automático
+### 6. `std/io` — read_line e write_line
+
+```lumina
+import "std/io"
+
+fn main() -> int:
+    let nome = read_line()
+    write_line("Olá, " + nome)
+    eprintln("(isso vai pro stderr)")
+    return 0
+```
+
+`read_line` remove o `\n` final; `write_line` adiciona um. `eprintln` escreve em `stderr`.
+
+### 7. `@safe` — null check automático
 
 ```lumina
 struct Usuario:
@@ -481,7 +505,7 @@ fn main() -> int:
     return 0
 ```
 
-### 7. `@macro` — expansão de AST
+### 8. `@macro` — expansão de AST
 
 ```lumina
 @macro
@@ -494,7 +518,7 @@ fn main() -> int:
     return 0
 ```
 
-### 8. TCO mutual recursion — 1M chamadas
+### 9. TCO mutual recursion — 1M chamadas
 
 ```lumina
 fn is_even(n: int) -> int:
@@ -512,7 +536,7 @@ fn main() -> int:
     return 0
 ```
 
-### 9. Escape analysis — array local no stack
+### 10. Escape analysis — array local no stack
 
 ```lumina
 fn main() -> int:
@@ -522,7 +546,7 @@ fn main() -> int:
     return 0
 ```
 
-### 10. `nil` (null real) vs `none` (Option)
+### 11. `nil` (null real) vs `none` (Option)
 
 ```lumina
 struct Usuario:
@@ -541,7 +565,7 @@ fn main() -> int:
     return 0
 ```
 
-### 11. Genéricos aninhados
+### 12. Genéricos aninhados
 
 ```lumina
 struct Box<T>:
@@ -563,7 +587,7 @@ fn main() -> int:
     return 0
 ```
 
-### 12. `defer` com escopo de bloco
+### 13. `defer` com escopo de bloco
 
 ```lumina
 fn main() -> int:
@@ -584,7 +608,7 @@ fn main() -> int:
 # depois do loop / fim da função
 ```
 
-### 13. Match — multi-pattern + wildcard + variantes bare
+### 14. Match — multi-pattern + wildcard + variantes bare
 
 ```lumina
 enum Color:
@@ -606,7 +630,7 @@ fn main() -> int:
     return 0
 ```
 
-### 14. `@derive` + Collections
+### 15. `@derive` + Collections
 
 ```lumina
 import "std/map"
@@ -631,7 +655,7 @@ fn main() -> int:
     return 0
 ```
 
-### 15. Traits + Operator Overloading
+### 16. Traits + Operator Overloading
 
 ```lumina
 struct Vector2:
@@ -660,7 +684,7 @@ fn main() -> int:
 ## 📦 Standard Library (`std/`)
 
 ### Fundamentos
-`prelude` (Option, Result), `math`, `str`, `string` (StringBuilder), `result`, `sort`, `time`, `fs`, `alloc`.
+`prelude` (Option, Result), `math`, `str`, `string` (StringBuilder), `result`, `sort`, `time`, `fs`, `alloc`, `io` (read_line, write_line, eprintln).
 
 ### Coleções
 `vector`, `map`, `set`, `deque`, `list`, `iter`.
@@ -686,6 +710,7 @@ Lumina/
 │   ├── parser/                 #   Parser (@attrs, slices, tuples, generics, for-in)
 │   ├── semantic/               #   Análise semântica + unify_type + closures
 │   ├── codegen/                #   LLVM IR (GC, TCO, defer, SCC, macros, @safe, escape, closures)
+│   ├── builtins.py             #   BUILTIN_FUNCTIONS + BUILTIN_RET (fonte única)
 │   └── errors.py
 ├── lumina_cli/                 # CLI + Build + REPL + Test Runner + Lint
 ├── lumina-vscode/              # Extensão VS Code + LSP
@@ -694,7 +719,7 @@ Lumina/
 ├── benchmarks/                 # Benchmark suite
 ├── examples/                   # 69 exemplos + sidecars [link]
 ├── scripts/                    # check_examples.sh, run_benchmarks.sh
-├── tests/                      # 344 testes em 35 arquivos
+├── tests/                      # 384 testes em 35 arquivos
 ├── docs/                       # Documentação navegável
 ├── run_tests.py                # Suite standalone (28 validações)
 ├── CHANGELOG.md
@@ -749,6 +774,7 @@ Ativar cores semânticas em `settings.json`:
 * **`std/iter` callbacks:** assinatura `i64 -> i64`.
 * **`std/result`:** `int`-only por enquanto (o prelude não é genérico).
 * **`std/sort`:** insertion sort para n ≤ 16, quicksort acima. Assume array `i64*` (retorno de `alloc`). Para arrays de bytes, converter antes.
+* **`std/io`:** escapes como `\n` são preservados como texto literal pelo lexer; use `chr(10)` para produzir o byte real. `read_line` remove o `\n` final; `write_line` adiciona um.
 * **`opt -O2`:** só em `--release`. Builds normais mantêm o IR cru para inspeção.
 * **REPL:** `mut x = 0` persiste; `let x = 10` é local à célula. O(N²) em sessões longas; use `:clear`.
 * **Boehm GC em WASM:** desabilitada (`--target=wasm` força `--no-gc`).
@@ -787,9 +813,12 @@ Ativar cores semânticas em `settings.json`:
 - [x] **Closures** (captura por valor)
 - [x] **`for i, x in arr`**
 - [x] **`std/sort`**
+- [x] **`std/io`** (read_line, write_line, eprintln)
+- [x] **`BUILTIN_RET` centralizado** em `lumina/builtins.py`
 - [ ] Closures como callback (tipo `Fn` distinto)
 - [ ] Safe-by-default global (sem `@safe` explícito)
 - [ ] Macros multi-statement / quasiquote
+- [ ] Escape sequences em strings (`\n`, `\t`, `\r`, `\0`) processados pelo lexer
 - [ ] Self-hosting (bootstrapping)
 - [ ] Package registry
 - [ ] Code actions (quick fixes) no LSP

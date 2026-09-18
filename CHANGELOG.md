@@ -18,14 +18,23 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - **`fn_name` como valor** — `sort(arr, n, _cmp_asc)` passa função por nome. Semantic retorna `"fn"`, codegen bitcast para `voidptr`.
 - **Indirect call com N args** — `fn_ty = i64 (i64) * n_args` em vez de `i64 (i64)`. `cmp(a, b)` agora passa ambos.
 - **Variante com payload usada bare** agora é erro: `let x = Some` falha com mensagem clara em vez de compilar silenciosamente.
+- **`std/io`** — `read_line`, `read_int`, `read_char`, `write`, `write_line`, `eprintln`. Usa os builtins `stdin`/`stdout`/`stderr`/`fgets`/`fputs`/`fflush`/`getchar` diretamente.
 
 #### `std`
 - `std/sort.lm` — `_cmp_asc`, `_insertion_sort`, `_partition`, `_quicksort_rec`, `sort`, `sort_by`, `is_sorted`.
 - `std/string.lm` — `StringBuilder` com `push_char`, `push_str`, `finish`, `clear`, `size`.
 - `std/result.lm` — `unwrap`, `unwrap_or` (renomeado `default` → `fallback`), `is_ok`, `is_err`, `is_ok_and`, `expect`, `map`, `and_then`.
+- `std/io.lm` — `read_line` (remove `\n` final, retorna `""` em EOF), `read_int`, `read_char`, `write`, `write_line`, `eprintln`. Sem `extern fn` declarados (são builtins do compilador).
 
 ### Corrigido
 
+- **`stdin`/`stdout`/`stderr` faltavam em `BUILTIN_RET`.** `std/io.lm` falhava no semantic com "Tipo inválido para parâmetro 'stream': esperado 'str', obteve 'int'" porque `stdout()` era inferido como `int` no `VarDecl`. **Fix:** `BUILTIN_RET` centralizado em `lumina/builtins.py` (fonte única) e `stdin`/`stdout`/`stderr` adicionados como `"str"`.
+- **`extern fn fgets` colidia com o builtin.** O `generate_module` registrava o extern com assinatura `i8*(i8*, i64, i8*)`, mas o branch de builtin em `calls.py` trunca `size` para `i32` (assinatura real do C). Resultado: `TypeError: Type of #2 arg mismatch: i64 != i32`. **Fix:** `generate_module` pula `ExternDecl` cujo nome está em `BUILTIN_FUNCTIONS` — o codegen de builtin já emite a assinatura correta.
+- **`getchar` retornava `i32` sem normalização.** `ret i32 %getchar_call` não casava com o tipo de retorno `-> int` da função Lumina (i64), gerando `value doesn't match function result type 'i64'` no clang. **Fix:** `sext i32 → i64` antes de retornar.
+- **`visit_ReturnStmt` sem normalização `iN → i64`.** Qualquer builtin que devolvesse `i32`/`i8`/`i16` quebrava no `ret`. **Fix:** branch defensivo em `flow.py::visit_ReturnStmt` com `zext` para `i1` e `sext` para os demais.
+- **`"\n"` em fonte Lumina virava 2 bytes literais.** O lexer preserva escapes como texto (`\` + `n`), então `fputs("\n", out)` imprimia `\n` literal em vez de newline. **Fix:** `std/io.lm` usa `chr(10)`.
+- **`read_line` com `buf[n-1] = 0` não surtia efeito.** Reescrevido com loop explícito que varre o buffer até NUL ou `\n` (ASCII 10), sobrescrevendo com NUL no primeiro caso.
+- **`_handle_indent` não era chamado em `tokenize()`.** Regressão que quebrava **todos** os blocos indentados — `fn`, `if`, `while`, `for`, `struct`, `enum`, `impl`, `trait`, `match` — com "Esperado INDENT, mas encontrei X". **Fix:** restaurado o branch `if self.at_line_start: self._handle_indent()` no loop principal.
 - `visit_VariableExpr` (semantic + codegen) checava `functions` antes de variantes de enum. Como variantes são adicionadas em `functions` no `analyze()`, `Red` bare virava `"fn"` em vez de `"Color"`. **Fix:** ordem invertida (variante antes de função).
 - `for x in arr` com `N` variável (não-literal) caía em loop vazio. Agora `array_lengths` também registra `alloc(NumberExpr)`.
 - `parse_for` declarava `from ..ast import ForStmt` dentro do método, sombreando o import do topo do arquivo → `UnboundLocalError`.
@@ -41,6 +50,7 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Adicionado (tests)
 
+- `tests/test_std_io.py` (6 testes) — `read_line`, `read_int`, `read_line_eof`, `write`, `write_line`, `eprintln`.
 - `tests/test_closures.py` (10 testes).
 - `tests/test_sort.py` (10 testes, 1 xfail).
 - `tests/test_lint.py` (14 testes, do 0.3.0).
@@ -50,18 +60,23 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - `tests/test_std_result.py` (9 testes).
 - `tests/test_escape_analysis.py` (4 testes).
 
-**Total: 344 passed, 1 xfailed** (antes 325 passed, do 0.3.0).
+**Total: 383 passed, 1 xfailed** (antes 325 passed, do 0.3.0).
 
 O `1 xfailed` é `test_sort_closure_captures` — closures com captura passadas como callback ainda não funcionam (o tipo `fn` é `voidptr` e não distingue raw fn ptr de `{fn, env}`). Próximo passo: introduzir um tipo `Fn` distinto.
 
 ### Mudado
 
+- `lumina/builtins.py` — `BUILTIN_RET` agora vive ao lado de `BUILTIN_FUNCTIONS` (fonte única de verdade). Consumido por `semantic/statements.py`, `semantic/expressions.py` e `codegen/codegen.py`.
+- `lumina/codegen/codegen.py::generate_module` — skip de `ExternDecl` que colide com builtin.
+- `lumina/codegen/expressions/calls.py::getchar` — `sext i32 → i64`.
+- `lumina/codegen/statements/flow.py::visit_ReturnStmt` — normalização defensiva `iN → i64`.
 - `lumina/semantic/expressions.py::visit_VariableExpr` reordena os checks: variante → `fn` → variável.
 - `lumina/codegen/expressions/members.py::visit_VariableExpr` idem, e adiciona bitcast para fn ptr.
 - `lumina/codegen/expressions/calls.py` — `_call_closure` (desempacota `{fn, env}`) + indirect call com N args.
 - `lumina/codegen/expressions/aggregates.py` — `_emit_lambda_plain` (fn ptr) e `_emit_lambda_closure` (bloco `{fn, env}`).
 - `lumina/codegen/statements/var_decl.py` — `closure_vars` registra quais variáveis seguram closures.
 - `lumina/codegen/statements/control.py::_visit_for_iterable` — caso "índice + valor" quando `var_name` contém `,`.
+- `std/io.lm` — reescrito. Sem `extern fn` (usa builtins), `chr(10)` em vez de `"\n"`, `read_line` com loop explícito.
 
 ---
 

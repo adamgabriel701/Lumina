@@ -106,7 +106,7 @@ class CallsMixin:
             fn_slot = self.symbol_table[func_name]
             fn_ptr_raw = self.builder.load(fn_slot, name=f"{func_name}_load")
 
-            # NOVO: N args em vez de 1
+            # N args em vez de 1
             fn_ty = ir.FunctionType(self.i64_ty, [self.i64_ty] * n_args)
 
             if fn_ptr_raw.type != fn_ty.as_pointer():
@@ -287,6 +287,57 @@ class CallsMixin:
                 name="str_snprintf",
             )
             return buf_ptr
+
+        # FILE* globals do libc
+        if func_name in ("stdin", "stdout", "stderr"):
+            gv = self.module.globals.get(func_name)
+            if gv is None:
+                gv = ir.GlobalVariable(self.module, self.voidptr_ty, name=func_name)
+                gv.linkage = "external"
+            return self.builder.load(gv, name=f"{func_name}_load")
+
+        if func_name == "fgets":
+            buf = self.visit(node.args[0])
+            size = self.visit(node.args[1])
+            stream = self.visit(node.args[2])
+            if not isinstance(buf.type, ir.PointerType):
+                buf = self.builder.inttoptr(buf, self.i8_ty.as_pointer(), name="fgets_buf")
+            if size.type != self.i32_ty:
+                size = self.builder.trunc(size, self.i32_ty, name="fgets_size")
+            if not isinstance(stream.type, ir.PointerType):
+                stream = self.builder.inttoptr(stream, self.i8_ty.as_pointer(), name="fgets_stream")
+            fgets_ty = ir.FunctionType(self.voidptr_ty, [self.i8_ty.as_pointer(), self.i32_ty, self.voidptr_ty])
+            fgets_fn = self.module.globals.get("fgets") or ir.Function(self.module, fgets_ty, name="fgets")
+            return self.builder.call(fgets_fn, [buf, size, stream], name="fgets_call")
+
+        if func_name == "fputs":
+            s = self.visit(node.args[0])
+            stream = self.visit(node.args[1])
+            if not isinstance(s.type, ir.PointerType):
+                s = self.builder.inttoptr(s, self.i8_ty.as_pointer(), name="fputs_s")
+            if not isinstance(stream.type, ir.PointerType):
+                stream = self.builder.inttoptr(stream, self.voidptr_ty, name="fputs_stream")
+            fputs_ty = ir.FunctionType(self.i32_ty, [self.i8_ty.as_pointer(), self.voidptr_ty])
+            fputs_fn = self.module.globals.get("fputs") or ir.Function(self.module, fputs_ty, name="fputs")
+            return self.builder.call(fputs_fn, [s, stream], name="fputs_call")
+
+        if func_name == "fflush":
+            stream = self.visit(node.args[0])
+            if not isinstance(stream.type, ir.PointerType):
+                stream = self.builder.inttoptr(stream, self.voidptr_ty, name="fflush_stream")
+            fflush_ty = ir.FunctionType(self.i32_ty, [self.voidptr_ty])
+            fflush_fn = self.module.globals.get("fflush") or ir.Function(self.module, fflush_ty, name="fflush")
+            return self.builder.call(fflush_fn, [stream], name="fflush_call")
+
+        if func_name == "getchar":
+            getchar_ty = ir.FunctionType(self.i32_ty, [])
+            getchar_fn = self.module.globals.get("getchar") or ir.Function(self.module, getchar_ty, name="getchar")
+            raw = self.builder.call(getchar_fn, [], name="getchar_call")
+            # getchar() do libc retorna i32 (int do C, com EOF = -1).
+            # Lumina's `int` é i64, então sign-extend para casar com
+            # o tipo de retorno declarado (`-> int`). `sext` preserva
+            # o -1 do EOF.
+            return self.builder.sext(raw, self.i64_ty, name="getchar_sext")
 
         if func_name == "write_file":
             path_val = self.visit(node.args[0])
@@ -530,8 +581,8 @@ class CallsMixin:
         if isinstance(obj_val.type, ir.PointerType) and isinstance(obj_val.type.pointee, ir.IdentifiedStructType):
             struct_name = obj_val.type.pointee.name
 
-            # Candidatos: nome exato primeiro ("Box_int__get"), depois o
-            # base ("Box_get").
+            # Nome exato primeiro; se for genérico monomorphizado
+            # (ex: "Box_int_"), cai para o base ("Box").
             candidates = [f"{struct_name}_{method_name}"]
             base = struct_name.split("<")[0]
             if "_" in base:
@@ -551,9 +602,7 @@ class CallsMixin:
                 func, func_type = self.functions_table[real_method_name]
 
                 # Se caímos no método do base, o `self` do método tem
-                # tipo `Box*`, mas `obj_val` é `Box_int_*`. São tipos
-                # identificados LLVM distintos (mesmo layout, sem
-                # herança), então o call exige bitcast.
+                # tipo `Box*`, mas `obj_val` é `Box_int_*`. Bitcast.
                 if used_base and len(func_type.args) >= 1:
                     expected_self = func_type.args[0]
                     if obj_val.type != expected_self:

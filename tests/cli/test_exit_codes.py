@@ -84,7 +84,8 @@ def test_test_failure_returns_nonzero(run_cli, tmp_path):
     )
 
 
-def test_test_success_returns_zero(run_cli, tmp_path):
+def test_test_success_returns_zero(run_cli, tmp_path, monkeypatch):
+    monkeypatch.setenv("LUMINA_NO_COVERAGE", "1")
     src = _write(
         tmp_path / "ok_test.lm",
         'import "std/test"\n'

@@ -6,6 +6,7 @@ from ..ast import (
     ForStmt, 
 )
 from ..ast.visitor import NodeVisitor
+from ..builtins import BUILTIN_RET
 from ..errors import LuminaError
 from .types import is_assignable, unify_type, substitute_generic
 
@@ -91,6 +92,70 @@ def get_suggestion(name, possible_names):
 
 class ExpressionAnalyzer(NodeVisitor):
     """Análise semântica de expressões."""
+
+    def _resolve_kwargs(self, node, fn_def, skip_self=False):
+        """Converte `node.kwargs` em `node.args` posicionais.
+
+        Modifica `node` in-place. Após isso, o codegen só vê positional args.
+        Parâmetros não fornecidos são preenchidos com seu default — se não
+        houver default, é erro.
+        """
+        if not node.kwargs:
+            return
+        if fn_def is None:
+            return
+
+        params = fn_def.params
+        if skip_self and params:
+            params = params[1:]
+
+        param_names = [p.name for p in params]
+        n = len(param_names)
+
+        positional = list(node.args)
+        base = positional[1:] if skip_self else positional
+
+        if len(base) > n:
+            return  # deixa o codegen reclamar
+
+        new_args = [None] * n
+        for i, a in enumerate(base):
+            new_args[i] = a
+
+        for name, val in node.kwargs:
+            if name not in param_names:
+                raise LuminaError(
+                    f"Parâmetro '{name}' não existe.",
+                    self.filename, 0, 0, self.source_code,
+                )
+            idx = param_names.index(name)
+            if new_args[idx] is not None:
+                raise LuminaError(
+                    f"Argumento duplicado para '{name}'.",
+                    self.filename, 0, 0, self.source_code,
+                )
+            new_args[idx] = val
+
+        # NOVO: preenche buracos com o default do param. Se não houver,
+        # é erro de argumento obrigatório faltando.
+        final_args = []
+        for i in range(n):
+            if new_args[i] is not None:
+                final_args.append(new_args[i])
+            else:
+                default = getattr(params[i], 'default', None)
+                if default is None:
+                    raise LuminaError(
+                        f"Parâmetro '{params[i].name}' é obrigatório.",
+                        self.filename, 0, 0, self.source_code,
+                    )
+                final_args.append(default)
+
+        if skip_self:
+            node.args = [positional[0]] + final_args
+        else:
+            node.args = final_args
+        node.kwargs = []
 
     def visit_NumberExpr(self, node):
         return "int" if not node.is_float else "float"
@@ -183,25 +248,27 @@ class ExpressionAnalyzer(NodeVisitor):
         elif isinstance(node.callee, VariableExpr):
             func_name = node.callee.name
 
-        # NOVO: builtins com tipo de retorno conhecido.
-        # Sem isso, o VarDecl infere "int" por padrão e `buf = alloc_bytes(N)`
-        # acaba batendo em campos `str`/`ptr`.
+        # NOVO: resolve named arguments em posicional.
+        if node.kwargs:
+            if node.is_method:
+                obj_node = node.args[0]
+                obj_type = self.visit(obj_node)
+                fn_def = None
+                if obj_type and obj_type != "Unknown":
+                    struct_name = obj_type.split('<')[0]
+                    real_name = f"{struct_name}_{func_name}"
+                    fn_def = self.function_defs.get(real_name)
+                self._resolve_kwargs(node, fn_def, skip_self=True)
+            else:
+                fn_def = self.function_defs.get(func_name)
+                self._resolve_kwargs(node, fn_def, skip_self=False)
+
+        # Builtins com tipo de retorno conhecido (fonte única:
+        # lumina/builtins.py::BUILTIN_RET). Sem isso, o VarDecl infere
+        # "int" por padrão e `buf = alloc_bytes(N)` acaba batendo em
+        # campos `str`/`ptr`; `fgets` retornaria int e `r == nil`
+        # falharia.
         if not node.is_method:
-            BUILTIN_RET = {
-                "alloc": "ptr",
-                "alloc_bytes": "ptr",
-                "argv": "str",
-                "atoi": "int",
-                "len": "int",
-                "chr": "str",
-                "str": "str",
-                "int": "int",
-                "float": "float",
-                "input": "str",
-                "read_file": "str",
-                "http_response": "str",
-                "free": "void",
-            }
             if func_name in BUILTIN_RET:
                 for arg in node.args:
                     self.visit(arg)

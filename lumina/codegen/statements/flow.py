@@ -227,6 +227,13 @@ class FlowMixin:
             elif isinstance(val.type, ir.PointerType) and isinstance(val.type.pointee, ir.IdentifiedStructType):
                 if val.type.pointee == ret_ty:
                     val = self.builder.load(val, name="ret_struct_load")
+            elif ret_ty == self.i64_ty and isinstance(val.type, ir.IntType) and val.type.width < 64:
+                # iN → i64. i1 (bool) usa zext; i8/i16/i32 usam sext
+                # (getchar() do libc devolve i32 e pode retornar -1 em EOF).
+                if val.type.width == 1:
+                    val = self.builder.zext(val, self.i64_ty, name="ret_zext")
+                else:
+                    val = self.builder.sext(val, self.i64_ty, name="ret_sext")
 
         self._emit_all_defers()
         self.builder.ret(val)

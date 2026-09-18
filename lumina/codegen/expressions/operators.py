@@ -270,16 +270,44 @@ class OperatorsMixin:
                     # → bitcast de um para o tipo do outro
                     right = self.builder.bitcast(right, left.type, name="cmp_ptr_bitcast")
 
-            # NOVO: comparar strings (i8*) por conteúdo via strcmp,
-            # não por ponteiro.
+            # Comparar strings (i8*) por conteúdo via strcmp.
+            # RUNTIME GUARD: se um dos lados for NULL em runtime,
+            # `strcmp(x, NULL)` é UB. Emitimos branch:
+            #   if (a == NULL || b == NULL): cmp = (a == b)  # ponteiro
+            #   else: cmp = (strcmp(a, b) == 0)
             if node.op in ('==', '!=') and left.type == self.voidptr_ty and right.type == self.voidptr_ty:
+                null_ptr = ir.Constant(self.voidptr_ty, None)
+                a_null = self.builder.icmp_signed("==", left, null_ptr, name="a_null")
+                b_null = self.builder.icmp_signed("==", right, null_ptr, name="b_null")
+                either_null = self.builder.or_(a_null, b_null, name="either_null")
+
+                null_bb = self.builder.append_basic_block(name="strcmp_null")
+                str_bb = self.builder.append_basic_block(name="strcmp_ok")
+                end_bb = self.builder.append_basic_block(name="strcmp_end")
+
+                self.builder.cbranch(either_null, null_bb, str_bb)
+
+                self.builder.position_at_end(null_bb)
+                if node.op == '==':
+                    ptr_eq = self.builder.icmp_signed("==", left, right, name="ptr_eq")
+                else:
+                    ptr_eq = self.builder.icmp_signed("!=", left, right, name="ptr_ne")
+                self.builder.branch(end_bb)
+
+                self.builder.position_at_end(str_bb)
                 cmp = self.builder.call(self.strcmp, [left, right], name="strcmp_call")
                 zero = ir.Constant(ir.IntType(32), 0)
                 if node.op == '==':
-                    return self.builder.icmp_signed("==", cmp, zero, name="str_eq")
+                    str_eq = self.builder.icmp_signed("==", cmp, zero, name="str_eq")
                 else:
-                    return self.builder.icmp_signed("!=", cmp, zero, name="str_ne")
+                    str_eq = self.builder.icmp_signed("!=", cmp, zero, name="str_ne")
+                self.builder.branch(end_bb)
 
+                self.builder.position_at_end(end_bb)
+                phi = self.builder.phi(ir.IntType(1), name="str_cmp_res")
+                phi.add_incoming(ptr_eq, null_bb)
+                phi.add_incoming(str_eq, str_bb)
+                return phi
             if left.type == self.f64_ty or right.type == self.f64_ty:
                 left = self.to_float_if_needed(left)
                 right = self.to_float_if_needed(right)

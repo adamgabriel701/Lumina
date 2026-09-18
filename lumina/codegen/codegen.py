@@ -6,7 +6,7 @@ from .statements import StatementCodegen
 from .helpers import HelpersCodegen
 from .types import TypesCodegen
 
-from ..ast import Function as AstFunction, Param, TraitDecl
+from ..ast import Function as AstFunction, Param, TraitDecl, ExternDecl
 from ..semantic.types import substitute_generic, unify_type
 
 
@@ -55,8 +55,6 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         self.lambda_counter = 0
         self.heap_allocs = set()
 
-        self.array_lengths = {}   # nome → N (para `for x in arr`)
-
         self.builtin_functions = BUILTIN_FUNCTIONS
 
         # Sprint 2e/8b/8d: controle de loop (continue_bb, break_bb, scope_start)
@@ -77,12 +75,21 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         self._current_scc_id_slot = None
         self._current_scc_dispatch_bb = None
 
+        # NOVO: array_lengths mapeia nome → N (para `for x in arr`).
+        # Populado em visit_VarDecl quando `value` é ArrayExpr ou
+        # alloc(N) com N literal.
+        self.array_lengths = {}
+
+        # NOVO: vars com `free(x)` explícito. Escape analysis não
+        # coloca no stack.
+        self.freed_vars = set()
+
+        # NOVO: vars que seguram closures (bloco {fn_ptr, env_ptr}).
+        # Chamadas a essas vars desempacotam o env antes de invocar.
+        self.closure_vars = set()
+
         self.setup_libc_functions()
         self.alias_methods = set()   # nomes curtos de trait methods
-
-        self.freed_vars = set()   # populado pelo compile_lumina
-
-        self.closure_vars = set()   # variáveis que seguram closures
 
     # ==================================================================
     # Setup de funções libc/GC
@@ -144,6 +151,14 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
             [self.i8_ty.as_pointer(), self.i8_ty.as_pointer(), ir.IntType(64)],
         )
         self.strncpy = ir.Function(self.module, strncpy_ty, name="strncpy")
+
+        # NOVO: FILE* globals do libc (stdin/stdout/stderr).
+        # Declarados como GlobalVariable externa (sem inicializer) —
+        # o linker resolve contra o libc.
+        for name in ("stdin", "stdout", "stderr"):
+            if name not in self.module.globals:
+                gv = ir.GlobalVariable(self.module, self.voidptr_ty, name=name)
+                gv.linkage = "external"
 
     # ==================================================================
     # Globais mutáveis (top-level `mut X = 0`)
@@ -274,10 +289,10 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
                 else:
                     self.global_var_decls[decl.name] = decl
 
-        # 0b. Sprint 9b: coleta macros (@macro). Não são registradas
-        # como funções normais — só expandem em call sites.
-        # Valida aqui (não só no call site) para que macros malformadas
-        # falhem mesmo se nunca chamadas.
+        # 0b. Coleta macros (@macro). Não são registradas como funções
+        # normais — só expandem em call sites. Valida aqui (não só no
+        # call site) para que macros malformadas falhem mesmo se nunca
+        # chamadas.
         self.macros = {}
         for decl in ast:
             if isinstance(decl, AstFunction):
@@ -301,11 +316,20 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         # 2. Pré-registra todas as funções e métodos de impls.
         # TraitDecl NÃO é registrado.
         # Macros NÃO são registradas como funções normais.
+        #
+        # Externs que colidem com builtins NÃO são registrados: o codegen
+        # de builtin (calls.py) declara a função com a assinatura C
+        # correta — ex: `fgets`' `size` é i32 (int do C), mas Lumina
+        # `int` é i64. Registrar o extern criaria uma declaração
+        # conflitante no módulo e `builder.call(...)` falharia com
+        # "Type of #N arg mismatch".
         for decl in ast:
             if isinstance(decl, TraitDecl):
                 continue
             if hasattr(decl, 'params') and hasattr(decl, 'return_type'):
                 if isinstance(decl, AstFunction) and decl.name in self.macros:
+                    continue
+                if isinstance(decl, ExternDecl) and decl.name in self.builtin_functions:
                     continue
                 self.register_function(decl)
             elif hasattr(decl, 'methods'):
@@ -329,8 +353,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
                         self.functions_table[short] = full_entry
                         self.alias_methods.add(short)
 
-        # 3. Sprint 8c: detecta SCCs de tail calls (mutual recursion)
-        # e gera dispatchers.
+        # 3. Detecta SCCs de tail calls (mutual recursion) e gera dispatchers.
         sccs = self._compute_tail_call_sccs(ast)
         handled_scc_members = set()
         for scc_id, members in enumerate(sccs):
@@ -500,7 +523,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         return "unknown"
 
     # ==================================================================
-    # Sprint 7a: materialize_generic + inferência de type_map
+    # materialize_generic + inferência de type_map
     # ==================================================================
     def materialize_generic(self, gen_def, type_map):
         """Gera cópia especializada de uma função genérica.
@@ -546,8 +569,10 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         old_body_bb = getattr(self, 'current_body_bb', None)
         old_defer_stack = getattr(self, 'defer_stack', None)
         old_safe = getattr(self, '_safe_mode', False)
+        old_closure_vars = self.closure_vars
         self.defer_stack = []
         self._safe_mode = False   # genéricos não têm attrs
+        self.closure_vars = set()
 
         entry_bb = func.append_basic_block(name=f"{mangled}_entry")
         body_bb = func.append_basic_block(name=f"{mangled}_body")
@@ -591,6 +616,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         self.current_func_name = old_current
         self.current_body_bb = old_body_bb
         self._safe_mode = old_safe
+        self.closure_vars = old_closure_vars
 
         return mangled
 
@@ -636,7 +662,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         return type_map
 
     # ==================================================================
-    # Sprint 8c: SCCs de tail calls + dispatcher
+    # SCCs de tail calls + dispatcher
     # ==================================================================
     def _compute_tail_call_sccs(self, ast):
         """SCCs do grafo de tail calls entre funções top-level.
@@ -847,7 +873,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         self.builder = old_builder
 
     # ==================================================================
-    # Corpo de função (com TCO + defers + @safe)
+    # Corpo de função (com TCO + defers + @safe + closures)
     # ==================================================================
     def generate_function_body(self, node):
         func, func_type = self.functions_table[node.name]
@@ -859,9 +885,9 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         old_body_bb = getattr(self, 'current_body_bb', None)
         old_defer_stack = getattr(self, 'defer_stack', None)
         old_safe = getattr(self, '_safe_mode', False)
-        old_closure_vars = self.closure_vars          # NOVO
+        old_closure_vars = self.closure_vars
         self.defer_stack = []
-        self.closure_vars = set()                     # NOVO
+        self.closure_vars = set()
 
         # Sprint 9a: ativa modo @safe se a função tem @safe
         attrs = getattr(node, 'attrs', None) or []
@@ -921,7 +947,7 @@ class LLVMCodegen(ExpressionCodegen, StatementCodegen, HelpersCodegen, TypesCode
         self.symbol_table = old_symtab
         self.var_types = old_var_types
         self._safe_mode = old_safe
-        self.closure_vars = old_closure_vars          # NOVO
+        self.closure_vars = old_closure_vars
 
     # ==================================================================
     # API de baixo nível

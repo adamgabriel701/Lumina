@@ -21,27 +21,9 @@ from ..ast import (
     StructLiteralExpr, ArrayExpr, AddressOfExpr, PropagateExpr, LambdaExpr,
     NoneExpr, ComptimeExpr, ErrorNode, NilExpr, TupleExpr,
 )
+from ..builtins import BUILTIN_RET
 from ..errors import LuminaError
 from .types import is_assignable
-
-
-# Builtins com tipo de retorno conhecido.
-# Usado para inferir o tipo de `let x = <builtin>(...)` sem a tabela
-# completa do codegen.
-BUILTIN_RET = {
-    "alloc": "ptr",
-    "alloc_bytes": "ptr",
-    "argv": "str",
-    "atoi": "int",
-    "len": "int",
-    "chr": "str",
-    "str": "str",
-    "int": "int",
-    "float": "float",
-    "input": "str",
-    "read_file": "str",
-    "http_response": "str",
-}
 
 
 class StatementAnalyzer:

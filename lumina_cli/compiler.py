@@ -517,7 +517,10 @@ def _format_node_impl(node, indent_level=0):
 
     elif isinstance(node, CallExpr):
         callee_str = format_node(node.callee, 0)
-        args = ", ".join([format_node(a, 0) for a in node.args])
+        all_args = [format_node(a, 0) for a in node.args]
+        for name, val in (getattr(node, 'kwargs', None) or []):
+            all_args.append(f"{name}: {format_node(val, 0)}")
+        args = ", ".join(all_args)
         if indent_level > 0:
             return f"{indent}{callee_str}({args})\n"
         return f"{callee_str}({args})"

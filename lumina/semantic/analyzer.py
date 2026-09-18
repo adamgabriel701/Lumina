@@ -382,7 +382,11 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
                 continue
             if isinstance(decl, (Function, ExternDecl)):
                 self.functions.add(decl.name)
-                if isinstance(decl, Function):
+                # NOVO: ExternDecl também vai pro function_defs para que
+                # o semantic conheça o tipo de retorno de funções extern
+                # (getcwd, getenv, access, ...). Sem isso, `let v = getcwd(...)`
+                # infere "int" e `v == nil` falha.
+                if isinstance(decl, (Function, ExternDecl)):
                     self.function_defs[decl.name] = decl
                     if hasattr(decl, 'line'):
                         self.definition_locations[decl.name] = (self.filename, decl.line, decl.col)

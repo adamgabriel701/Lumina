@@ -10,8 +10,8 @@ if __package__ in (None, ""):
 from .utils import Color, paint, cprint, info, success, warn, error, step, header
 from .commands import (
     cmd_new, cmd_build, cmd_clean, cmd_run, cmd_doc, cmd_install,
-    cmd_bind, cmd_fmt, cmd_repl, cmd_test, cmd_check,
-    set_error_format,
+    cmd_bind, cmd_fmt, cmd_fmt_stdin, cmd_fmt_check_all, cmd_repl,
+    cmd_test, cmd_check, set_error_format,
 )
 from .playground import run_server as run_playground
 from .lint import lint_file
@@ -33,6 +33,8 @@ def usage():
         ("install",                       "Baixa/instala dependências do lumina.toml"),
         ("bind <header.h> <nome>",        "Gera bindings Lumina a partir de um header C"),
         ("fmt <arquivo.lm> [--check]",    "Formata (ou verifica) o código Lumina"),
+        ("fmt --stdin",                   "Formata lido de stdin"),
+        ("fmt --check-all <dir>",         "Verifica todos os .lm de um diretório"),
         ("repl",                          "Inicia o REPL interativo"),
         ("playground [porta]",            "Inicia o playground web (padrão: 8080)"),
         ("lint <arquivo> [flags]", "Análise estática (unused, shadow, unreachable)"),
@@ -142,9 +144,23 @@ def main():
 
     elif command == "fmt":
         check_only = "--check" in args
+        from_stdin = "--stdin" in args
+        check_all = "--check-all" in args
         files = [a for a in args if not a.startswith("--")]
+
+        if from_stdin:
+            ok = cmd_fmt_stdin(check_only=check_only)
+            if check_only and not ok:
+                return 1
+            return 0 if ok else 1
+
+        if check_all:
+            directory = files[0] if files else "."
+            ok = cmd_fmt_check_all(directory)
+            return 0 if ok else 1
+
         if not files:
-            error("Uso: lumina fmt <arquivo.lm> [--check]")
+            error("Uso: lumina fmt <arquivo.lm> [--check | --stdin | --check-all <dir>]")
             return 1
         ok = cmd_fmt(files[0], check_only=check_only)
         if check_only and not ok:

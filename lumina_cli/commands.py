@@ -55,12 +55,7 @@ def set_error_format(fmt: str):
 
 
 def _report_error(e):
-    """Reporta um erro respeitando ERROR_FORMAT.
-
-    Em modo 'json', emite uma linha JSON no stdout. Em modo 'text',
-    usa o formatador colorido padrão (via `error`).
-    Aceita tanto LuminaError quanto strings simples.
-    """
+    """Reporta um erro respeitando ERROR_FORMAT."""
     if ERROR_FORMAT == "json":
         try:
             payload = e.to_dict()
@@ -80,9 +75,6 @@ def _load_link_config(entry_file=None):
     Prioridade:
       1. Se entry_file dado: procura <entry_file sem .lm>.toml (sidecar).
       2. Fallback: procura ./lumina.toml.
-
-    Retorna dict com chaves: libs, extra_objects, target, extra_flags.
-    Retorna {} (vazio) se não encontrar nada.
     """
     config_path = None
     if entry_file:
@@ -116,24 +108,15 @@ def _load_link_config(entry_file=None):
 
 
 def _compile_extra_objects(extra_objects, extra_flags=None):
-    """Compila cada extra_object (.c/.cpp/.cc) para .o e retorna a lista.
-
-    `extra_flags` são repassadas ao clang/clang++ (ex: -I, -D, -std,
-    -O2). Flags específicas do Lumina (--wasm, --no-gc, --debug,
-    --release, --target=X) são filtradas ou traduzidas antes.
-
-    Retorna (obj_paths, has_cpp) onde has_cpp indica se algum veio de C++.
-    """
+    """Compila cada extra_object (.c/.cpp/.cc) para .o e retorna a lista."""
     obj_paths = []
     has_cpp = False
 
-    # Filtra/traduz flags antes de passar ao clang
     filtered_flags = []
     for f in (extra_flags or []):
         if f in ("--wasm", "--no-gc", "--debug", "--release"):
             continue
         if f.startswith("--target="):
-            # clang usa `-target <triple>` (hífen simples)
             filtered_flags.append("-target")
             filtered_flags.append(f.split("=", 1)[1])
         else:
@@ -176,10 +159,10 @@ entry = "main.lm"
 
 # Configuração de link (opcional)
 # [link]
-# libs = ["m", "raylib"]              # passado como -lm -lraylib
-# extra_objects = ["helper.cpp"]      # arquivos C/C++ compilados e linkados
-# target = "wasm"                     # força compilação WASM
-# extra_flags = ["-DFOO"]             # flags extras para o clang
+# libs = ["m", "raylib"]
+# extra_objects = ["helper.cpp"]
+# target = "wasm"
+# extra_flags = ["-DFOO"]
 """
     with open(os.path.join(project_name, "lumina.toml"), "w") as f:
         f.write(config)
@@ -219,7 +202,7 @@ def cmd_install():
 
     for pkg_name, source in deps.items():
         if not source.startswith("github:"):
-            warn(f"⚠️  Fonte inválida para {paint(pkg_name, Color.BOLD)}. Use o formato 'github:usuario/repo'.")
+            warn(f"⚠️  Fonte inválida para {paint(pkg_name, Color.BOLD)}. Use 'github:usuario/repo'.")
             continue
 
         repo_path = source.split(":")[1]
@@ -246,15 +229,6 @@ def cmd_install():
 #  doc
 # ============================================================
 def cmd_doc(output_format="html", output_path=None):
-    """Gera documentação a partir de comentários `##`.
-
-    Formatos:
-      - html (padrão): docs/index.html
-      - md:            docs/index.md
-      - json:          docs/index.json
-
-    `output_path` sobrescreve o caminho padrão.
-    """
     info(f"📚 Gerando documentação ({output_format})...")
     docs_data = _collect_docs()
 
@@ -279,7 +253,6 @@ def cmd_doc(output_format="html", output_path=None):
 
 
 def _collect_docs():
-    """Coleta os itens documentados (## acima de fn/struct/enum/trait)."""
     docs_data = []
     for filepath in glob.glob("**/*.lm", recursive=True):
         if "lumina_modules" in filepath or filepath.startswith("std/"):
@@ -435,8 +408,6 @@ def cmd_build(entry_file=None, extra_flags=[]):
         extra_flags.append("--wasm")
         info(f"🎯 Target '{link_target}' detectado em [link] — forçando --wasm")
 
-    # NOVO: extrai --target=<triple> antes de qualquer coisa.
-    # `--target=aarch64-linux-gnu` etc.
     target_triple = None
     filtered_flags = []
     for f in extra_flags:
@@ -449,7 +420,6 @@ def cmd_build(entry_file=None, extra_flags=[]):
     is_wasm = "--wasm" in extra_flags
     is_debug = "--debug" in extra_flags
     is_release = "--release" in extra_flags
-    # WebAssembly não tem libgc — desabilita GC no codegen também.
     is_no_gc = ("--no-gc" in extra_flags) or is_wasm
 
     if is_debug:
@@ -482,9 +452,6 @@ def cmd_build(entry_file=None, extra_flags=[]):
         f.write(llvm_ir)
 
     # Otimização extra com `opt` só em release explícito.
-    # Em builds normais (debug de teste, inspeção de IR, testes do pytest)
-    # deixamos o IR como o codegen gerou, para os testes que checam
-    # nomes de blocos não quebrarem.
     if is_release and not is_wasm:
         try:
             opt_result = subprocess.run(
@@ -629,13 +596,7 @@ def cmd_check(entry_file=None):
 #  test
 # ============================================================
 def cmd_test(entry_file=None):
-    """Executa a suíte de testes. Retorna o número de falhas (exit code).
-
-    Exit codes:
-      - 0                → todos os testes passaram
-      - N > 0            → N falhas
-      - 1                → erro de compilação/build
-    """
+    """Executa a suíte de testes. Retorna o número de falhas (exit code)."""
     if not entry_file:
         if os.path.exists("lumina.toml") and tomllib:
             with open("lumina.toml", "rb") as f:
@@ -671,8 +632,6 @@ def cmd_test(entry_file=None):
 
     new_ast = [decl for decl in ast if not (isinstance(decl, Function) and decl.name == "main")]
 
-    # Synthetic main que soma os retornos de cada teste.
-    # Exit code = total de falhas.
     total_var = "_total_failures"
     body = [VarDecl(total_var, "int", NumberExpr("0"), True)]
     for func in test_funcs:
@@ -694,6 +653,7 @@ def cmd_test(entry_file=None):
 
     codegen = LLVMCodegen()
     codegen.escapes = analyzer.escapes
+    codegen.freed_vars = getattr(analyzer, 'freed_vars', set())
     llvm_ir = codegen.generate_module(new_ast)
 
     ir_file = "lumina_test_runner.ll"
@@ -702,7 +662,6 @@ def cmd_test(entry_file=None):
     with open(ir_file, "w") as f:
         f.write(llvm_ir)
 
-    # NOVO: respeita [link] do lumina.toml (sidecar ou raiz)
     link_cfg = _load_link_config(entry_file)
     libs = link_cfg.get("libs", [])
     extra_objs_src = link_cfg.get("extra_objects", [])
@@ -731,15 +690,27 @@ def cmd_test(entry_file=None):
 
         if result.returncode == 0:
             success(f"✅ Todos os {len(test_funcs)} testes passaram!")
+            # Coverage é best-effort. Se as ferramentas não estiverem
+            # instaladas ou travarem, seguimos em frente — não queremos
+            # que `lumina test` fique pendurado por causa do relatório.
+            if os.environ.get("LUMINA_NO_COVERAGE") == "1":
+                return 0
             try:
-                subprocess.run(["llvm-profdata", "merge", "-sparse",
-                                "lumina_test.profraw", "-o", "lumina_test.profdata"],
-                               check=True, capture_output=True)
+                subprocess.run(
+                    ["llvm-profdata", "merge", "-sparse",
+                     "lumina_test.profraw", "-o", "lumina_test.profdata"],
+                    check=True, capture_output=True, timeout=10,
+                )
                 header("📊 Relatório de Cobertura de Código")
-                subprocess.run(["llvm-cov", "report", binary_name,
-                                "-instr-profile=lumina_test.profdata"], check=True)
-            except Exception:
-                warn("⚠️ Ferramentas de cobertura (llvm-cov) não encontradas. Relatório ignorado.")
+                subprocess.run(
+                    ["llvm-cov", "report", binary_name,
+                     "-instr-profile=lumina_test.profdata"],
+                    check=True, timeout=10,
+                )
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                warn("⚠️ Relatório de cobertura ignorado (ferramenta ausente ou timeout).")
+            except subprocess.CalledProcessError:
+                warn("⚠️ llvm-cov report falhou; cobertura ignorada.")
             return 0
         else:
             _report_error(f"{result.returncode} teste(s) falharam.")
@@ -782,12 +753,6 @@ def cmd_clean():
 #  run / jit
 # ============================================================
 def cmd_run(entry_file=None, use_jit=False, extra_flags=[], cli_args=None):
-    """Compila e executa. Retorna o exit code do programa.
-
-    Exit codes:
-      - exit code do binário compilado (0..255)
-      - 1 se a compilação falhar
-    """
     if not entry_file:
         if os.path.exists("lumina.toml") and tomllib:
             with open("lumina.toml", "rb") as f:
@@ -822,7 +787,6 @@ def cmd_run(entry_file=None, use_jit=False, extra_flags=[], cli_args=None):
 
     binary_name = cmd_build(entry_file, extra_flags=extra_flags)
     if not binary_name:
-        # cmd_build já reportou o erro
         return 1
 
     header("Executando Binário Nativo")
@@ -899,15 +863,7 @@ def cmd_bind(header_file, output_name):
 #  fmt
 # ============================================================
 def cmd_fmt(filename, check_only=False):
-    """Formata um arquivo Lumina.
-
-    Se `check_only=True`, não escreve — apenas verifica se o código
-    já está formatado. Retorna True se OK (ou já formatado), False se
-    precisa formatar ou se houve erro.
-
-    Nota: o auto-formatter preserva comentários leading e `@attrs`.
-    Comentários trailing (inline) ainda são descartados.
-    """
+    """Formata um arquivo Lumina."""
     if not os.path.exists(filename):
         _report_error(f"Arquivo '{filename}' não encontrado.")
         return False
@@ -928,6 +884,10 @@ def cmd_fmt(filename, check_only=False):
         _report_error(e)
         return False
 
+    # Normaliza leading newlines (o formatter insere `\n` antes de
+    # cada declaração top-level).
+    formatted_code = formatted_code.lstrip("\n")
+
     if check_only:
         if formatted_code == original_code:
             success(f"✅ {paint(filename, Color.BOLD)} — já formatado")
@@ -943,22 +903,72 @@ def cmd_fmt(filename, check_only=False):
     return True
 
 
+def cmd_fmt_stdin(check_only=False):
+    """Lê código Lumina de stdin, formata, escreve em stdout."""
+    source = sys.stdin.read()
+    if not source.strip():
+        return True
+
+    try:
+        lexer = Lexer(source)
+        tokens = lexer.tokenize()
+        parser = Parser(tokens, "<stdin>", source)
+        ast = parser.parse()
+        formatted = "".join(format_node(n) for n in ast)
+    except LuminaError as e:
+        _report_error(e)
+        return False
+
+    # O formatter insere `\n` no topo de declarações top-level.
+    formatted = formatted.lstrip("\n")
+
+    if check_only:
+        return formatted == source
+
+    sys.stdout.write(formatted)
+    return True
+
+
+def cmd_fmt_check_all(directory):
+    """Formata/verifica todos os .lm de um diretório."""
+    import glob as _glob
+    pattern = os.path.join(directory, "**", "*.lm")
+    files = sorted(_glob.glob(pattern, recursive=True))
+    if not files:
+        warn(f"⚠️  Nenhum arquivo .lm encontrado em '{directory}'")
+        return True
+
+    bad = []
+    for f in files:
+        with open(f, "r") as fh:
+            original = fh.read()
+        try:
+            lexer = Lexer(original)
+            tokens = lexer.tokenize()
+            parser = Parser(tokens, f, original)
+            ast = parser.parse()
+            formatted = "".join(format_node(n) for n in ast).lstrip("\n")
+        except LuminaError:
+            bad.append(f)
+            continue
+        if formatted != original:
+            bad.append(f)
+
+    if bad:
+        for f in bad:
+            print(f"{f}: precisa ser formatado")
+        info(f"📊 {len(bad)} de {len(files)} arquivos precisam ser formatados")
+        return False
+
+    success(f"✅ Todos os {len(files)} arquivos estão formatados")
+    return True
+
+
 # ============================================================
 #  repl
 # ============================================================
 def _repl_classify(cell_source: str) -> bool:
-    """Retorna True se a célula é uma declaração top-level.
-
-    Tenta parsear como top-level. Se TODOS os nós forem declarações
-    (Function/Struct/Enum/Trait/Impl/Import/Extern/VarDecl), retorna
-    True. Caso contrário (parse falhou ou há statements no meio),
-    retorna False → célula vira corpo de `__cell_N`.
-
-    Limitação: `mut x = 0\nx = x + 1` na mesma célula é classificado
-    como statement (o segundo comando é um AssignStmt, que não é
-    válido em top-level). Nesse caso, `x` fica local. Digite os dois
-    em células separadas para persistir.
-    """
+    """Retorna True se a célula é uma declaração top-level."""
     from lumina.ast import (
         Function, StructDecl, EnumDecl, TraitDecl, ImplBlock,
         ImportStmt, ExternDecl, VarDecl,
@@ -976,6 +986,7 @@ def _repl_classify(cell_source: str) -> bool:
     decl_types = (Function, StructDecl, EnumDecl, TraitDecl,
                   ImplBlock, ImportStmt, ExternDecl, VarDecl)
     return all(isinstance(n, decl_types) for n in ast)
+
 
 def cmd_repl():
     step("Lumina REPL 2.0 — estado persistente")
@@ -1000,8 +1011,8 @@ def cmd_repl():
         except Exception:
             pass
 
-    declarations = []   # declarações top-level (strings)
-    cells = []          # statements (strings), viram fn __cell_N
+    declarations = []
+    cells = []
     buffer = []
 
     def _build_source():
@@ -1046,7 +1057,6 @@ def cmd_repl():
                     if ret != 0:
                         print(f"=> {ret}")
         except LuminaError as e:
-            # Rollback da adição
             if is_decl:
                 declarations.pop()
             else:

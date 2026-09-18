@@ -2,7 +2,7 @@
 from ...ast import CallExpr, MemberExpr, VariableExpr
 from ...builtins import BUILTIN_RET
 from ...errors import LuminaError
-from ..types import is_assignable, substitute_generic, unify_type
+from ..types import is_assignable, substitute_generic, unify_type, parse_fn_type
 from .helpers import get_suggestion
 
 
@@ -136,15 +136,39 @@ class CallsMixin:
                     )
         else:
             # Chamada indireta via function pointer local.
-            # Caso `f: fn` em parâmetro, ou `let f = fn(...)`. O codegen
-            # já suporta chamadas indiretas, mas o semantic precisa
-            # reconhecer o tipo `fn`.
             info = self.get_var_info(func_name) if func_name else None
-            if info is not None and info.get('type') == 'fn':
+            var_type = info.get('type') if info else None
+
+            if var_type == 'fn':
+                # fn sem assinatura — sem checagem
                 for arg in node.args:
                     self.visit(arg)
-                # Tipo de retorno de function pointer é desconhecido.
                 return None
+
+            if var_type and var_type.startswith("fn("):
+                sig = parse_fn_type(var_type)
+                if sig is not None:
+                    param_types, ret_type = sig
+                    n_expected = len(param_types)
+                    n_got = len(node.args)
+                    if n_got != n_expected:
+                        raise LuminaError(
+                            f"Função '{func_name}' espera {n_expected} args, "
+                            f"recebeu {n_got}.",
+                            self.filename, getattr(node, 'line', 0),
+                            getattr(node, 'col', 0), self.source_code,
+                        )
+                    for arg_node, expected in zip(node.args, param_types):
+                        actual = self.visit(arg_node)
+                        if actual and not is_assignable(expected, actual):
+                            raise LuminaError(
+                                f"Tipo inválido para parâmetro de "
+                                f"'{func_name}': esperado '{expected}', "
+                                f"obteve '{actual}'.",
+                                self.filename, getattr(node, 'line', 0),
+                                getattr(node, 'col', 0), self.source_code,
+                            )
+                    return ret_type if ret_type != "void" else None
 
             if (func_name not in self.builtin_functions
                     and func_name not in self.functions):

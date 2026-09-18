@@ -48,24 +48,27 @@ class TraitsMixin:
     # Validação de macros
     # ==================================================================
     def _validate_macro(self, fn):
-        """Macro deve ter corpo `return <expr>` (1 statement)."""
+        """Validação mínima de uma macro declarada.
+
+        Uma macro pode ter corpo:
+          - `return <expr>`             → usável como expressão (`nome(args)`)
+          - múltiplos statements        → usável só em statement (`nome!(args)`)
+
+        Como a mesma macro pode ser usada de duas formas, NÃO validamos
+        `return <expr>` aqui — quem decide é o call site:
+          - `_expand_macro_expr` exige `return <expr>` quando chamada como
+            expressão.
+          - `_expand_macro_stmt` aceita qualquer corpo.
+
+        Aqui só garantimos que o corpo não está vazio.
+        """
         body = fn.body or []
-        if len(body) != 1 or type(body[0]).__name__ != 'ReturnStmt':
+        if len(body) == 0:
             raise LuminaError(
-                f"Macro '{fn.name}' deve ter corpo `return <expr>` "
-                f"(um único statement). Macros multi-statement não são "
-                f"suportadas.",
+                f"Macro '{fn.name}' tem corpo vazio.",
                 filename="<macro>",
                 line=getattr(fn, 'line', 0) or 0,
                 col=getattr(fn, 'col', 0) or 0,
                 source_code="",
             )
-        if not body[0].values:
-            raise LuminaError(
-                f"Macro '{fn.name}' deve retornar uma expressão "
-                f"(`return <expr>`).",
-                filename="<macro>",
-                line=getattr(fn, 'line', 0) or 0,
-                col=getattr(fn, 'col', 0) or 0,
-                source_code="",
-            )
+        

@@ -36,4 +36,5 @@ class ClosuresMixin:
         for stmt in node.body:
             self.analyze_stmt(stmt)
         self.pop_scope()
-        return "fn"
+        param_types = [p.type_ann for p in node.params]
+        return f"fn({','.join(param_types)}) -> {node.return_type}"

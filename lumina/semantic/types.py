@@ -16,6 +16,72 @@ def _is_type_param(t: str) -> bool:
     """Um type param genérico é uma letra maiúscula sozinha (T, U, V, ...)."""
     return bool(t) and len(t) == 1 and t.isupper()
 
+def _split_top_level(s):
+    """Split por vírgula ignorando vírgulas dentro de parênteses ou <>."""
+    result = []
+    dp, da = 0, 0
+    current = ""
+    for c in s:
+        if c == '(':
+            dp += 1
+            current += c
+        elif c == ')':
+            dp -= 1
+            current += c
+        elif c == '<':
+            da += 1
+            current += c
+        elif c == '>':
+            da -= 1
+            current += c
+        elif c == ',' and dp == 0 and da == 0:
+            result.append(current.strip())
+            current = ""
+        else:
+            current += c
+    if current.strip():
+        result.append(current.strip())
+    return result
+
+
+def parse_fn_type(type_str):
+    """Se `type_str` é 'fn(T1,T2) -> R', retorna (params, ret).
+
+    `params` é uma lista de strings de tipo Lumina. `ret` é uma string.
+    Para 'fn() -> void', retorna ([], "void").
+    Para qualquer outra coisa (incluindo 'fn' sem assinatura), retorna None.
+    """
+    if not type_str or not isinstance(type_str, str):
+        return None
+    if not type_str.startswith("fn("):
+        return None
+
+    rest = type_str[3:]  # pula "fn("
+    depth = 1
+    end = -1
+    for i, c in enumerate(rest):
+        if c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+
+    if end == -1:
+        return None
+
+    params_str = rest[:end]
+    params = _split_top_level(params_str) if params_str.strip() else []
+
+    after = rest[end + 1:].strip()
+    if not after:
+        return (params, "void")
+    if not after.startswith("->"):
+        return None
+    ret = after[2:].strip()
+    return (params, ret)
+
 
 def is_assignable(target: str, value: str) -> bool:
     """True se um valor do tipo `value` pode ser atribuído a `target`.
@@ -69,6 +135,25 @@ def is_assignable(target: str, value: str) -> bool:
     # fn ↔ str ↔ ptr (todos são i8* no codegen)
     if target in ("str", "ptr", "fn") and value in ("str", "ptr", "fn"):
         return True
+
+    # fn-typed: fat pointer compatível com qualquer `fn` sem assinatura
+    if target == "fn" and value and value.startswith("fn("):
+        return True
+    if value == "fn" and target and target.startswith("fn("):
+        return True
+
+    # Duas assinaturas tipadas: mesma aridade + params + ret
+    t_sig = parse_fn_type(target) if target else None
+    v_sig = parse_fn_type(value) if value else None
+    if t_sig is not None and v_sig is not None:
+        t_params, t_ret = t_sig
+        v_params, v_ret = v_sig
+        if len(t_params) != len(v_params):
+            return False
+        # Return "void" aceita qualquer retorno
+        if t_ret != "void" and v_ret != "void" and t_ret != v_ret:
+            return False
+        return all(is_assignable(tp, vp) for tp, vp in zip(t_params, v_params))
 
     # Arrays decaem para ponteiros
     if target == "ptr" and value == "array":

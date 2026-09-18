@@ -8,6 +8,7 @@ from ...ast import (
 )
 from ...builtins import BUILTIN_RET
 from ...errors import LuminaError
+from ...semantic.types import parse_fn_type  # ou ajuste relativo
 
 
 class VarDeclMixin:
@@ -92,7 +93,22 @@ class VarDeclMixin:
             node.var_type = node.value.struct_name
 
         elif isinstance(node.value, LambdaExpr):
-            node.var_type = "fn"
+            param_types = [p.type_ann for p in node.value.params]
+            node.var_type = (
+                f"fn({','.join(param_types)}) -> {node.value.return_type}"
+            )
+
+        elif isinstance(node.value, VariableExpr):
+            info = self.get_var_info(node.value.name)
+            if info and info.get('type'):
+                node.var_type = info['type']
+            elif node.value.name in self.functions:
+                fn_def = self.function_defs.get(node.value.name)
+                if fn_def:
+                    params = [p.type_ann for p in fn_def.params]
+                    node.var_type = (
+                        f"fn({','.join(params)}) -> {fn_def.return_type}"
+                    )
 
         elif isinstance(node.value, ArrayExpr):
             node.var_type = "ptr"
@@ -122,13 +138,21 @@ class VarDeclMixin:
             node.var_type = self._infer_call_expr_type(node.value)
 
     def _infer_call_expr_type(self, call_node):
-        """Infere tipo de `let x = <CallExpr>(...)`."""
         func_name = None
         _callee = getattr(call_node, 'callee', None)
         if isinstance(_callee, MemberExpr):
             func_name = _callee.member
         elif isinstance(_callee, VariableExpr):
             func_name = _callee.name
+
+        # Chamada via variável fn-typed: deriva retorno da assinatura.
+        if not call_node.is_method and func_name:
+            info = self.get_var_info(func_name)
+            if info and info.get('type'):
+                sig = parse_fn_type(info['type'])
+                if sig is not None:
+                    _, ret_type = sig
+                    return ret_type if ret_type != "void" else None
 
         if call_node.is_method:
             obj_node = call_node.args[0]

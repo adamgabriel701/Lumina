@@ -11,7 +11,7 @@ class TypesCodegen:
             return self.voidptr_ty
         elif type_name == "ptr":
             return self.i64_ty.as_pointer()
-        elif type_name == "fn":
+        elif type_name == "fn" or type_name.startswith("fn("):
             return self.voidptr_ty
         elif type_name == "bool":
             return ir.IntType(1)

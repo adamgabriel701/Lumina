@@ -49,6 +49,11 @@ class LiteralsMixin:
                         self.filename, node.line, node.col, self.source_code,
                     )
                 # Nome de função usado como valor (fn pointer).
+                # Retorna a assinatura completa quando disponível.
+                fn_def = self.function_defs.get(node.name)
+                if fn_def is not None:
+                    params = [p.type_ann for p in fn_def.params]
+                    return f"fn({','.join(params)}) -> {fn_def.return_type}"
                 return "fn"
 
             available_vars = [k for scope in self.scopes for k in scope.keys()]

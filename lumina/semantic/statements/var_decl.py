@@ -19,7 +19,9 @@ class VarDeclMixin:
     def _analyze_var_decl(self, node):
         if node.var_type is not None:
             base_type = node.var_type.split('<')[0]
+            is_fn_sig = base_type.startswith("fn(")
             if (base_type not in ("int", "float", "bool", "str", "ptr", "fn")
+                    and not is_fn_sig
                     and base_type not in self.structs):
                 raise LuminaError(
                     f"Tipo '{node.var_type}' não declarado.",

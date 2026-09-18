@@ -143,7 +143,9 @@ class SemanticAnalyzer(
             if isinstance(decl, VarDecl):
                 if decl.var_type is not None:
                     base_type = decl.var_type.split('<')[0]
+                    is_fn_sig = base_type.startswith("fn(")
                     if (base_type not in ("int", "float", "bool", "str", "ptr", "fn")
+                            and not is_fn_sig
                             and base_type not in self.structs):
                         raise LuminaError(
                             f"Tipo '{decl.var_type}' não declarado.",

@@ -9,6 +9,86 @@ from ..errors import LuminaError
 class PatternParser(ExpressionParser):
     """Match / switch — padrões, guards e exaustividade."""
 
+    # ==================================================================
+    # Helpers compartilhados (usados por match expr, match stmt e switch)
+    # ==================================================================
+    def _parse_case_body(self):
+        """Parseia o corpo de um `case`/`default`.
+
+        Suporta duas formas:
+          - Multi-linha: `NEWLINE [NEWLINE]* INDENT stmts DEDENT`
+          - Inline:      um único statement na mesma linha
+
+        Retorna sempre uma lista de statements (possivelmente vazia).
+        """
+        if self.check(TokenType.NEWLINE):
+            self.expect(TokenType.NEWLINE)
+            while self.check(TokenType.NEWLINE):
+                self.consume()
+            self.expect(TokenType.INDENT)
+            body = []
+            while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
+                if self.match(TokenType.NEWLINE):
+                    continue
+                stmt = self.parse_statement()
+                if stmt is not None:
+                    body.append(stmt)
+            self.expect(TokenType.DEDENT)
+            return body
+
+        stmt = self.parse_statement()
+        return [stmt] if stmt is not None else []
+
+    def _parse_case_clause(self):
+        """Parseia `case <pattern>:` seguido do corpo.
+
+        Retorna a 4-tuple `(variant, bindings, guard, body)` que o
+        `MatchStmt` usa.
+        """
+        self.consume(TokenType.CASE)
+        variant, bindings, guard = self._parse_case_pattern()
+        self.expect(TokenType.COLON)
+        body = self._parse_case_body()
+        return (variant, bindings, guard, body)
+
+    def _parse_default_clause(self):
+        """Parseia `default:` seguido do corpo. Retorna a lista de stmts."""
+        self.consume(TokenType.DEFAULT)
+        self.expect(TokenType.COLON)
+        return self._parse_case_body()
+
+    def _parse_cases_block(self):
+        """Parseia uma sequência de `case X:` / `default:` até DEDENT.
+
+        Retorna `(cases, default)`:
+          - `cases`:   List[(variant, bindings, guard, body)]
+          - `default`: List[Stmt] ou None
+        """
+        cases = []
+        default = None
+        while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
+            if self.match(TokenType.NEWLINE):
+                continue
+
+            if self.check(TokenType.CASE):
+                cases.append(self._parse_case_clause())
+            elif self.check(TokenType.DEFAULT):
+                default = self._parse_default_clause()
+            else:
+                t = self.current_token()
+                raise LuminaError(
+                    f"Esperado 'case' ou 'default' dentro de 'match', "
+                    f"mas encontrei {t.type.name} ('{t.value}')",
+                    filename=self.filename, line=t.line, col=t.col,
+                    source_code=self.source_code,
+                )
+
+        self.expect(TokenType.DEDENT)
+        return cases, default
+
+    # ==================================================================
+    # Case pattern parsing
+    # ==================================================================
     def _parse_case_pattern(self):
         """Lê o padrão de um `case`:
 
@@ -118,6 +198,9 @@ class PatternParser(ExpressionParser):
             source_code=self.source_code,
         )
 
+    # ==================================================================
+    # Match expression — `match x { case 1 => ... }`
+    # ==================================================================
     def parse_match_expr(self):
         self.consume(TokenType.MATCH)
         self.no_struct_literal = True
@@ -125,6 +208,7 @@ class PatternParser(ExpressionParser):
         self.no_struct_literal = False
 
         if self.check(TokenType.COLON):
+            # Sintaxe de statement — delega para o parser apropriado
             self.consume()
             self.expect(TokenType.NEWLINE)
             while self.check(TokenType.NEWLINE):
@@ -135,7 +219,9 @@ class PatternParser(ExpressionParser):
 
         cases = []
         default = None
-        while not self.check(TokenType.DEDENT) and not self.check(TokenType.RBRACE) and not self.check(TokenType.EOF):
+        while (not self.check(TokenType.DEDENT)
+               and not self.check(TokenType.RBRACE)
+               and not self.check(TokenType.EOF)):
             if self.match(TokenType.NEWLINE):
                 continue
 
@@ -155,7 +241,9 @@ class PatternParser(ExpressionParser):
                     if stmt is not None:
                         body.append(stmt)
                 self.expect(TokenType.DEDENT)
-                binding = bindings[0] if isinstance(bindings, list) and bindings else bindings
+                binding = (bindings[0]
+                           if isinstance(bindings, list) and bindings
+                           else bindings)
                 # `variant` pode ser StringExpr (literal) — extrai o texto
                 # para o VariableExpr que o MatchExpr usa.
                 if isinstance(variant, StringExpr):
@@ -184,6 +272,9 @@ class PatternParser(ExpressionParser):
             self.consume(TokenType.RBRACE)
         return MatchExpr(cond, cases, default)
 
+    # ==================================================================
+    # Match statement — `match x: case 1: ...`
+    # ==================================================================
     def parse_match_stmt(self):
         saved_pos = self.pos
         self.consume(TokenType.MATCH)
@@ -203,93 +294,16 @@ class PatternParser(ExpressionParser):
                     is_match_stmt_syntax = True
 
         if is_match_stmt_syntax:
-            return self._parse_match_stmt_cases(cond)
+            cases, default = self._parse_cases_block()
+            return MatchStmt(cond, cases, default)
 
+        # Não era match-stmt. Rebobina e delega para match-expr.
         self.pos = saved_pos
         return self.parse_match_expr()
 
-    def _parse_match_expr_body(self, cond):
-        self.expect(TokenType.LBRACE)
-        cases = []
-        default = None
-        while not self.check(TokenType.RBRACE) and not self.check(TokenType.EOF):
-            if self.match(TokenType.NEWLINE) or self.match(TokenType.INDENT) or self.match(TokenType.DEDENT):
-                continue
-            if self.check(TokenType.ELSE):
-                self.consume()
-                self.expect(TokenType.FAT_ARROW)
-                default = self.parse_expression()
-                self.match(TokenType.COMMA)
-            else:
-                val = self.parse_expression()
-                self.expect(TokenType.FAT_ARROW)
-                res = self.parse_expression()
-                cases.append((val, res))
-                self.match(TokenType.COMMA)
-        self.expect(TokenType.RBRACE)
-        return MatchExpr(cond, cases, default)
-
-    def _parse_match_stmt_cases(self, cond):
-        cases = []
-        default = None
-        while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
-            if self.match(TokenType.NEWLINE):
-                continue
-
-            if self.check(TokenType.CASE):
-                self.consume()
-                variant, bindings, guard = self._parse_case_pattern()
-                self.expect(TokenType.COLON)
-
-                if self.check(TokenType.NEWLINE):
-                    self.expect(TokenType.NEWLINE)
-                    while self.check(TokenType.NEWLINE):
-                        self.consume()
-                    self.expect(TokenType.INDENT)
-                    body = []
-                    while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
-                        if self.match(TokenType.NEWLINE):
-                            continue
-                        stmt = self.parse_statement()
-                        if stmt is not None:
-                            body.append(stmt)
-                    self.expect(TokenType.DEDENT)
-                else:
-                    stmt = self.parse_statement()
-                    body = [stmt] if stmt is not None else []
-
-                cases.append((variant, bindings, guard, body))
-
-            elif self.check(TokenType.DEFAULT):
-                self.consume()
-                self.expect(TokenType.COLON)
-
-                if self.check(TokenType.NEWLINE):
-                    self.expect(TokenType.NEWLINE)
-                    while self.check(TokenType.NEWLINE):
-                        self.consume()
-                    self.expect(TokenType.INDENT)
-                    default = []
-                    while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
-                        if self.match(TokenType.NEWLINE):
-                            continue
-                        stmt = self.parse_statement()
-                        if stmt is not None:
-                            default.append(stmt)
-                    self.expect(TokenType.DEDENT)
-                else:
-                    stmt = self.parse_statement()
-                    default = [stmt] if stmt is not None else []
-            else:
-                t = self.current_token()
-                raise LuminaError(
-                    f"Esperado 'case' ou 'default' dentro de 'match', mas encontrei {t.type.name} ('{t.value}')",
-                    filename=self.filename, line=t.line, col=t.col, source_code=self.source_code,
-                )
-
-        self.expect(TokenType.DEDENT)
-        return MatchStmt(cond, cases, default)
-
+    # ==================================================================
+    # Switch statement — mesmo comportamento de match-stmt
+    # ==================================================================
     def parse_switch(self):
         self.consume(TokenType.SWITCH)
         self.no_struct_literal = True
@@ -302,62 +316,5 @@ class PatternParser(ExpressionParser):
             self.consume()
         self.expect(TokenType.INDENT)
 
-        cases = []
-        default = None
-        while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
-            if self.match(TokenType.NEWLINE):
-                continue
-
-            if self.check(TokenType.CASE):
-                self.consume()
-                variant, bindings, guard = self._parse_case_pattern()
-                self.expect(TokenType.COLON)
-
-                if self.check(TokenType.NEWLINE):
-                    self.expect(TokenType.NEWLINE)
-                    while self.check(TokenType.NEWLINE):
-                        self.consume()
-                    self.expect(TokenType.INDENT)
-                    body = []
-                    while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
-                        if self.match(TokenType.NEWLINE):
-                            continue
-                        stmt = self.parse_statement()
-                        if stmt is not None:
-                            body.append(stmt)
-                    self.expect(TokenType.DEDENT)
-                else:
-                    stmt = self.parse_statement()
-                    body = [stmt] if stmt is not None else []
-
-                cases.append((variant, bindings, guard, body))
-
-            elif self.check(TokenType.DEFAULT):
-                self.consume()
-                self.expect(TokenType.COLON)
-
-                if self.check(TokenType.NEWLINE):
-                    self.expect(TokenType.NEWLINE)
-                    while self.check(TokenType.NEWLINE):
-                        self.consume()
-                    self.expect(TokenType.INDENT)
-                    default = []
-                    while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
-                        if self.match(TokenType.NEWLINE):
-                            continue
-                        stmt = self.parse_statement()
-                        if stmt is not None:
-                            default.append(stmt)
-                    self.expect(TokenType.DEDENT)
-                else:
-                    stmt = self.parse_statement()
-                    default = [stmt] if stmt is not None else []
-            else:
-                t = self.current_token()
-                raise LuminaError(
-                    f"Esperado 'case' ou 'default' dentro de 'switch', mas encontrei {t.type.name} ('{t.value}')",
-                    filename=self.filename, line=t.line, col=t.col, source_code=self.source_code,
-                )
-
-        self.expect(TokenType.DEDENT)
+        cases, default = self._parse_cases_block()
         return MatchStmt(cond, cases, default)

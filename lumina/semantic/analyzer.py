@@ -15,6 +15,7 @@ from lumina.ast.statements import ErrorNode
 from ..ast import (
     Function, ExternDecl, StructDecl, EnumDecl, ImplBlock,
     VarDecl, VariableExpr, TraitDecl, MatchStmt, TypeAlias,
+    IfStmt, WhileStmt, ForStmt, DeferStmt, BenchStmt,
 )
 from ..errors import LuminaError
 from .expressions import ExpressionAnalyzer
@@ -184,7 +185,11 @@ class SemanticAnalyzer(
         return None
 
     def _expand_type_aliases(self, declarations):
-        """Reescreve todos os tipos do AST expandindo type aliases."""
+        """Reescreve todos os tipos do AST expandindo type aliases.
+
+        Roda em todas as declarações top-level e recursa nos corpos
+        de função para pegar VarDecls locais (`let x: Alias = ...`).
+        """
         aliases = self.type_aliases
 
         def expand(t):
@@ -194,10 +199,38 @@ class SemanticAnalyzer(
             for p in params:
                 p.type_ann = expand(p.type_ann)
 
+        def walk_stmts(stmts):
+            """Percorre statements expandindo tipos em VarDecl,
+            DestructureStmt (nada a fazer), e recursando em blocos."""
+            for s in stmts:
+                if s is None:
+                    continue
+                if isinstance(s, VarDecl) and s.var_type is not None:
+                    s.var_type = expand(s.var_type)
+                elif isinstance(s, IfStmt):
+                    walk_stmts(s.then_body)
+                    if s.else_body:
+                        walk_stmts(s.else_body)
+                elif isinstance(s, WhileStmt):
+                    walk_stmts(s.body)
+                elif isinstance(s, ForStmt):
+                    walk_stmts(s.body)
+                elif isinstance(s, MatchStmt):
+                    for c in s.cases:
+                        if len(c) >= 4 and isinstance(c[3], list):
+                            walk_stmts(c[3])
+                    if s.default:
+                        walk_stmts(s.default)
+                elif isinstance(s, DeferStmt):
+                    walk_stmts(s.body)
+                elif isinstance(s, BenchStmt):
+                    walk_stmts(s.body)
+
         for decl in declarations:
             if isinstance(decl, Function):
                 expand_params(decl.params)
                 decl.return_type = expand(decl.return_type)
+                walk_stmts(decl.body)
             elif isinstance(decl, ExternDecl):
                 new_params = []
                 for p in decl.params:
@@ -224,6 +257,7 @@ class SemanticAnalyzer(
                 for m in decl.methods:
                     expand_params(m.params)
                     m.return_type = expand(m.return_type)
+                    walk_stmts(m.body)
             elif isinstance(decl, VarDecl):
                 if decl.var_type is not None:
                     decl.var_type = expand(decl.var_type)

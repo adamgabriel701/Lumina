@@ -1,16 +1,33 @@
+"""Orquestrador da análise semântica.
+
+O trabalho pesado está dividido em:
+  - `ExpressionAnalyzer` (em `expressions/`) — type checking de expressões
+  - `StatementAnalyzer` (em `statements.py`) — type checking de statements
+  - `DerivesMixin` (em `derives.py`) — expansão de `@derive(...)`
+  - `TraitResolutionMixin` (em `trait_resolution.py`) — métodos default
+
+A classe `SemanticAnalyzer` apenas orquestra a ordem das passadas.
+"""
 from ..builtins import BUILTIN_FUNCTIONS
 from lumina.ast.statements import ErrorNode
 from ..ast import (
     Function, ExternDecl, StructDecl, EnumDecl, ImplBlock,
-    VarDecl, VariableExpr, TraitDecl, MatchStmt, Param,
-    UnaryExpr,
+    VarDecl, VariableExpr, TraitDecl, MatchStmt,
 )
 from ..errors import LuminaError
 from .expressions import ExpressionAnalyzer
 from .statements import StatementAnalyzer
+from .derives import DerivesMixin
+from .trait_resolution import TraitResolutionMixin
 
 
-class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
+class SemanticAnalyzer(
+    ExpressionAnalyzer,
+    StatementAnalyzer,
+    DerivesMixin,
+    TraitResolutionMixin,
+):
+
     def __init__(self, filename="program.lm", source_code=""):
         self.scopes = [{}]
         self.functions = set()
@@ -28,346 +45,6 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
         self.freed_vars = set()   # NOVO
 
     # ------------------------------------------------------------------
-    # @derive(Eq, Debug)
-    # ------------------------------------------------------------------
-    def _expand_derives(self, declarations):
-        """Expande @derive(Eq, Debug, Default, Clone, Display) em
-        métodos sintetizados (ImplBlocks) e funções livres.
-
-        - Eq        → `fn {Struct}___eq__(a, b) -> int`
-        - PartialEq → `__eq__` E `__ne__` (habilita `==` e `!=`)
-        - Debug     → `fn {Struct}___debug__(p) -> str`
-        - Display   → alias de Debug
-        - Clone     → `fn {Struct}_clone(self) -> {Struct}`
-        - Default   → `fn new_{Struct}() -> {Struct}` (função livre)
-        """
-        from ..ast import ImplBlock
-
-        new_decls = []
-        for decl in declarations:
-            attrs = getattr(decl, 'attrs', None)
-            if not attrs:
-                continue
-            if not hasattr(decl, 'fields'):
-                continue  # só struct
-
-            struct_name = decl.name
-            methods = []   # métodos → ImplBlock
-            free_fns = []  # funções livres → Function
-
-            # Coleta todos os derives do @derive(...)
-            derives = set()
-            for attr_name, attr_args in attrs:
-                if attr_name != 'derive':
-                    continue
-                for deriv in attr_args:
-                    derives.add(deriv)
-
-            # Expande cada derive
-            #
-            # NOTA: `PartialEq` gera __eq__ E __ne__ (equivalente ao `==`
-            # e `!=`). `Eq` gera apenas __eq__ (Rust-style: Eq é um
-            # marcador que requer PartialEq, mas em Lumina simplificamos
-            # para "só igualdade").
-            if 'Eq' in derives or 'PartialEq' in derives:
-                methods.append(self._gen_eq(struct_name, decl))
-            if 'PartialEq' in derives:
-                methods.append(self._gen_ne(struct_name, decl))
-            if 'Debug' in derives or 'Display' in derives:
-                methods.append(self._gen_debug(struct_name, decl))
-            if 'Clone' in derives:
-                methods.append(self._gen_clone(struct_name, decl))
-            if 'Default' in derives:
-                free_fns.append(self._gen_default(struct_name, decl))
-
-            if methods:
-                new_decls.append(ImplBlock(struct_name, methods))
-            new_decls.extend(free_fns)
-
-        declarations.extend(new_decls)
-
-    def _gen_default(self, struct_name, struct_decl):
-        """Gera: fn new_{Struct}() -> {Struct} com todos os campos
-        zerados (0 / 0.0 / false / "" / null).
-
-        Uso: `let p = new_Ponto()`
-        """
-        from ..ast import (
-            Function, AssignStmt, MemberExpr, VariableExpr,
-            ReturnStmt, VarDecl, NumberExpr, StringExpr, BoolExpr,
-        )
-
-        result_var = 'result'
-        result_decl = VarDecl(result_var, struct_name, None, True)
-
-        body = [result_decl]
-        result_ref = VariableExpr(result_var, 0, 0)
-
-        for fname, ftype in struct_decl.fields.items():
-            lhs = MemberExpr(result_ref, fname)
-
-            # Valor zero por tipo
-            if ftype == "float":
-                rhs = NumberExpr("0.0", is_float=True)
-            elif ftype == "bool":
-                rhs = BoolExpr(False)
-            elif ftype == "str":
-                rhs = StringExpr("")
-            else:
-                # int, ptr, structs, enums — usa 0
-                rhs = NumberExpr("0", is_float=False)
-
-            body.append(AssignStmt(lhs, rhs))
-
-        body.append(ReturnStmt([VariableExpr(result_var, 0, 0)]))
-
-        # Mangled: `Struct + _ + clone` = `Struct_clone`.
-        # O `codegen_method_call` e o inferidor de VarDecl procuram
-        # por esse nome exato.
-        mangled_name = f"{struct_name}_clone"
-        return Function(mangled_name, [Param('self', struct_name)], struct_name, body)
-
-    def _gen_eq(self, struct_name, struct_decl):
-        """Gera: fn {Struct}___eq__(a, b) -> bool
-
-        Nome mangled porque o codegen procura `{Struct}___eq__`.
-        Retorna `bool` (i1) para que `print(p1 == p2)` mostre
-        `true`/`false`.
-        """
-        from ..ast import (
-            Function, Param, BinaryExpr, VariableExpr, MemberExpr,
-            ReturnStmt, IfStmt, BoolExpr,
-        )
-
-        a_var = VariableExpr('a', 0, 0)
-        b_var = VariableExpr('b', 0, 0)
-
-        # Compara cada campo: a.f1 == b.f1 and a.f2 == b.f2 and ...
-        conditions = []
-        for fname in struct_decl.fields.keys():
-            a_field = MemberExpr(a_var, fname)
-            b_field = MemberExpr(b_var, fname)
-            conditions.append(BinaryExpr('==', a_field, b_field))
-
-        if not conditions:
-            cond = BoolExpr(True)  # struct vazia: sempre igual
-        elif len(conditions) == 1:
-            cond = conditions[0]
-        else:
-            cond = conditions[0]
-            for c in conditions[1:]:
-                cond = BinaryExpr('and', cond, c)
-
-        then_body = [ReturnStmt([BoolExpr(True)])]
-        if_stmt = IfStmt(cond, then_body, None)
-        return_stmt = ReturnStmt([BoolExpr(False)])
-
-        mangled_name = f"{struct_name}___eq__"
-
-        return Function(
-            mangled_name,
-            [Param('a', struct_name), Param('b', struct_name)],
-            'bool',
-            [if_stmt, return_stmt],
-        )
-
-    def _gen_ne(self, struct_name, struct_decl):
-        """Gera: fn {Struct}___ne__(a, b) -> bool
-
-        Uso: `a != b`
-        """
-        from ..ast import (
-            Function, Param, BinaryExpr, VariableExpr, CallExpr,
-            ReturnStmt, IfStmt, BoolExpr,
-        )
-
-        a_var = VariableExpr('a', 0, 0)
-        b_var = VariableExpr('b', 0, 0)
-
-        # Chama __eq__(a, b)
-        eq_callee = VariableExpr(f'{struct_name}___eq__', 0, 0)
-        eq_call = CallExpr(eq_callee, [a_var, b_var])
-
-        # if not __eq__(a, b): return True
-        not_eq = UnaryExpr('not', eq_call)
-        then_body = [ReturnStmt([BoolExpr(True)])]
-        if_stmt = IfStmt(not_eq, then_body, None)
-
-        # return False
-        return_stmt = ReturnStmt([BoolExpr(False)])
-
-        mangled_name = f"{struct_name}___ne__"
-
-        return Function(
-            mangled_name,
-            [Param('a', struct_name), Param('b', struct_name)],
-            'bool',
-            [if_stmt, return_stmt],
-        )
-
-    def _gen_debug(self, struct_name, struct_decl):
-        """Gera: fn {Struct}___debug__(p: Struct) -> str
-
-        Nome já mangled porque o codegen procura `{Struct}___debug__`.
-        """
-        from ..ast import (
-            Function, Param, ReturnStmt, StringExpr, BinaryExpr,
-            VariableExpr, MemberExpr,
-        )
-
-        p_var = VariableExpr('p', 0, 0)
-        parts = [StringExpr(f"{struct_name} {{ ")]
-
-        for i, fname in enumerate(struct_decl.fields.keys()):
-            if i > 0:
-                parts.append(StringExpr(", "))
-            parts.append(StringExpr(f"{fname}: "))
-            field_access = MemberExpr(p_var, fname)
-            parts.append(field_access)
-
-        parts.append(StringExpr(" }"))
-
-        # Concatenação: "P1" + v1 + "P2" + v2 ...
-        expr = parts[0]
-        for p in parts[1:]:
-            expr = BinaryExpr('+', expr, p)
-
-        # Mangled: `Struct + ___ + debug__` = `Struct___debug__`
-        mangled_name = f"{struct_name}___debug__"
-
-        return Function(
-            mangled_name,
-            [Param('p', struct_name)],
-            'str',
-            [ReturnStmt([expr])],
-        )
-
-    def _gen_clone(self, struct_name, struct_decl):
-        """Gera: fn {Struct}_clone(self) -> {Struct}
-
-        Uso: `let copia = p.clone()`
-        Nome mangled porque o `codegen_method_call` procura por
-        `Struct_clone`.
-        """
-        from ..ast import (
-            Function, Param, AssignStmt, MemberExpr, VariableExpr,
-            ReturnStmt, VarDecl,
-        )
-
-        result_var = 'result'
-        result_decl = VarDecl(result_var, struct_name, None, True)
-
-        body = [result_decl]
-        self_var = VariableExpr('self', 0, 0)
-        result_ref = VariableExpr(result_var, 0, 0)
-
-        # result.f1 = self.f1 ; result.f2 = self.f2 ; ...
-        for fname in struct_decl.fields.keys():
-            lhs = MemberExpr(result_ref, fname)
-            rhs = MemberExpr(self_var, fname)
-            body.append(AssignStmt(lhs, rhs))
-
-        body.append(ReturnStmt([VariableExpr(result_var, 0, 0)]))
-
-        # Mangled: `Struct + _ + clone` = `Struct_clone`.
-        mangled_name = f"{struct_name}_clone"
-        return Function(mangled_name, [Param('self', struct_name)], struct_name, body)
-
-    def _gen_default(self, struct_name, struct_decl):
-        """Gera: fn new_{Struct}() -> {Struct} com todos os campos
-        zerados (0 / 0.0 / false / "" / null).
-
-        Uso: `let p = new_Ponto()`
-        """
-        from ..ast import (
-            Function, AssignStmt, MemberExpr, VariableExpr,
-            ReturnStmt, VarDecl, NumberExpr, StringExpr, BoolExpr,
-        )
-
-        result_var = 'result'
-        result_decl = VarDecl(result_var, struct_name, None, True)
-
-        body = [result_decl]
-        result_ref = VariableExpr(result_var, 0, 0)
-
-        for fname, ftype in struct_decl.fields.items():
-            lhs = MemberExpr(result_ref, fname)
-
-            # Valor zero por tipo
-            if ftype == "float":
-                rhs = NumberExpr("0.0", is_float=True)
-            elif ftype == "bool":
-                rhs = BoolExpr(False)
-            elif ftype == "str":
-                rhs = StringExpr("")
-            else:
-                rhs = NumberExpr("0", is_float=False)
-
-            body.append(AssignStmt(lhs, rhs))
-
-        body.append(ReturnStmt([VariableExpr(result_var, 0, 0)]))
-
-        return Function(f"new_{struct_name}", [], struct_name, body)
-
-    # ------------------------------------------------------------------
-    # Trait defaults
-    # ------------------------------------------------------------------
-    def _resolve_trait_defaults(self, declarations):
-        traits_by_name = {}
-        for decl in declarations:
-            if isinstance(decl, TraitDecl):
-                traits_by_name[decl.name] = decl
-
-        # Passo 1: registra aliases `metodo` → `Struct_metodo`.
-        for decl in declarations:
-            if not isinstance(decl, ImplBlock):
-                continue
-            trait_name = getattr(decl, 'trait_name', None)
-            if not trait_name or trait_name not in traits_by_name:
-                continue
-            trait_def = traits_by_name[trait_name]
-            for trait_method in trait_def.methods:
-                full_name = f"{decl.struct_name}_{trait_method.name}"
-                if full_name not in self.functions:
-                    self.functions.add(full_name)
-                self.functions.add(trait_method.name)
-                # Function "fake" com params vazios. O `self` é
-                # implícito no call site.
-                if trait_method.name not in self.function_defs:
-                    self.function_defs[trait_method.name] = Function(
-                        trait_method.name,
-                        [],
-                        trait_method.return_type,
-                        [],
-                    )
-
-        # Passo 2: copia métodos default para o ImplBlock que não os sobrescreve.
-        for decl in declarations:
-            if not isinstance(decl, ImplBlock):
-                continue
-            trait_name = getattr(decl, 'trait_name', None)
-            if not trait_name or trait_name not in traits_by_name:
-                continue
-
-            trait_def = traits_by_name[trait_name]
-            explicit_names = {m.name for m in decl.methods}
-
-            for trait_method in trait_def.methods:
-                full_name = f"{decl.struct_name}_{trait_method.name}"
-                if full_name in explicit_names:
-                    continue
-                if not trait_method.body:
-                    continue
-
-                default_method = Function(
-                    full_name,
-                    [Param('self', decl.struct_name)] + list(trait_method.params),
-                    trait_method.return_type,
-                    list(trait_method.body),
-                )
-                decl.methods.append(default_method)
-
-    # ------------------------------------------------------------------
     # Análise principal
     # ------------------------------------------------------------------
     def analyze(self, declarations):
@@ -382,14 +59,16 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
                 continue
             if isinstance(decl, (Function, ExternDecl)):
                 self.functions.add(decl.name)
-                # NOVO: ExternDecl também vai pro function_defs para que
+                # ExternDecl também vai pro function_defs para que
                 # o semantic conheça o tipo de retorno de funções extern
                 # (getcwd, getenv, access, ...). Sem isso, `let v = getcwd(...)`
                 # infere "int" e `v == nil` falha.
                 if isinstance(decl, (Function, ExternDecl)):
                     self.function_defs[decl.name] = decl
                     if hasattr(decl, 'line'):
-                        self.definition_locations[decl.name] = (self.filename, decl.line, decl.col)
+                        self.definition_locations[decl.name] = (
+                            self.filename, decl.line, decl.col,
+                        )
             elif isinstance(decl, StructDecl):
                 self.structs.add(decl.name)
                 self.struct_defs[decl.name] = decl
@@ -405,7 +84,8 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
 
                 if decl.trait_name:
                     trait_def = next(
-                        (d for d in declarations if isinstance(d, TraitDecl) and d.name == decl.trait_name),
+                        (d for d in declarations
+                         if isinstance(d, TraitDecl) and d.name == decl.trait_name),
                         None,
                     )
                     if not trait_def:
@@ -416,16 +96,25 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
 
                     for trait_method in trait_def.methods:
                         expected_name = f"{decl.struct_name}_{trait_method.name}"
-                        if expected_name not in self.functions and not trait_method.body:
+                        if (expected_name not in self.functions
+                                and not trait_method.body):
                             raise LuminaError(
-                                f"Struct '{decl.struct_name}' não implementa o método '{trait_method.name}' exigido pelo Trait '{decl.trait_name}'.",
-                                self.filename, getattr(decl, 'line', 0), getattr(decl, 'col', 0), self.source_code,
+                                f"Struct '{decl.struct_name}' não implementa o "
+                                f"método '{trait_method.name}' exigido pelo "
+                                f"Trait '{decl.trait_name}'.",
+                                self.filename, getattr(decl, 'line', 0),
+                                getattr(decl, 'col', 0), self.source_code,
                             )
                         impl_method = self.function_defs.get(expected_name)
-                        if impl_method and impl_method.return_type != trait_method.return_type:
+                        if (impl_method
+                                and impl_method.return_type != trait_method.return_type):
                             raise LuminaError(
-                                f"Assinatura incorreta para '{trait_method.name}'. Esperado retorno '{trait_method.return_type}', mas obteve '{impl_method.return_type}'.",
-                                self.filename, getattr(decl, 'line', 0), getattr(decl, 'col', 0), self.source_code,
+                                f"Assinatura incorreta para "
+                                f"'{trait_method.name}'. Esperado retorno "
+                                f"'{trait_method.return_type}', mas obteve "
+                                f"'{impl_method.return_type}'.",
+                                self.filename, getattr(decl, 'line', 0),
+                                getattr(decl, 'col', 0), self.source_code,
                             )
 
         # ------------------------------------------------------------------
@@ -435,16 +124,20 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
             if isinstance(decl, VarDecl):
                 if decl.var_type is not None:
                     base_type = decl.var_type.split('<')[0]
-                    if base_type not in ("int", "float", "bool", "str", "ptr", "fn") and base_type not in self.structs:
+                    if (base_type not in ("int", "float", "bool", "str", "ptr", "fn")
+                            and base_type not in self.structs):
                         raise LuminaError(
                             f"Tipo '{decl.var_type}' não declarado.",
-                            self.filename, getattr(decl, 'line', 0), getattr(decl, 'col', 0), self.source_code,
+                            self.filename, getattr(decl, 'line', 0),
+                            getattr(decl, 'col', 0), self.source_code,
                         )
                 if decl.value:
                     self.visit(decl.value)
                 self.declare_var(decl.name, decl.var_type, decl.is_mutable)
                 if hasattr(decl, 'line'):
-                    self.definition_locations[decl.name] = (self.filename, decl.line, decl.col)
+                    self.definition_locations[decl.name] = (
+                        self.filename, decl.line, decl.col,
+                    )
 
         # ------------------------------------------------------------------
         # Passada 3: analisar corpos de funções e métodos de impl.
@@ -458,6 +151,9 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
                 for method in decl.methods:
                     self.analyze_function(method)
 
+    # ------------------------------------------------------------------
+    # Escopo
+    # ------------------------------------------------------------------
     def push_scope(self):
         self.scopes.append({})
 
@@ -477,6 +173,9 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
         if isinstance(node, VariableExpr) and node.name in self.heap_allocs:
             self.escapes.add(node.name)
 
+    # ------------------------------------------------------------------
+    # Análise de funções
+    # ------------------------------------------------------------------
     def analyze_function(self, node: Function):
         saved_scopes = self.scopes
         global_scope = saved_scopes[0] if saved_scopes else {}
@@ -499,6 +198,9 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
             self.current_func_name = saved_func_name
             self.current_ret_type = saved_ret_type
 
+    # ------------------------------------------------------------------
+    # Análise de MatchStmt (exaustividade) — delega para super()
+    # ------------------------------------------------------------------
     def analyze_stmt(self, node):
         if isinstance(node, MatchStmt):
             cond_type = self.visit(node.condition)
@@ -506,7 +208,7 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
                 struct_def = self.struct_defs[cond_type]
                 if hasattr(struct_def, 'variants'):
                     if not node.default:
-                        # NOVO: `c[0]` pode ser lista (multi-pattern `case A | B:`).
+                        # `c[0]` pode ser lista (multi-pattern `case A | B:`).
                         # Achata tudo para uma lista plana de nomes cobertos.
                         covered = []
                         for c in node.cases:
@@ -522,7 +224,8 @@ class SemanticAnalyzer(ExpressionAnalyzer, StatementAnalyzer):
                         has_wildcard = any(c[0] is None for c in node.cases)
                         if missing and not has_wildcard:
                             raise LuminaError(
-                                "Match não exaustivo. Faltam variantes ou um ramo 'default'.",
+                                "Match não exaustivo. Faltam variantes ou um "
+                                "ramo 'default'.",
                                 self.filename, getattr(node, 'line', 0),
                                 getattr(node, 'col', 0), self.source_code,
                             )

@@ -121,6 +121,8 @@ def cmd_build(entry_file=None, extra_flags=[]):
         for lib in libs:
             cmd_args.append(f"-l{lib}")
         cmd_args.extend(linker_extra_flags)
+
+        output_path = f"{project_name}.wasm"
     else:
         gc_flag = "-lgc" if not is_no_gc else ""
         if is_no_gc:
@@ -146,24 +148,46 @@ def cmd_build(entry_file=None, extra_flags=[]):
             cmd_args.append(f"-l{lib}")
         cmd_args.extend(linker_extra_flags)
 
+        output_path = project_name
+
+    # ------------------------------------------------------------------
+    # Cache incremental de LINKAGEM
+    #
+    # A cache só é confiável se TODAS as condições baterem:
+    #   1. O arquivo de hash existe (build anterior rodou)
+    #   2. O hash do IR + opt_flag bate (código não mudou)
+    #   3. O BINÁRIO DE SAÍDA existe em disco (não foi deletado/movido)
+    #
+    # Sem (3), temos o bug: cache diz "nada mudou, pulando linkagem",
+    # o comando reporta sucesso, mas o binário não existe. Sintoma típico:
+    #   $ lumina build foo.lm --release && mv foo foo_lumina
+    #   mv: cannot stat 'foo': No such file or directory
+    # ------------------------------------------------------------------
     hash_obj_file = f".lumina_cache/{project_name}.bin_hash"
     opt_marker = opt_flag
 
-    if os.path.exists(hash_obj_file) and not is_wasm and not is_debug:
-        with open(hash_obj_file, "r") as f:
-            old_hash = f.read()
-        combined = llvm_ir + "|" + opt_marker
-        new_hash = hashlib.md5(combined.encode()).hexdigest()
-        if old_hash == new_hash:
-            success("✅ Build incremental: Nenhum código mudou. Pulando linkagem.")
-            return project_name
+    cache_hit = False
+    if (not is_wasm) and (not is_debug) and os.path.exists(hash_obj_file):
+        # Só confiamos no cache se o BINÁRIO existe. Sem isso, um
+        # `rm foo` (ou `mv foo foo_lumina`) seguido de `lumina build`
+        # cairia em cache hit e nunca regeneraria o binário.
+        if os.path.exists(output_path):
+            with open(hash_obj_file, "r") as f:
+                old_hash = f.read()
+            combined = llvm_ir + "|" + opt_marker
+            new_hash = hashlib.md5(combined.encode()).hexdigest()
+            if old_hash == new_hash:
+                cache_hit = True
+
+    if cache_hit:
+        success("✅ Build incremental: Nenhum código mudou. Pulando linkagem.")
+        return output_path
 
     header("4. Linkagem Nativa")
     info(f"Executando: {paint(' '.join(cmd_args), Color.MUTED)}")
 
     try:
         subprocess.run(cmd_args, check=True)
-        output_path = f"{project_name}.wasm" if is_wasm else project_name
         display_path = output_path if os.path.isabs(output_path) else f"./{output_path}"
         success(f"✅ Build concluído: {paint(display_path, Color.BOLD + Color.SUCCESS)}")
 

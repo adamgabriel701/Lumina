@@ -5,8 +5,9 @@ cd "$(git rev-parse --show-toplevel)"
 mkdir -p ctx
 
 case "${1:-all}" in
-  docs)   # pergunta sobre documentação / arquitetura
-    repomix --include "README.md,CHANGELOG.md,docs/**,pyproject.toml,lumina.toml" \
+  docs)
+    repomix --include "README.md,llms.txt,docs/**,pyproject.toml,lumina.toml" \
+            --ignore "CHANGELOG.md" \
             --output ctx/docs.xml ;;
   lang)   # pergunta sobre a linguagem (lexer→codegen)
     repomix --include "lumina/**,lumina_core/**" --output ctx/lang.xml ;;
@@ -19,8 +20,11 @@ case "${1:-all}" in
   tree)
     tree -L 3 -I '__pycache__|node_modules|*.pyc|.venv|*.ll|*.wasm' \
       > ctx/tree.txt && cat ctx/tree.txt ;;
+  changelog)
+    repomix --include "CHANGELOG.md,docs/engineering/**" \
+            --output ctx/changelog.xml ;;
   *)
-    echo "uso: $0 {docs|lang|cli|std|all|tree}"; exit 1 ;;
+    echo "uso: $0 {docs|lang|cli|std|all|tree|changelog}"; exit 1 ;;
 esac
 
 # mostra o custo em tokens

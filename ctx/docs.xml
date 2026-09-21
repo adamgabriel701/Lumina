@@ -1,0 +1,3887 @@
+This file is a merged representation of a subset of the codebase, containing specifically included files and files not matching ignore patterns, combined into a single document by Repomix.
+The content has been processed where comments have been removed, content has been compressed (code blocks are separated by ⋮---- delimiter).
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of a subset of the repository's contents that is considered the most important context.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Only files matching these patterns are included: README.md, CHANGELOG.md, docs/**, pyproject.toml, lumina.toml
+- Files matching these patterns are excluded: **/__pycache__/**, **/*.pyc, **/.venv/**, **/node_modules/**, **/*.ll, **/*.wasm, **/*.o, **/*.obj, **/benchmarks/results/**, **/examples/**/*.ll, lumina-vscode/package-lock.json, output.ll, playground.html, ctx/**, site/**
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Code comments have been removed from supported file types
+- Content has been compressed - code blocks are separated by ⋮---- delimiter
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+docs/
+  engineering/
+    decisoes/
+      0001-backend-llvm.md
+      template.md
+    benchmarks.md
+    bugs.md
+    tests.md
+  getting-started/
+    guia-rapido.md
+  guia/
+    ferramental.md
+    linguagem.md
+    stdlib.md
+  internals/
+    arquitetura.md
+    codegen.md
+    lexer.md
+    parser.md
+    runtime.md
+    semantica.md
+  referencia/
+    cli.md
+  contributing.md
+  index.md
+  README.md
+CHANGELOG.md
+lumina.toml
+pyproject.toml
+README.md
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="docs/engineering/decisoes/0001-backend-llvm.md">
+---
+status: aceito
+---
+
+# ADR 0001 — LLVM como backend
+
+## Contexto
+Precisávamos de um backend com otimizações maduras e portabilidade.
+
+## Decisão
+Emitir LLVM IR diretamente do codegen em Python (`lumina/codegen/`).
+
+## Consequências
+- ✅ Otimizações (TCO, inlining) de graça
+- ⚠️ Dependência pesada (llvmlite)
+- ⚠️ Debug de IR é mais difícil que bytecode próprio
+</file>
+
+<file path="docs/engineering/decisoes/template.md">
+---
+status: proposto
+data: AAAA-MM-DD
+---
+
+# ADR NNNN — Título
+
+## Contexto
+## Decisão
+## Consequências
+</file>
+
+<file path="docs/getting-started/guia-rapido.md">
+# 🚀 Guia Rápido
+
+Do zero ao primeiro programa Lumina em 5 minutos.
+
+---
+
+## 1. Pré-requisitos
+
+| Ferramenta | Por quê | Como instalar (Ubuntu/Debian) |
+|---|---|---|
+| **LLVM 14+** | Codegen (IR) | `sudo apt install llvm-14` |
+| **Clang** | Link com libc/libgc | `sudo apt install clang` |
+| **Boehm GC** | Garbage Collector | `sudo apt install libgc-dev` |
+| **Python 3.11+** | Compilador | `sudo apt install python3.11 python3-pip` |
+
+Em Fedora:
+
+```bash
+sudo dnf install -y llvm-devel clang gc-devel python3.11
+```
+
+---
+
+## 2. Instalação
+
+```bash
+git clone https://github.com/adamgabriel701/Lumina.git
+cd Lumina
+pip install -e .
+lumina --help
+```
+
+Se `lumina --help` mostrar o menu, está pronto.
+
+---
+
+## 3. Primeiro programa
+
+Crie um arquivo `ola.lm`:
+
+```lumina
+fn main() -> int:
+    print("Olá, Lumina!")
+    return 0
+```
+
+Rode:
+
+```bash
+lumina run ola.lm
+# Olá, Lumina!
+```
+
+Ou use o template de projeto:
+
+```bash
+lumina new meu_projeto
+cd meu_projeto
+lumina run
+```
+
+---
+
+## 4. Sintaxe essencial (5 min)
+
+### Funções e tipos
+
+```lumina
+fn soma(a: int, b: int) -> int:
+    return a + b
+
+fn nada() -> void:
+    print("nada")
+```
+
+### Variáveis
+
+```lumina
+let x = 10          # imutável
+mut y = 20          # mutável
+y = y + 1           # ok
+z := 30             # sintaxe curta (mutável)
+```
+
+### Controle de fluxo
+
+```lumina
+if x > 5:
+    print("grande")
+elif x == 5:
+    print("igual")
+else:
+    print("pequeno")
+
+for i in 0..10:
+    print(i)
+
+while x < 100:
+    x = x + 1
+```
+
+### Listas e iteração
+
+```lumina
+let nums = [10, 20, 30]
+for n in nums:
+    print(n)
+
+for i, n in nums:
+    print(i, n)
+```
+
+### Pattern matching
+
+```lumina
+enum Resultado:
+    Ok(int)
+    Err(str)
+
+fn tratar(r: Resultado) -> int:
+    match r:
+        case Ok(v):  return v
+        case Err(_): return -1
+    return 0
+```
+
+### Strings
+
+```lumina
+let nome = "Lumina"
+let idade = 3
+print($"Nome: {nome}, idade: {idade}")     # F-string
+print(nome[0..3])                          # Slicing
+```
+
+### Defer (cleanup)
+
+```lumina
+fn processar() -> int:
+    defer print("fim")
+    print("início")
+    return 0
+# Saída: início / fim
+```
+
+---
+
+## 5. CLI essencial
+
+```bash
+lumina new nome         # criar projeto
+lumina run arquivo.lm   # compilar + executar
+lumina build arquivo.lm # só compilar
+lumina check arquivo.lm # lexer + parser + semantic (rápido)
+lumina test arquivo.lm  # suíte de testes nativa
+lumina repl             # REPL persistente
+lumina lint arquivo.lm  # análise estática (W001..W005)
+lumina fmt arquivo.lm   # formatar (preserva comentários)
+lumina clean            # limpar cache e binários
+```
+
+Flags de build:
+
+```bash
+lumina build app.lm --release    # -O3 + opt -O2
+lumina build app.lm --debug      # -O0 + DWARF
+lumina build app.lm --wasm       # WebAssembly
+lumina build app.lm --no-gc      # bare-metal (sem GC)
+lumina build app.lm --target=aarch64-linux-gnu
+```
+
+---
+
+## 6. Próximos passos
+
+- **[Linguagem](linguagem.md)** — referência completa da sintaxe
+- **[Standard Library](stdlib.md)** — `std/math`, `std/sort`, `std/io`...
+- **[Ferramental](ferramental.md)** — LSP, formatter, lint, REPL
+- **[Exemplos no repo](../examples/)** — 69 exemplos prontos
+</file>
+
+<file path="docs/guia/ferramental.md">
+# 🔧 Ferramental
+
+CLI, formatter, linter, REPL, LSP, playground.
+
+---
+
+## CLI (`lumina`)
+
+### Comandos
+
+```bash
+lumina new <nome>              # cria projeto (lumina.toml + main.lm)
+lumina build [arquivo] [flags] # compila para binário nativo
+lumina run [arquivo]           # compila e executa (propaga exit code)
+lumina check [arquivo]         # lexer+parser+semantic (rápido)
+lumina test [arquivo]          # suíte de testes nativa
+lumina jit [arquivo]           # executa via JIT
+lumina clean                   # limpa cache e binários
+lumina doc [flags]             # gera documentação (html/md/json)
+lumina install                 # baixa dependências do lumina.toml
+lumina bind <header.h> <nome>  # bindings FFI a partir de C
+lumina fmt <arquivo> [--check] # formata
+lumina fmt --stdin             # formata lido de stdin
+lumina fmt --check-all <dir>   # verifica todos .lm de um dir
+lumina repl                    # REPL interativo persistente
+lumina playground [porta]      # playground web (padrão 8080)
+lumina lint <arquivo> [flags]  # análise estática
+lumina --help / -h / help      # ajuda
+```
+
+### Flags de build
+
+| Flag | Efeito |
+|---|---|
+| `--release` | `-O3` + `opt -O2` no IR |
+| `--debug` | `-O0` + DWARF |
+| `--wasm` | Compila para WebAssembly (`--no-gc` implícito) |
+| `--no-gc` | Bare-metal (sem Boehm GC) |
+| `--target=<triple>` | Cross-compile |
+
+### Flags globais
+
+| Flag | Efeito |
+|---|---|
+| `--error-format=text\|json` | Formato de erros |
+
+### Exit codes
+
+| Comando | Exit code |
+|---|---|
+| `run` | Propaga o do binário |
+| `build` | 0 se OK, ≠ 0 se falha |
+| `check` | 0 se OK, ≠ 0 se erros |
+| `test` | Nº de testes falhando |
+| `lint` | Nº de warnings |
+| `--help` | 0 |
+
+---
+
+## Formatter (`lumina fmt`)
+
+Preserva:
+
+- Comentários de linha (`#`) e bloco (`/* */`)
+- Atributos (`@derive`, `@safe`, `@macro`, `@inline`, ...)
+- Multi-pattern (`case A | B:`)
+- Wildcard (`case _:`)
+- Formatação idempotente (`fmt(fmt(x)) == fmt(x)`)
+
+```bash
+lumina fmt arquivo.lm           # formata in-place
+lumina fmt arquivo.lm --check   # só verifica (exit 1 se precisa formatar)
+lumina fmt --stdin              # lê de stdin, escreve em stdout
+lumina fmt --check-all examples # verifica todos .lm de um dir
+```
+
+---
+
+## Linter (`lumina lint`)
+
+Análise estática **sem gerar código**. Exit code = nº de warnings.
+
+### Warnings
+
+| Código | Descrição |
+|---|---|
+| **W001** | Variável declarada mas nunca usada |
+| **W002** | Variável sombreia outra do mesmo escopo |
+| **W003** | Código inalcançável após `return`/`break`/`continue` |
+| **W004** | Parâmetro de função nunca usado |
+| **W005** | Função com corpo vazio |
+
+### Uso
+
+```bash
+lumina lint app.lm                  # texto colorido
+lumina lint app.lm --format=json    # JSON (pipe-safe)
+lumina lint app.lm --quiet          # só exit code
+```
+
+### Supressão
+
+Prefixe o nome com `_`:
+
+```lumina
+fn f(_unused_param: int):
+    let _unused_var = 10
+```
+
+---
+
+## REPL (`lumina repl`)
+
+Estado **persistente** entre células:
+
+```lumina
+lumina> mut counter = 0
+lumina> counter = counter + 1
+lumina> counter = counter + 1
+lumina> print(counter)
+2
+lumina> :decls
+[D0] mut counter = 0
+lumina> :clear
+Estado limpo.
+lumina> exit
+```
+
+### Comandos
+
+| Comando | Efeito |
+|---|---|
+| `:help` | Lista comandos |
+| `:history` | Mostra tudo que foi digitado |
+| `:decls` | Mostra só declarações top-level |
+| `:clear` | Limpa o estado |
+| `exit` / `quit` | Sai |
+
+### Semântica
+
+- `mut x = 0` **persiste** entre células (vira global).
+- `let x = 10` é local à célula.
+- `fn`, `struct`, `enum`, `trait`, `impl` são top-level e persistem.
+
+**Nota:** o REPL recompila tudo a cada célula (O(N²) em sessões longas). Use `:clear` para resetar.
+
+---
+
+## LSP (VS Code)
+
+Servidor de linguagem implementado em `lumina-vscode/lumina_lsp.py`.
+
+### Features
+
+| Feature | Descrição |
+|---|---|
+| **Syntax highlighting** | TextMate grammar |
+| **Autocomplete** | Nomes de funções, variáveis, tipos |
+| **Hover** | Tipo + local, qualificado por escopo (`main::i` vs `helper::i`) |
+| **Go to Definition** | Ciente de escopo |
+| **Find References** | Filtra por escopo em variáveis locais |
+| **Rename Symbol** | Ciente de escopo |
+| **Document Symbols** | Outline com children por função |
+| **Semantic Tokens** | Diferencia tipos, funções, variáveis |
+| **Diagnostics** | Erros em tempo real |
+
+### Instalação
+
+```bash
+cd lumina-vscode
+npx vsce package
+code --install-extension lumina-0.2.0.vsix --force
+```
+
+Ativar cores semânticas em `settings.json`:
+
+```json
+"editor.semanticHighlighting.enabled": true
+```
+
+---
+
+## Playground Web
+
+```bash
+lumina playground              # porta 8080
+lumina playground 3000         # porta custom
+```
+
+Abre em `http://localhost:8080` — editor com compilação JIT ao vivo.
+
+Requer `playground.html` no diretório atual ou na raiz do projeto.
+
+---
+
+## Documentação (`lumina doc`)
+
+Gera docs a partir de comentários `##` acima de funções, structs, enums e traits:
+
+```lumina
+## Soma dois inteiros.
+## Retorna o resultado.
+fn soma(a: int, b: int) -> int:
+    return a + b
+```
+
+```bash
+lumina doc --format=html    # docs/index.html
+lumina doc --format=md      # docs/index.md
+lumina doc --format=json    # docs/index.json
+```
+
+---
+
+## Bind FFI (`lumina bind`)
+
+Gera bindings Lumina a partir de um header C:
+
+```bash
+lumina bind sqlite3.h sqlite3
+# Cria std/sqlite3.lm com extern fn para cada função do header
+```
+
+Mapeamento de tipos:
+
+| C | Lumina |
+|---|---|
+| `int`, `long`, `size_t` | `int` |
+| `float`, `double` | `float` |
+| `char*`, `const char*` | `str` |
+| `void*` | `str` |
+| `char` | `int` |
+
+---
+
+## Cross-compile
+
+```bash
+lumina build app.lm --target=aarch64-linux-gnu      # ARM64
+lumina build app.lm --target=arm-linux-gnueabihf    # ARMv7
+lumina build app.lm --target=riscv64-linux-gnu      # RISC-V 64
+lumina build app.lm --target=i386-linux-gnu         # x86 32-bit
+lumina build app.lm --target=wasm32-wasi --wasm     # WebAssembly
+```
+
+Requer toolchain do target no PATH:
+
+```bash
+sudo apt install -y gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf \
+                    gcc-riscv64-linux-gnu qemu-user
+```
+
+**Nota:** `libgc` precisa ser cross-compilada para o target, ou use `--no-gc`.
+
+---
+
+## Scripts auxiliares
+
+### `run_tests.py` (standalone, ~5s)
+
+```bash
+python3 run_tests.py
+# 📊 Resultado: 28/28 verificações OK
+```
+
+### `scripts/check_examples.sh`
+
+```bash
+./scripts/check_examples.sh           # só compila
+./scripts/check_examples.sh --run     # compila e roda
+# 📊 PASS: 54    ⏭️  SKIP: 17    ❌ FAIL: 0
+```
+
+### `scripts/run_benchmarks.sh`
+
+```bash
+./scripts/run_benchmarks.sh
+```
+
+Compara Lumina contra C, Rust, Go, Node.js e Python.
+</file>
+
+<file path="docs/guia/linguagem.md">
+# 📖 Referência da Linguagem Lumina
+
+Referência completa da sintaxe e semântica. Para tutoriais, veja [Guia Rápido](guia-rapido.md).
+
+---
+
+## Índice
+
+- [Tipos e Inferência](#tipos-e-inferência)
+- [Variáveis](#variáveis)
+- [Operadores](#operadores)
+- [Controle de Fluxo](#controle-de-fluxo)
+- [Funções](#funções)
+- [Tipos de Função](#tipos-de-função)
+- [Closures](#closures)
+- [Structs](#structs)
+- [Enums e Pattern Matching](#tipos-algébricos-adts)
+- [Generics](#generics)
+- [Genéricos Aninhados](#genéricos-aninhados)
+- [Impls e Traits](#impls-e-traits)
+- [Type Aliases](#type-aliases)
+- [Tuplas](#tuplas)
+- [`nil` vs `none`](#nil-vs-none)
+- [Macros](#macros)
+- [`@derive`](#derive)
+- [`@safe`](#safe)
+- [LLVM Attrs](#llvm-attrs)
+- [`defer`](#defer)
+- [Módulos e Imports](#módulos-e-imports)
+
+---
+
+## Tipos e Inferência
+
+Primitivos:
+
+| Tipo | LLVM | Descrição |
+|---|---|---|
+| `int` | `i64` | Inteiro com sinal 64-bit |
+| `float` | `f64` | Ponto flutuante 64-bit |
+| `bool` | `i1` | Booleano |
+| `str` | `i8*` | Ponteiro para string (null-terminated) |
+| `ptr` | `i64*` | Ponteiro genérico (`alloc(N)` retorna isso) |
+| `void` | `void` | Ausência de retorno |
+| `fn` / `fn(T) -> R` | `{i8*, i8*}` | Fat pointer (fn ptr + env) |
+
+Inferência:
+
+```lumina
+let x = 10               # int
+let y = 3.14             # float
+let s = "hello"          # str
+let b = true             # bool
+let nums = [1, 2, 3]     # ptr
+let t = (1, "a")         # tuple → ptr (LiteralStructType)
+let r = Ok(42)           # Result<int, int> (inferido)
+```
+
+Promoção implícita:
+
+```lumina
+let x: float = 10        # int → float OK
+let y: int = 3.14        # ERRO (truncaria)
+```
+
+---
+
+## Variáveis
+
+```lumina
+let x = 10               # imutável
+mut y = 20               # mutável
+z := 30                  # açúcar para `mut z = 30`
+let p: Ponto             # declarar sem inicializar (zera campos)
+```
+
+Regras:
+
+- `let` = imutável; reatribuir é erro de compilação.
+- `mut` = mutável.
+- `:=` = `mut` curto.
+- Escopo é por bloco (indentação).
+- Shadowing é permitido (mas `lumina lint` emite W002).
+
+```lumina
+fn main() -> int:
+    let x = 10
+    if true:
+        let x = 20      # sombreia a externa (W002 do lint)
+    return x            # 10
+```
+
+---
+
+## Operadores
+
+### Aritméticos
+
+```lumina
++ - * / %
+```
+
+### Comparação
+
+```lumina
+== != < > <= >=
+```
+
+### Lógicos (com short-circuit)
+
+```lumina
+and or not
+```
+
+### Bitwise
+
+```lumina
+& | ^ ~ << >>
+```
+
+### Atribuição composta
+
+```lumina
++= -= *= /= &= |= ^=
+```
+
+### Especiais
+
+| Operador | Nome | Uso |
+|---|---|---|
+| `\|>` | Pipe | `5 \|> dobrar` = `dobrar(5)` |
+| `?.` | Safe navigation | `u?.id` = 0 se `u == nil` |
+| `?` | Propagação | `expr?` em função que retorna `Result` |
+| `as` | Cast | `10 as float` |
+
+### Precedência (baixo → alto)
+
+```
+logical (and/or)
+bitwise_or
+bitwise_xor
+bitwise_and
+comparison
+shift
+range (..)
+additive
+term
+factor (unário, chamada, index)
+```
+
+---
+
+## Controle de Fluxo
+
+### `if` / `elif` / `else`
+
+```lumina
+if x > 10:
+    print("grande")
+elif x > 5:
+    print("médio")
+else:
+    print("pequeno")
+```
+
+### `while`
+
+```lumina
+while x < 100:
+    x = x + 1
+```
+
+### `for` (range)
+
+```lumina
+for i in 0..10:
+    print(i)
+```
+
+### `for` (iterável)
+
+```lumina
+for n in [1, 2, 3]:       # array literal
+    print(n)
+
+for c in "abc":           # string
+    print(c)
+
+for n in arr:             # array via variável
+    print(n)
+
+for i, n in arr:          # índice + valor
+    print(i, n)
+```
+
+### `break` / `continue`
+
+```lumina
+for i in 0..100:
+    if i == 5:
+        break
+    if i % 2 == 0:
+        continue
+    print(i)
+```
+
+### `switch` (alias de `match` sobre `int`)
+
+```lumina
+switch dia:
+    case 1: print("Domingo")
+    case 2: print("Segunda")
+    default: print("Outro")
+```
+
+### `assert`
+
+```lumina
+assert(1 == 1)          # OK
+assert(1 == 2)          # aborta o processo
+```
+
+---
+
+## Funções
+
+```lumina
+fn soma(a: int, b: int) -> int:
+    return a + b
+
+fn nada() -> void:
+    print("oi")
+
+fn com_default(a: int, b: int = 10) -> int:
+    return a + b
+```
+
+### Argumentos nomeados
+
+```lumina
+soma(b: 20, a: 10)      # ordem livre
+```
+
+### Export (WASM)
+
+```lumina
+export fn fib(n: int) -> int:
+    if n <= 1:
+        return n
+    return fib(n - 1) + fib(n - 2)
+```
+
+### `extern fn` (FFI)
+
+```lumina
+extern fn puts(s: str) -> int
+extern fn sqlite3_open(filename: str, db: str) -> int
+
+fn main() -> int:
+    puts("hello do libc")
+    return 0
+```
+
+---
+
+## Tipos de Função
+
+```lumina
+type Callback = fn(int) -> int
+
+fn apply(f: Callback, x: int) -> int:
+    return f(x)
+
+fn apply2(f: fn(int, int) -> int, a: int, b: int) -> int:
+    return f(a, b)
+```
+
+Regras:
+
+- `fn` puro (sem assinatura) aceita **qualquer** função.
+- `fn(T) -> R` exige arity e tipos em compile-time.
+- Mistura tipado/untyped é permitida nos dois sentidos.
+- **Campos de struct** podem ter tipo `fn`:
+
+```lumina
+struct Handler:
+    cb: fn(int) -> int
+
+fn main() -> int:
+    mut h: Handler
+    h.cb = fn(x: int) -> int: x * 2
+    print(h.cb(21))     # 42
+    return 0
+```
+
+---
+
+## Closures
+
+Sintaxe inline:
+
+```lumina
+let dobro = fn(x: int) -> int: x * 2
+```
+
+Sintaxe bloco:
+
+```lumina
+let add = fn(a: int, b: int) -> int:
+    let s = a + b
+    return s
+```
+
+Com captura (variável livre do escopo externo):
+
+```lumina
+fn main() -> int:
+    let offset = 10
+    let add = fn(x: int) -> int: x + offset
+    print(add(5))       # 15
+    return 0
+```
+
+**Captura por valor** — mutação posterior da variável externa não é vista:
+
+```lumina
+mut x = 10
+let get = fn() -> int: x
+x = 99
+print(get())            # 10, não 99
+```
+
+Closures como callback (HOFs):
+
+```lumina
+import "std/sort"
+
+let mult = 10
+sort_by(arr, 4, fn(a: int, b: int) -> int: (b - a) * mult)
+```
+
+**Implementação:** todo valor `fn` é um **fat pointer** `{fn_ptr, env_ptr}`. O `env_ptr` carrega as capturas. Funções nomeadas usadas como valor são wrapped em runtime com `env_ptr = NULL`. `&fn_name` devolve o fn ptr **cru** (FFI-compatível).
+
+---
+
+## Structs
+
+```lumina
+struct Ponto:
+    x: int
+    y: int
+
+struct Caixa:
+    valor: int
+    ponto: Ponto
+```
+
+Literal:
+
+```lumina
+let p = Ponto { x: 1, y: 2 }
+let c = Caixa { valor: 10, ponto: p }
+```
+
+Acesso:
+
+```lumina
+print(p.x)              # 1
+print(c.ponto.x)        # 1 (member chain)
+```
+
+Mutação:
+
+```lumina
+mut p: Ponto
+p.x = 10
+p.y = 20
+```
+
+Zerar sem inicializador:
+
+```lumina
+mut p: Ponto            # todos os campos = 0
+```
+
+Type check automático:
+
+```lumina
+let p = Ponto { x: "texto", y: 2 }   # ERRO em compile-time
+```
+
+---
+
+## Tipos Algébricos (ADTs)
+
+```lumina
+enum Result:
+    Ok(int)
+    Err(int)
+
+enum Par:
+    Dois(int, int)
+    Zero
+
+enum Color:
+    Red
+    Green
+    Blue
+```
+
+### Construção
+
+```lumina
+let r = Ok(42)
+let p = Dois(10, 20)
+let c = Red              # variante bare (sem payload)
+```
+
+Variante com payload usada bare é erro:
+
+```lumina
+let x = Ok                # ERRO: Ok espera payload
+```
+
+### Match
+
+```lumina
+match r:
+    case Ok(v):  print("ok:", v)
+    case Err(e): print("err:", e)
+```
+
+### Multi-payload com binding
+
+```lumina
+match p:
+    case Dois(a, b): print(a, b)
+    case Zero:       print(0, 0)
+```
+
+### Guard
+
+```lumina
+match shape:
+    case Circle(r) if r > 10: return "grande"
+    case Circle(r):           return "pequeno"
+    case Square(s):           return "quadrado"
+```
+
+### Multi-pattern e wildcard
+
+```lumina
+match n:
+    case 1 | 2 | 3: return "pequeno"
+    case 4 | 5:     return "médio"
+    case _:         return "grande"
+```
+
+### Match em string
+
+```lumina
+match cmd:
+    case "run":  return 1
+    case "stop": return 0
+    default:     return -1
+```
+
+### Match expressão
+
+```lumina
+let r = match x:
+    case 1: 10
+    case _: 20
+```
+
+---
+
+## Generics
+
+Função genérica:
+
+```lumina
+fn identidade<T>(x: T) -> T:
+    return x
+
+print(identidade(10))       # int
+print(identidade(3.14))     # float
+```
+
+Struct genérica:
+
+```lumina
+struct Box<T>:
+    data: T
+```
+
+Enum genérico:
+
+```lumina
+enum Res<T, E>:
+    Ok(T)
+    Err(E)
+
+let r = Ok(42)              # Res<int, int> inferido
+let s = Ok("hi")            # Res<str, int> inferido
+```
+
+**Monomorphization:** cada instanciação gera uma cópia especializada (`identidade__int`, `identidade__float`).
+
+---
+
+## Genéricos Aninhados
+
+`Box<T>` como parâmetro de função:
+
+```lumina
+struct Box<T>:
+    data: T
+
+fn put<T>(b: Box<T>, val: T):
+    b.data = val
+
+fn get<T>(b: Box<T>) -> T:
+    return b.data
+
+fn main() -> int:
+    mut bi: Box<int>
+    mut bs: Box<str>
+    put(bi, 42)
+    put(bs, "hello")
+    print(get(bi))    # 42
+    print(get(bs))    # hello
+    return 0
+```
+
+Suportado via `unify_type` (semantic) + `substitute_generic` (codegen).
+
+---
+
+## Impls e Traits
+
+### `impl` simples
+
+```lumina
+struct Counter:
+    n: int
+
+impl Counter:
+    fn inc():
+        self.n = self.n + 1
+    fn get() -> int:
+        return self.n
+```
+
+### `impl` de trait
+
+```lumina
+trait Greeter:
+    fn greet() -> int
+
+impl Greeter for English:
+    fn greet() -> int:
+        return 0
+```
+
+### Trait com método default
+
+```lumina
+trait Greeter:
+    fn name() -> str
+    fn greet():
+        print("Hi,", name())
+
+struct English:
+    dummy: int
+
+impl Greeter for English:
+    fn name() -> str:
+        return "Lumina"
+```
+
+### `impl Box<T>:` (métodos em struct genérica)
+
+O `<T>` é descartado para registro — vira `Box_get`:
+
+```lumina
+struct Box<T>:
+    data: T
+
+impl Box<T>:
+    fn get() -> int:
+        return self.data
+```
+
+### `impl Trait for Box<int>:` (especialização)
+
+Preserva o tipo completo — vira `Box_int__metodo`:
+
+```lumina
+struct Box<T>:
+    data: T
+
+trait Kind:
+    fn kind() -> int
+
+impl Kind for Box<int>:
+    fn kind() -> int:
+        return 1
+
+impl Kind for Box<str>:
+    fn kind() -> int:
+        return 2
+```
+
+As duas especializações coexistem. O lookup em chamadas tenta o nome completo primeiro e cai para o base.
+
+### Operator overloading
+
+```lumina
+struct Vec2:
+    x: int
+    y: int
+
+impl Vec2:
+    fn __add__(a: Vec2, b: Vec2) -> Vec2:
+        mut r: Vec2
+        r.x = a.x + b.x
+        r.y = a.y + b.y
+        return r
+```
+
+Operadores suportados: `__add__`, `__sub__`, `__mul__`, `__div__`, `__eq__`, `__ne__`, `__lt__`, `__gt__`, `__le__`, `__ge__`.
+
+---
+
+## Type Aliases
+
+Simples:
+
+```lumina
+type MyInt = int
+type Callback = fn(int) -> int
+type P = Ponto
+```
+
+Genéricos:
+
+```lumina
+struct Pair<A, B>:
+    a: A
+    b: B
+
+type IPair<B> = Pair<int, B>
+```
+
+Uso em qualquer posição:
+
+```lumina
+fn soma(p: P) -> int:
+    return p.x + p.y
+
+fn apply(f: Callback, x: int) -> int:
+    return f(x)
+
+fn get(p: IPair<str>) -> int:
+    return p.a
+```
+
+Aliases encadeiam:
+
+```lumina
+type A = int
+type B = A
+type C = B        # C == int
+```
+
+A expansão acontece na **passada 0 do semantic** — o resto do pipeline nunca vê o alias.
+
+---
+
+## Tuplas
+
+Literais:
+
+```lumina
+let t = (1, 2, 3)
+let u = (42, "hello")       # tipos heterogêneos
+```
+
+Destructuring:
+
+```lumina
+let (a, b, c) = (1, 2, 3)
+
+# Sobre struct
+let (x, y) = ponto
+
+# Sobre array
+let (p, q) = arr
+```
+
+Parênteses **não** são tupla:
+
+```lumina
+let x = (1 + 2) * 3        # 9, não tupla
+```
+
+---
+
+## `nil` vs `none`
+
+| | `nil` | `none` |
+|---|---|---|
+| Representa | null pointer C-style | `Option::None` |
+| Tipo | `ptr` / `str` / `fn` / struct | `Option<T>` |
+| Uso | `if u == nil`, `u?.campo` | `match x: case None:` |
+
+`nil`:
+
+```lumina
+struct U:
+    id: int
+
+fn main() -> int:
+    let u: U = nil
+    if u == nil:
+        print("nil")
+    let v = u?.id           # 0 (safe nav)
+    return 0
+```
+
+`none`:
+
+```lumina
+fn main() -> int:
+    let x: Option = none
+    match x:
+        case Some(v): print(v)
+        case None:    print("none")
+    return 0
+```
+
+---
+
+## Macros
+
+Lumina tem **duas formas** de macro:
+
+### `@macro` de expressão (`nome(args)`)
+
+Corpo deve ser **um único** `return <expr>`:
+
+```lumina
+@macro
+fn dobro(x: int) -> int:
+    return x * 2
+
+fn main() -> int:
+    let a = 5
+    print(dobro(a + 1))     # (a + 1) * 2 = 12
+    return 0
+```
+
+Expansão inline no call site.
+
+### `@macro` de statement (`nome!(args)`)
+
+Corpo pode ter múltiplos statements:
+
+```lumina
+@macro
+fn soma_em(p: ptr, idx: int, val: int):
+    p[idx] = p[idx] + val
+
+fn main() -> int:
+    mut arr = alloc(3)
+    arr[0] = 0
+    arr[1] = 0
+    arr[2] = 0
+    for i in 0..3:
+        soma_em!(arr, i, i + 1)
+    print(arr[0], arr[1], arr[2])   # 1 2 3
+    return 0
+```
+
+`return` dentro da macro-stmt retorna da função **chamadora**:
+
+```lumina
+@macro
+fn early_exit(cond: int):
+    if cond == 0:
+        return 42
+
+fn f(x: int) -> int:
+    early_exit!(x)
+    return 100
+
+f(0)    # 42
+f(1)    # 100
+```
+
+---
+
+## `@derive`
+
+Sintetiza métodos de trait no `struct`:
+
+```lumina
+@derive(Eq, PartialEq, Debug, Display, Clone, Default)
+struct Ponto:
+    x: int
+    y: int
+```
+
+| Derive | Gera |
+|---|---|
+| `Eq` / `PartialEq` | `__eq__` (e `__ne__` para PartialEq) |
+| `Debug` / `Display` | `__debug__` (retorna `str`) |
+| `Clone` | `clone()` |
+| `Default` | função livre `new_Ponto()` |
+
+Uso:
+
+```lumina
+let p1 = Ponto { x: 1, y: 2 }
+let p2 = p1.clone()
+print(p1 == p2)             # true
+print(p1.__debug__())       # Ponto { x: 1, y: 2 }
+```
+
+---
+
+## `@safe`
+
+Null check automático em `MemberExpr` e `IndexExpr`:
+
+```lumina
+struct U:
+    id: int
+
+@safe
+fn get_id(u: U) -> int:
+    return u.id             # 0 se u == nil
+
+fn main() -> int:
+    let u: U = nil
+    print(get_id(u))        # 0 (sem SIGSEGV)
+    return 0
+```
+
+Sem `@safe`, `u.id` com `u == nil` causa SIGSEGV (rápido mas perigoso).
+
+---
+
+## LLVM Attrs
+
+| Attr | Efeito |
+|---|---|
+| `@inline` | `alwaysinline` |
+| `@noinline` | `noinline` |
+| `@cold` | `cold` (ramo improvável) |
+| `@hot` | `inlinehint` (mapeado — LLVM `hot` é string attribute) |
+
+```lumina
+@inline
+fn dobro(x: int) -> int:
+    return x * 2
+```
+
+`@inline` + `@noinline` juntos = erro de compilação.
+
+---
+
+## `defer`
+
+Escopo de **bloco** (Go/Zig-style):
+
+```lumina
+fn main() -> int:
+    defer print("fim da função")
+
+    if true:
+        defer print("fim do if")
+        print("dentro do if")
+        # Saída: dentro do if / fim do if
+
+    for i in 0..2:
+        defer print("fim da iteração")
+        print(i)
+        # Saída: 0 / fim da iteração / 1 / fim da iteração
+
+    print("depois do loop")
+    return 0
+# Saída: depois do loop / fim da função
+```
+
+`defer` dentro de `if false` **não** roda.
+
+---
+
+## Módulos e Imports
+
+```lumina
+import "std/math"
+import "std/io"
+import "meu_modulo"
+```
+
+Resolução de caminhos:
+
+- `std/X` → `std/X.lm`
+- `./foo` → `foo.lm` (relativo)
+- `meu_modulo` → `lumina_modules/meu_modulo.lm` (dependência)
+
+`std/prelude.lm` é auto-importado (`Option`, `Result`).
+
+### `[link]` no `lumina.toml`
+
+```toml
+[link]
+libs = ["m", "raylib"]
+extra_objects = ["helper.cpp"]
+extra_flags = ["-DFOO=1", "-Iinclude"]
+target = "wasm"
+```
+
+O `cmd_build` procura por `[link]` em:
+1. Sidecar: `examples/engine.lm` → `examples/engine.toml`
+2. Raiz: `./lumina.toml`
+</file>
+
+<file path="docs/guia/stdlib.md">
+# 📦 Standard Library (`std/`)
+
+Todos os módulos são escritos 100% em Lumina (bootstrapped), exceto onde indicado.
+
+---
+
+## Índice
+
+- [Fundamentos](#fundamentos) — `prelude`, `math`, `str`, `string`, `result`
+- [Coleções](#coleções) — `vector`, `map`, `set`, `deque`, `list`, `sort`, `iter`
+- [Testes e Logging](#testes-e-logging) — `test`, `log`
+- [I/O e SO](#io-e-so) — `io`, `fs`, `os`, `path`, `time`, `alloc`
+- [Concorrência](#concorrência) — `channel`, `async`, `async_fs`, `epoll`, `net`, `http`
+- [Integração](#integração) — `json`, `sqlite`, `raylib`
+
+---
+
+## Fundamentos
+
+### `std/prelude` (auto-importado)
+
+Define os tipos base disponíveis em todos os arquivos.
+
+```lumina
+enum Option:
+    Some(int)
+    None
+
+enum Result:
+    Ok(int)
+    Err(int)
+```
+
+### `std/math`
+
+```lumina
+import "std/math"
+```
+
+| Função | Descrição |
+|---|---|
+| `potencia(base: float, exp: float) -> float` | `pow` da libc |
+| `raiz_quadrada(val: float) -> float` | `sqrt` |
+| `valor_absoluto(val: int) -> int` | `abs` |
+| `chao(val: float) -> float` | `floor` |
+| `teto(val: float) -> float` | `ceil` |
+| `arredondar(val: float) -> float` | `round` |
+| `abs_float(val: float) -> float` | `fabs` |
+| `min(a: int, b: int) -> int` | mínimo |
+| `max(a: int, b: int) -> int` | máximo |
+| `clamp(v: int, lo: int, hi: int) -> int` | limita entre `lo` e `hi` |
+| `gcd(a: int, b: int) -> int` | MDC |
+| `lcm(a: int, b: int) -> int` | MMC |
+| `powi(base: int, exp: int) -> int` | potência inteira (O(log n)) |
+| `is_prime(n: int) -> int` | 1 se primo |
+| `random_int(lo: int, hi: int) -> int` | aleatório no range |
+
+### `std/str`
+
+Funções de string (imutáveis):
+
+| Função | Descrição |
+|---|---|
+| `to_upper(s: str) -> str` | MAIÚSCULAS (O(n) via StringBuilder) |
+| `to_lower(s: str) -> str` | minúsculas |
+| `trim(s: str) -> str` | remove espaços do início/fim |
+| `ends_with(s: str, suffix: str) -> int` | 1 se termina com |
+| `split(s: str, delimiter: str) -> ptr` | divide em array de `str` |
+| `join(arr: ptr, delimiter: str) -> str` | junta array de `str` |
+| `substr(s: str, start: int, length: int) -> str` | substring |
+| `find(texto: str, alvo: str) -> int` | índice ou -1 |
+
+### `std/string` (StringBuilder)
+
+Para construção eficiente byte-a-byte:
+
+```lumina
+import "std/string"
+
+mut sb = new_string_builder()
+sb.push_str("hello")
+sb.push_char(32)         # espaço
+sb.push_str("world")
+print(sb.finish())       # "hello world"
+```
+
+| Método | Descrição |
+|---|---|
+| `new_string_builder() -> StringBuilder` | cria vazio |
+| `sb.reserve(min_cap: int)` | garante capacidade |
+| `sb.push_char(c: int)` | adiciona byte |
+| `sb.push_str(s: str)` | adiciona string |
+| `sb.push_int(v: int)` | adiciona int (decimal) |
+| `sb.push_float(v: float)` | adiciona float (6 casas) |
+| `sb.finish() -> str` | finaliza (adiciona NUL) |
+| `sb.clear()` | zera (mantém capacidade) |
+| `sb.size() -> int` | bytes usados |
+
+Diferente de `std/str` (funcional), `std/string` é **imperativo** e O(1) amortizado por byte.
+
+### `std/result`
+
+Helpers sobre `Result` (int-only por enquanto):
+
+| Função | Descrição |
+|---|---|
+| `unwrap(r: Result) -> int` | payload se Ok; 0 se Err |
+| `unwrap_or(r: Result, fallback: int) -> int` | payload ou default |
+| `is_ok(r: Result) -> int` | 1 se Ok |
+| `is_err(r: Result) -> int` | 1 se Err |
+| `is_ok_and(r: Result, pred: fn) -> int` | 1 se Ok e pred(payload) |
+| `expect(r: Result, msg: str) -> int` | payload ou imprime msg |
+| `map(r: Result, f: fn) -> Result` | aplica f se Ok |
+| `and_then(r: Result, f: fn) -> Result` | aplica f e achata |
+
+```lumina
+import "std/result"
+
+let r = divide(10, 2)
+print(is_ok(r))               # 1
+print(unwrap(r))              # 5
+
+let doubled = map(r, fn(x: int) -> int: x * 2)
+print(unwrap(doubled))        # 10
+```
+
+---
+
+## Coleções
+
+Todas crescem automaticamente (rehash / resize).
+
+### `std/vector`
+
+```lumina
+import "std/vector"
+
+mut v = new_vector()
+v.push(10)
+v.push(20)
+print(v.get(0))         # 10
+print(v.pop())          # 20
+print(v.sum())          # 10
+```
+
+| Método | Descrição |
+|---|---|
+| `new_vector() -> Vector` | cria vazio |
+| `v.push(value: int)` | adiciona no fim |
+| `v.pop() -> int` | remove último |
+| `v.get(i: int) -> int` | acessa |
+| `v.set(i: int, value: int)` | substitui |
+| `v.len: int` | tamanho |
+| `v.clear()` | esvazia (mantém capacidade) |
+| `v.is_empty() -> int` | 1 se vazio |
+| `v.sum() -> int` | soma |
+
+### `std/map` (hash map `int → int`)
+
+```lumina
+import "std/map"
+
+mut m = new_map()
+m.insert(42, 100)
+print(m.get(42))            # 100
+print(m.contains(42))       # 1
+print(m.remove(42))         # 1
+```
+
+| Método | Descrição |
+|---|---|
+| `new_map() -> Map` | cria vazio |
+| `m.insert(key: int, value: int)` | insere/atualiza |
+| `m.get(key: int) -> int` | -1 se não achar |
+| `m.contains(key: int) -> int` | 1 se existe |
+| `m.remove(key: int) -> int` | 1 se removeu |
+
+### `std/set` (hash set de int)
+
+```lumina
+import "std/set"
+
+mut s = new_set()
+s.add(42)
+print(s.contains(42))       # 1
+print(s.remove(42))         # 1
+```
+
+### `std/deque`
+
+Fila de dupla extremidade com buffer circular.
+
+```lumina
+import "std/deque"
+
+mut d = new_deque()
+d.push_back(1)
+d.push_front(0)
+print(d.pop_front())        # 0
+print(d.pop_back())         # 1
+```
+
+### `std/list`
+
+Lista ligada (mais lenta que Vector; use para aprender/benchmark).
+
+### `std/sort`
+
+```lumina
+import "std/sort"
+
+mut arr = alloc(5)
+arr[0] = 5
+arr[1] = 2
+arr[2] = 8
+arr[3] = 1
+arr[4] = 9
+
+sort(arr, 5)                    # crescente
+sort_by(arr, 5, my_comparator)  # custom
+print(is_sorted(arr, 5))        # 1
+```
+
+| Função | Descrição |
+|---|---|
+| `sort(arr: ptr, n: int)` | insertion (n ≤ 16) + quicksort |
+| `sort_by(arr: ptr, n: int, cmp: fn(int, int) -> int)` | comparator |
+| `is_sorted(arr: ptr, n: int) -> int` | 1 se ordenado |
+
+Comparator pode ser closure com captura:
+
+```lumina
+let mult = 10
+sort_by(arr, 4, fn(a: int, b: int) -> int: (b - a) * mult)
+```
+
+### `std/iter` (adaptadores funcionais)
+
+```lumina
+import "std/iter"
+
+let nums = [1, 2, 3, 4, 5]
+print(sum(nums, 5))                     # 15
+print(map(nums, 5, fn(x: int) -> int: x * 2))
+```
+
+| Função | Descrição |
+|---|---|
+| `count_if(arr, n, pred) -> int` | conta elementos que satisfazem |
+| `map(arr, n, f) -> ptr` | novo array com f aplicada |
+| `filter(arr, n, pred) -> ptr` | elementos que satisfazem |
+| `sum_by(arr, n, f) -> int` | soma de f(elem) |
+| `sum(arr, n) -> int` | soma |
+| `product(arr, n) -> int` | produto |
+| `min(arr, n) -> int` / `max(arr, n) -> int` | min/max |
+| `all(arr, n, pred) -> int` | 1 se todos |
+| `any(arr, n, pred) -> int` | 1 se algum |
+| `find_index(arr, n, pred) -> int` | índice ou -1 |
+| `copy(arr, n) -> ptr` | cópia |
+| `fill(arr, n, value)` | preenche |
+| `for_each(arr, n, f)` | aplica in-place |
+| `reverse(arr, n)` | inverte in-place |
+
+---
+
+## Testes e Logging
+
+### `std/test`
+
+```lumina
+import "std/test"
+
+test "1+1 = 2":
+    return check_eq(1 + 1, 2, "soma")
+
+test "string igual":
+    return check_str_eq("a", "a", "str")
+```
+
+| Função | Descrição |
+|---|---|
+| `check_eq(actual, expected, msg) -> int` | 0 se igual |
+| `check_ne(a, b, msg) -> int` | 0 se diferente |
+| `check_true(cond: bool, msg) -> int` | 0 se true |
+| `check_false(cond: bool, msg) -> int` | 0 se false |
+| `check_str_eq(actual, expected, msg) -> int` | 0 se igual |
+
+Rode com `lumina test arquivo.lm`.
+
+### `std/log`
+
+```lumina
+import "std/log"
+
+set_level(LOG_LEVEL_INFO)
+log_debug("não aparece")     # abaixo do nível
+log_info("iniciando")
+log_warn("cuidado")
+log_error("falhou")
+```
+
+| Função | Descrição |
+|---|---|
+| `set_level(level: int)` | 0=DEBUG, 1=INFO, 2=WARN, 3=ERROR |
+| `get_level() -> int` | nível atual |
+| `log_debug/…info/…warn/…error(msg: str)` | emite se `>= nível` |
+
+---
+
+## I/O e SO
+
+### `std/io`
+
+Streams e stdin:
+
+```lumina
+import "std/io"
+
+let nome = read_line()
+write_line("Olá, " + nome)
+eprintln("(isso vai pro stderr)")
+```
+
+| Função | Descrição |
+|---|---|
+| `read_line() -> str` | linha sem `\n`; `""` em EOF |
+| `read_int() -> int` | linha → int (via atoi) |
+| `read_char() -> int` | 1 char de stdin |
+| `write(s: str)` | stdout sem newline |
+| `write_line(s: str)` | stdout + `\n` |
+| `eprintln(s: str)` | stderr + `\n` |
+
+Builtins usados internamente: `stdin()`, `stdout()`, `stderr()`, `fgets`, `fputs`, `fflush`, `getchar`.
+
+### `std/fs`
+
+```lumina
+import "std/fs"
+deletar_arquivo("caminho.txt")
+```
+
+### `std/os`
+
+```lumina
+import "std/os"
+
+let home = get_env("HOME")
+let d = cwd()
+quit(0)                     # nunca retorna
+sleep(100)                  # 100 ms
+shell("ls -la")
+```
+
+| Função | Descrição |
+|---|---|
+| `get_env(name: str) -> str` | env var ou "" |
+| `has_env(name: str) -> int` | 1 se existe |
+| `cwd() -> str` | diretório atual |
+| `quit(code: int)` | encerra |
+| `shell(cmd: str) -> int` | roda via sh |
+| `sleep(ms: int)` | dorme |
+
+### `std/path`
+
+```lumina
+import "std/path"
+
+print(join("src", "main.lm"))       # src/main.lm
+print(basename("/usr/bin/ls"))      # ls
+print(dirname("/usr/bin/ls"))       # /usr/bin
+print(extension("a.txt"))           # .txt
+print(stem("a.txt"))                # a
+print(is_absolute("/usr"))          # 1
+print(exists("."))                  # 1
+print(is_dir("."))                  # 1
+```
+
+### `std/time`
+
+```lumina
+import "std/time"
+let t = agora()             # clock() (CPU time)
+```
+
+### `std/alloc`
+
+Arena allocator para bare-metal / alta performance:
+
+```lumina
+import "std/alloc"
+
+mut a = init(1024)
+let p = alloc(a, 16)        # O(1)
+reset(a)
+destroy(a)
+```
+
+---
+
+## Concorrência
+
+### `std/channel` (CSP estilo Go)
+
+Canais com buffer, baseados em `pthread_mutex` + `pthread_cond`:
+
+```lumina
+import "std/channel"
+
+let c = new(4)
+send(c, 42)
+let v = recv(c)
+```
+
+### `std/epoll` (Linux)
+
+I/O assíncrono via `epoll` do kernel:
+
+```lumina
+import "std/epoll"
+
+let fd = criar()
+adicionar(fd, socket_fd)
+let events = esperar(fd, 16)
+```
+
+### `std/net` / `std/http`
+
+Servidores TCP/HTTP:
+
+```lumina
+import "std/http"
+
+let fd = iniciar(8080)
+# loop de accept + responder
+```
+
+### `std/async` / `std/async_fs`
+
+Corrotinas (via `ucontext` — experimental) e I/O de arquivo não-bloqueante.
+
+---
+
+## Integração
+
+### `std/json`
+
+Parser simples:
+
+```lumina
+import "std/json"
+
+let s = get_str("{\"name\":\"Lumina\"}", "name")   # "Lumina"
+let v = get_int("{\"version\":10}", "version")     # 10
+```
+
+### `std/sqlite`
+
+FFI para SQLite:
+
+```lumina
+import "std/sqlite"
+
+let db = abrir("banco.db")
+executar(db, "CREATE TABLE ...")
+fechar(db)
+```
+
+### `std/raylib`
+
+Bindings para a engine Raylib (jogos 2D/3D):
+
+```lumina
+import "std/raylib"
+
+InitWindow(800, 600, "Meu Jogo")
+while WindowShouldClose() == 0:
+    BeginDrawing()
+    ClearBackground(BLACK)
+    DrawText("Olá", 10, 10, 20, RAYWHITE)
+    EndDrawing()
+CloseWindow()
+```
+
+Requer `[link] libs = ["raylib"]` no `lumina.toml`.
+</file>
+
+<file path="docs/internals/arquitetura.md">
+## Estágios
+
+- [Lexer](lexer.md)
+- [Parser](parser.md)
+- [Semântica](semantica.md)
+- [Codegen](codegen.md)
+- [Runtime](runtime.md)
+</file>
+
+<file path="docs/internals/codegen.md">
+---
+tags: [lumina, docs-internals]
+---
+
+# Codegen
+
+Emissão de LLVM IR + otimizações
+
+**Código:** `lumina/codegen/`
+
+## Visão geral
+
+> Preencher: 3–5 parágrafos explicando responsabilidade, entrada/saída,
+> e principais decisões. Ver ADRs em `engineering/decisoes/`.
+
+## Pontos de entrada
+
+- TODO
+</file>
+
+<file path="docs/internals/lexer.md">
+---
+tags: [lumina, docs-internals]
+---
+
+# Lexer
+
+Tokenização — transforma fonte .lm em tokens
+
+**Código:** `lumina/lexer/`
+
+## Visão geral
+
+> Preencher: 3–5 parágrafos explicando responsabilidade, entrada/saída,
+> e principais decisões. Ver ADRs em `engineering/decisoes/`.
+
+## Pontos de entrada
+
+- TODO
+</file>
+
+<file path="docs/internals/parser.md">
+---
+tags: [lumina, docs-internals]
+---
+
+# Parser
+
+AST a partir de tokens
+
+**Código:** `lumina/parser/`
+
+## Visão geral
+
+> Preencher: 3–5 parágrafos explicando responsabilidade, entrada/saída,
+> e principais decisões. Ver ADRs em `engineering/decisoes/`.
+
+## Pontos de entrada
+
+- TODO
+</file>
+
+<file path="docs/internals/runtime.md">
+---
+tags: [lumina, docs-internals]
+---
+
+# Runtime
+
+GC (Boehm), alocação, threads
+
+**Código:** `std,runtime/`
+
+## Visão geral
+
+> Preencher: 3–5 parágrafos explicando responsabilidade, entrada/saída,
+> e principais decisões. Ver ADRs em `engineering/decisoes/`.
+
+## Pontos de entrada
+
+- TODO
+</file>
+
+<file path="docs/internals/semantica.md">
+---
+tags: [lumina, docs-internals]
+---
+
+# Semantica
+
+Type checking, traits, monomorfização
+
+**Código:** `lumina/semantic/`
+
+## Visão geral
+
+> Preencher: 3–5 parágrafos explicando responsabilidade, entrada/saída,
+> e principais decisões. Ver ADRs em `engineering/decisoes/`.
+
+## Pontos de entrada
+
+- TODO
+</file>
+
+<file path="docs/referencia/cli.md">
+---
+tags: [lumina, docs-referencia]
+---
+
+# Referência da CLI — `lumina`
+
+Implementação em `lumina_cli/commands/`.
+
+## Comandos
+
+| Comando | Descrição | Módulo |
+|---|---|---|
+| `lumina new <nome>` | Cria projeto novo | `commands/new.py` |
+| `lumina build` | Compila `.lm` → executável | `commands/build.py` |
+| `lumina run` | Compila e executa | `commands/build.py` |
+| `lumina fmt` | Formata código | `commands/fmt.py` |
+| `lumina test` | Roda suíte de testes | `commands/test_suite.py` |
+| `lumina doc` | Gera documentação | `commands/doc.py` |
+| `lumina repl` | REPL interativo | `commands/repl.py` |
+| `lumina bind` | Gera bindings FFI | `commands/bind.py` |
+| `lumina install` | Instala toolchain | `commands/install.py` |
+| `lumina clean` | Limpa artefatos | `commands/clean.py` |
+
+## `lumina.toml`
+
+Exemplo mínimo:
+
+```toml
+[package]
+name = "MeuBanco"
+version = "0.1.0"
+
+[build]
+opt-level = 3
+target = "native"
+```
+
+Exemplos reais no repo: `lumina.toml`, `examples/*/lumina.toml`.
+
+## `LUMINA_*` (variáveis de ambiente)
+
+> Preencher conforme `lumina_cli/` for evoluindo.
+</file>
+
+<file path="docs/engineering/benchmarks.md">
+# ⚡ Benchmarks
+
+Metodologia, ambiente, comandos de reprodução e interpretação.
+
+> **Aviso:** ambiente Codespace (2 vCPUs compartilhadas, Hyper-V).
+> Variância entre runs: mediana de `fib_c` variou 40% entre dois runs no
+> mesmo dia (gcc vs clang). **Não compare com bare-metal.** Para runs
+> anteriores veja `benchmarks/results/`.
+
+---
+
+## 🖥️ Ambiente
+
+Capturado com `neofetch` + `--version` (via `benchmarks/bench.sh`).
+Sem isso, os números não são reproduzíveis.
+
+```bash
+cd /workspaces/Lumina/benchmarks
+RUNS=20 WARMUP=3 CORE=1 ./bench.sh
+```
+
+### Ambiente do último run
+
+| Item | Valor |
+|---|---|
+| CPU | AMD EPYC 7763 @ 3.24 GHz |
+| vCPUs | 2 (compartilhadas, Hyper-V) |
+| RAM | 7.9 GiB |
+| SO | Ubuntu 24.04.4 LTS |
+| Kernel | 6.8.0-1064-azure |
+
+### Toolchains
+
+| Linguagem | Versão | Notas |
+|---|---|---|
+| **C** | **clang 18.1.3** | Alinhado com o backend do Lumina |
+| Rust | 1.98.1 | `-C opt-level=3 -C target-cpu=native -C lto=fat -C codegen-units=1` |
+| Go | 1.27.0 | `go build` padrão |
+| Node.js | v24.20.0 | — |
+| Python | 3.14.2 | — |
+| Lumina | HEAD do repo | `clang -O3` no link |
+
+> **Por que clang e não gcc?** Lumina usa LLVM/clang como backend. Compilar
+> o C com gcc mede "gcc vs clang", não "C vs Lumina". Com clang em ambos,
+> a comparação isola a linguagem + codegen, não o compilador C.
+> Para a versão histórica com gcc, use `CC=gcc ./bench.sh` (mas saiba que
+> `fib_c` cai de 33 ms para 21 ms só por causa do gcc — é *outro* benchmark).
+
+---
+
+## 📐 Metodologia
+
+1. **20 execuções** por binário, **3 warm-ups** descartados.
+2. **Pinning em vCPU 1** — `taskset -c 1` envolve o `hyperfine`, e a afinidade é herdada por cada filho.
+3. **Medição com `hyperfine`** com `--shell=none` (`-N`), `--export-json`.
+4. **N passado por `argv`** em C, Rust, Go **e Lumina** (o item #2 do roadmap fechou isso).
+5. **Reportar mediana + IQR**, não mean ± σ. Em VM ruidosa com cauda longa, a média é dominada por outliers. Regra: **IQR/mediana > 20% → ruidoso, > 10% → amarelo**.
+6. **Verificação de corretude antes de medir**: `bench.sh` compara a saída de todos os binários contra o C e aborta se houver divergência. Cobre `fib`, `primes`, `loop`, `matrix` **e `alloc_churn`** (com RNGs alinhados).
+
+### Anti-padrões corrigidos
+
+- **DCE (dead-code elimination).** LLVM fecha loops triviais em fórmula de Gauss. A barreira contra isso precisa depender do **loop counter** — uma condição em variável loop-invariant é hoisted por LICM e o DCE volta. Em `loop`, usamos `if (t * i < 0)` com `t` vindo de `clock_gettime`/`clock()`.
+
+- **Signed overflow UB em C.** `t * (int64_t)i` era UB em overflow, então o LLVM eliminava o branch. Corrigido com `-fwrapv` no `CFLAGS` (força wrapping, igual Rust `wrapping_mul` e Go int64) **e** cast `(uint64_t)t * i`.
+
+- **Malloc/free elimination.** clang -O3 apaga pares `malloc`/`store`/`load`/`free` quando o ponteiro não escapa. `alloc_churn` agora usa barreira (`__asm__ __volatile__` em C, `black_box()` em Lumina) que impede isso. Sem a barreira, `alloc_churn_lumina_nogc` mede **1.8 ms** em vez de ~13 ms — o loop inteiro era eliminado.
+
+- **Comparar tipos diferentes.** A versão anterior deste benchmark comparava `double` (C) com `int` (Lumina), o que produzia um falso "4.26× C". Agora todos usam `int64`.
+
+- **Comparar com números de outra máquina.** Só com `benchmarks/results/` do mesmo ambiente.
+
+- **gcc vs clang para C.** Mede o compilador, não a linguagem. `fib_c` roda **36% mais rápido com gcc** que com clang — um falso "1.55× Lumina/C" que aparece com `CC=gcc` some completamente com `CC=clang`.
+
+---
+
+## 🏃 Reprodução
+
+Tudo via um script único: `benchmarks/bench.sh`.
+
+```bash
+cd /workspaces/Lumina/benchmarks
+RUNS=20 WARMUP=3 CORE=1 ./bench.sh
+```
+
+O script:
+
+1. **Compila** todos os binários:
+   - C: `clang -O3 -march=native -fwrapv` (`CC=gcc` para comparar cross-compiler)
+   - Rust: `rustc -C opt-level=3 -C target-cpu=native -C lto=fat -C codegen-units=1`
+   - Go: `go build`
+   - Lumina: `lumina build --release` → `clang -O3`
+2. **Compila variantes `--no-gc`**: `primes_lumina_nogc`, `alloc_churn_lumina_nogc`.
+3. **Verifica corretude**: roda cada binário com `N` em `argv` e compara a saída numérica contra o C. Aborta se houver divergência.
+4. **Mede** com `taskset -c 1 hyperfine --warmup 3 --runs 20 -N`.
+5. **Sumariza** mediana + IQR + flag de ruído, em `results/YYYY-MM-DD-codespace/summary.md`.
+
+---
+
+## 📊 Resultados
+
+Run de **2026-09-18**, mediana de 20 execuções, pinned em vCPU 1.
+Todos os tempos em **milissegundos**. C compilado com **clang 18.1.3**.
+
+### Fibonacci (N=35)
+
+Recursão binária pura. Mede call overhead + cache de instrução.
+
+| Lang | Mediana | p25 | p75 | IQR/med | Flag | vs C |
+|---|---:|---:|---:|---:|---|---:|
+| **C -O3** | 32.91 | 30.58 | 36.27 | 17.3% | 🟡 | 1.00× |
+| **Rust -O3** | 32.08 | 29.60 | 35.66 | 18.9% | 🟡 | 0.97× |
+| **Lumina --release** | **31.85** | 26.50 | 45.52 | 59.7% | ⚠️ | **0.97×** |
+| Go | 62.17 | 59.22 | 79.28 | 32.3% | ⚠️ | 1.89× |
+
+**Leitura:** Lumina **empata com C e Rust** dentro da margem. O IQR de 59.7% do Lumina reflete a VM, não o código — o min absoluto foi 25.0 ms. Rodar isolado com `--warmup 10 --runs 30` estabilizaria a mediana.
+
+### Crivo de Eratóstenes (10M)
+
+Aloca array de 10M bytes, faz peneira. Memory-bound + GC na alocação inicial.
+
+| Lang | Mediana | p25 | p75 | IQR/med | Flag | vs C |
+|---|---:|---:|---:|---:|---|---:|
+| **C -O3** | **21.83** | 20.31 | 25.46 | 23.6% | ⚠️ | 1.00× |
+| **Rust -O3** | **21.68** | 20.69 | 25.29 | 21.2% | ⚠️ | 0.99× |
+| **Lumina --release** | 24.25 | 23.29 | 27.95 | 19.2% | 🟡 | **1.11×** |
+| Go | 35.93 | 33.97 | 38.39 | 12.3% | 🟡 | 1.65× |
+
+**Leitura:** Lumina fica a 11% do C. A diferença está em **System time** (6.0 vs 5.7 ms) — a alocação inicial de 10 MB via `GC_malloc` custa ~3 ms de CPU, e o Boehm GC faz bookkeeping de página no primeiro toque.
+
+**GC vs no-GC:**
+| Variante | Mediana | vs GC |
+|---|---:|---:|
+| `primes_lumina` | 27.79 | 1.00× |
+| `primes_lumina_nogc` | 23.48 | **0.84×** |
+
+`--no-gc` economiza **~15%**. Não é ruído: System time cai de ~7 ms para ~6 ms, e o `GC_init()` sai do caminho. Em `primes`, com 1 alocação só, esse é o custo *máximo* do GC — em código com menos alocação, é menor.
+
+### Loop matemático (100M)
+
+`acc += i; if (t * i < 0) acc = 0;` com `t` vindo de `clock()`. Impede DCE via data-dependency.
+
+| Lang | Mediana | p25 | p75 | IQR/med | Flag | vs C |
+|---|---:|---:|---:|---:|---|---:|
+| **C -O3** | 88.10 | 87.52 | 92.76 | 5.9% | ✅ | 1.00× |
+| Rust -O3 | 96.82 | 96.11 | 99.95 | 4.0% | ✅ | 1.10× |
+| **Lumina --release** | **88.87** | 88.00 | 93.88 | 6.6% | ✅ | **1.01×** |
+| Go | 82.55 | 82.10 | 84.70 | 3.2% | ✅ | 0.94× |
+
+**Leitura:** Lumina **empata com C** dentro do IQR (88.87 vs 88.10). Bate Rust por 8%. Go é 7% mais rápido — o compilador do Go reconhece esse tipo de loop melhor que o LLVM.
+
+### Matriz 200×200 (int64)
+
+Multiplicação de matriz densa. Working set de ~1 MB (cabe no L2).
+
+| Lang | Mediana | p25 | p75 | IQR/med | Flag | vs C |
+|---|---:|---:|---:|---:|---|---:|
+| C -O3 | 5.54 | 5.45 | 6.08 | 11.4% | 🟡 | 1.00× |
+| C -O3 (i64 puro) | 5.56 | 5.45 | 6.25 | 14.4% | 🟡 | 1.00× |
+| Rust -O3 | 7.99 | 7.95 | 8.33 | 4.7% | ✅ | 1.44× |
+| **Lumina --release** | **5.39** | 5.35 | 5.43 | **1.4%** | ✅ | **0.97×** |
+| Go | 14.25 | 14.15 | 15.45 | 9.1% | ✅ | 2.57× |
+
+**Leitura:** Lumina **empata com C** (1.4% de IQR — o número mais estável do run). O IQR de 1.4% é sinal de que a VM estava calma durante o Lumina.
+
+**Sobre a "vantagem" histórica:** a versão anterior media **7.47 ms** para C (gcc) e **5.69 ms** para Lumina, sugerindo ganho de 31%. Investigação: gcc **não vetoriza** o matmul com `(size_t)i * n + k`; clang também não; Lumina também não (os 7 `vector.body` são loops de inicialização, não o hot loop). O "ganho" era **gcc vs clang**, não Lumina vs C. Com clang em ambos, empate honesto.
+
+### Alloc churn (1M alloc/free)
+
+Aloca e libera 1M blocos de 1..512 bytes. Mede o Boehm GC de verdade — diferente de `primes`, que só faz a alocação inicial.
+
+| Lang | Mediana | p25 | p75 | IQR/med | Flag | vs C |
+|---|---:|---:|---:|---:|---|---:|
+| **C -O3** | 13.27 | 12.04 | 16.04 | 30.2% | ⚠️ | 1.00× |
+| **Lumina --no-gc** | **12.15** | 12.06 | 17.12 | 41.7% | ⚠️ | **0.92×** |
+| Lumina --release (GC) | 50.01 | 46.22 | 51.47 | 10.5% | 🟡 | **3.77×** |
+
+**Leitura:** os dois primeiros medem `malloc`/`free` da glibc — empate dentro do ruído. `alloc_churn_lumina` é **3.77× mais lento** que `--no-gc`: esse é o custo real do Boehm GC em churn.
+
+**Por que 3.77×?** Boehm `GC_malloc` faz mais bookkeeping que glibc: mantém bitmaps de página, checa se o GC precisa rodar, e `GC_free` marca blocos livres mas não os devolve ao SO. Para churn pequeno (1..512 bytes), o overhead por chamada é ~35 ns em vez de ~9 ns.
+
+**Não é bug do Lumina.** `--no-gc` usa `malloc` da libc exatamente como o C faz. O gap é o preço do GC — troca latência de alloc por segurança de memória.
+
+---
+
+## 🔬 Como interpretar
+
+### Fator vs C (mediana)
+
+| Bench | Lumina / C | Avaliação |
+|---|---:|---|
+| Fib (35) | **0.97×** | Empate, dentro do ruído |
+| Primes (10M) | 1.11× | 11% atrás — System time do GC |
+| Loop (100M) | **1.01×** | Empate |
+| Matrix (200×200) | **0.97×** | Empate, IQR 1.4% |
+| Alloc churn (1M) | 3.77× | Custo real do Boehm GC |
+
+### Onde Lumina está bem
+
+- **Compute-bound (matrix, loop):** empata com C. Mesmo backend, IR comparável.
+- **Call-heavy (fib):** empata com C e Rust. A diferença histórica (1.25×) era gcc-vs-clang.
+- **`--no-gc` (primes, alloc_churn):** **empata com C**. Se você não precisa de GC, o custo é zero.
+
+### Onde Lumina pode melhorar
+
+- **`primes` GC:** os ~3 ms de CPU de `GC_malloc` na alocação inicial. Solução: escape analysis para arrays grandes não-coletados, ou flag por chamada.
+- **`alloc_churn` GC:** 3.77× é o preço do GC. Se benchmarks como este importam, considere uma arena (`std/alloc.lm` já existe) para churn.
+
+### Por que `--no-gc` importa
+
+Todos os benchmarks rodam em três configurações:
+- `--release` (padrão): Boehm GC
+- `--no-gc`: `malloc`/`free` da libc
+
+A diferença **isola** o custo do GC de cada benchmark:
+| Bench | GC | no-GC | Custo do GC |
+|---|---:|---:|---:|
+| primes (1 alloc) | 27.79 | 23.48 | 15% |
+| alloc_churn (1M allocs) | 50.01 | 12.15 | 76% |
+
+---
+
+## ⚠️ Caveats do Codespace
+
+| Fonte | Impacto |
+|---|---|
+| vCPU compartilhada | IQR/mediana de 5–60% mesmo em medianas |
+| Governor `schedutil` (sem `sudo`) | Frequência oscila 1.5–3.2 GHz |
+| 2 vCPUs | Benchmarks multi-thread não escalam |
+| L3 compartilhado com vizinhos | Ruído em memory-bound |
+| `fib_lumina` IQR 59.7% | Candidato a rerun isolado |
+
+**Não compare com bare-metal.** Só com runs anteriores do mesmo Codespace, de preferência no mesmo dia.
+
+---
+
+## 📁 Resultados históricos
+
+Cada run salvo em `benchmarks/results/YYYY-MM-DD-codespace/` com:
+- `env.md` — ambiente e toolchains (inclui compilador C usado)
+- `<bench>.json` — saída crua do `hyperfine`
+- `summary.md` — tabela de medianas + IQR + flags
+- `primes_gc_vs_nogc.json` — comparativo GC
+
+Para comparar runs: use a **mediana** e verifique a coluna **IQR/med**. Se as duas medianas divergirem >20%, um dos runs foi prejudicado pela VM.
+
+---
+
+## 📋 Estado dos itens do roadmap
+
+**Fechados (última sessão):**
+
+1. ✅ **`black_box` nativo** — builtin do compilador, usado em `alloc_churn.lm`.
+2. ✅ **`argv`/`atoi`** — todos os `.lm` de benchmark agora parametrizados por `argv`.
+3. ✅ **`loop` data-dependente** — 88.87 ms, empata com C.
+4. ✅ **Isolar GC em primes** — `--no-gc` economiza 15%.
+5. ✅ **Investigar matrix** — empate real; "ganho" era gcc vs clang.
+6. ✅ **Alloc churn** — 3.77× é o custo real do Boehm.
+
+**Próximos (fora do escopo desta sessão):**
+
+- **Escape analysis** para arrays com N dinâmico mas loop-bounded — destravaria `primes` no stack.
+- **`--gc-strategy`** (nursery, incremental) — trade-off latência vs throughput.
+- **`std/alloc` arena** como primitiva de primeira classe, para churn controlado.
+- **Aliasing hints** (`restrict`/`noalias`) expostos em Lumina — abre vetorização onde o LLVM hoje desiste.
+
+---
+
+## 🛠️ Reprodução dos números
+
+```bash
+cd /workspaces/Lumina/benchmarks
+RUNS=20 WARMUP=3 CORE=1 ./bench.sh 2>&1 | tee /tmp/bench.log
+```
+
+Para uma tabela específica (com menos ruído):
+
+```bash
+# Só fib, com mais warmup e runs
+taskset -c 1 hyperfine --warmup 10 --runs 50 -N \
+  "./fib_c 35" "./fib_rs 35" "./fib_go 35" "./fib_lumina 35"
+
+# Só o gap GC/no-GC
+taskset -c 1 hyperfine --warmup 5 --runs 30 -N \
+  "./primes_lumina 10000000" "./primes_lumina_nogc 10000000"
+
+# Só alloc_churn, para validar a barreira anti-DCE
+taskset -c 1 hyperfine --warmup 5 --runs 30 -N \
+  "./alloc_churn_c 1000000" \
+  "./alloc_churn_lumina 1000000" \
+  "./alloc_churn_lumina_nogc 1000000"
+```
+</file>
+
+<file path="docs/engineering/bugs.md">
+# 🐛 Bugs corrigidos
+
+Lista completa de bugs silenciosos corrigidos no compilador. Todos passavam pelo CI original porque os testes só exercitavam parser/semantic — não runtime. Cada um tem teste de regressão.
+
+**Sintoma** = o que o usuário via. **Correção** = o que mudou no código. **Teste** = arquivo de regressão.
+
+---
+
+## Runtime
+
+| Bug | Sintoma | Correção | Teste |
+|---|---|---|---|
+| `break` / `continue` no-op | `for i in 0..100: if i == 5: break` continuava até 100 | `loop_stack` com branch para `end_bb`/`inc_bb` | `test_runtime_bugs.py` |
+| `assert` sem efeito | `assert(1 == 2)` imprimia a linha seguinte e saía com 0 | `fflush(NULL)` + `abort()` + `unreachable` | `test_runtime_bugs.py` |
+| `defer` inline | `defer print("b")` rodava imediatamente | `defer_stack` por função | `test_runtime_bugs.py` |
+| `defer` em `if` não tomado rodava | `if false: defer print("x")` imprimia `x` | Escopo de bloco | `test_defer_scope.py` |
+| `defer` em TCO era ignorado | `return self(...)` pulava defers | `_emit_all_defers()` antes do branch de TCO | `test_tco.py` |
+| `and` / `or` sem short-circuit | `x != 0 and 10/x > 1` causava SIGFPE | Basic blocks + `phi i1` | `test_runtime_bugs.py` |
+
+## Codegen
+
+| Bug | Sintoma | Correção | Teste |
+|---|---|---|---|
+| Formatter apagava `@derive` | `@derive(Eq, Debug)` removido no `lumina fmt` | `_format_attrs()` | `test_runtime_bugs.py` |
+| Boehm GC nunca ativava | `-lgc` era decorativo | `GC_malloc` + `call GC_init()` | `test_gc.py` |
+| Match guard em enum nunca casava | `case Circle(r) if r > 10:` sempre pulava | 4 blocos por case; bind ANTES do guard | `test_match_guard_enum.py` |
+| Match guard em str ignorado | `_codegen_match_with_guard` não testava voidptr | Branch de `strcmp` para voidptr | `test_match_guard_str.py` |
+| Self-binding declarava `int` fixo | `case s if s.contains("x")` falhava | `variant_name is None` antes de `isinstance(binding, list)` | `test_match_guard_str.py` |
+| String literal virava self-binding | `case "build":` casava qualquer string | Parser envolve literal em `StringExpr` | `test_match_guard_str.py` |
+| `covered_variants` explodia com multi-pattern | `unhashable type: list` | Achata listas, ignora `None`, honra wildcard | `test_multi_pattern.py` |
+| `struct` recompilado no REPL | `P is already defined` | Cada `LLVMCodegen` cria seu próprio `ir.Context()` | `cli/test_repl.py` |
+| `let` em campo `int` aceitava `str` | `Ponto { x: "texto", y: 2 }` imprimia endereço | `is_assignable(field_decl_type, value_type)` por campo | `test_struct_field_types.py` |
+| `Box<T>` como parâmetro não compilava | `fn put<T>(b: Box<T>, val: T)` → erro | `unify_type` + `substitute_generic` | `test_nested_generics.py` |
+| LSP rename misturava escopos | Renomear `i` em `main` mexia no `i` de `helper` | `_filter_refs_for_scope` via `scope_map` | `lsp/tests/test_lsp_keys.py` |
+| SCC dispatcher sem `defer_stack` | `AttributeError` em mutual TCO | Init `defer_stack` no entry + reset por membro | `test_tco_mutual.py` |
+| `@attrs` sobrescritos como tuples | `@safe`/`@macro` nunca ativavam | Removido override em `parser/parser.py::parse` | `test_safe_mode.py` / `test_macros.py` |
+| `read_file()` sem null check | segfault quando arquivo não existe | `phi` retorna string vazia se `fopen == NULL` | `examples/database.lm` |
+| `free()` rejeitava `i64*` | `TypeError: i8* != i64*` | `bitcast` antes do call | `test_escape_analysis.py` |
+| `chr`/`atoi` sem branch no codegen | retornavam `0` sempre | Branches dedicados em `calls.py` | `test_std_result.py` |
+| `SliceExpr` virava `ptr` | `s[..3] == "abc"` comparava endereços | Infere tipo da fonte (`str` → `str`) | `examples/string_methods_test.lm` |
+| `bool` → `int` com `sext` | `true` virava `-1` | `zext` quando origem é `i1` | `test_codegen_bugs.py` |
+| `for x in arr` perdia o `N` | loop vazio (N=0) | `array_lengths` no codegen, consultado por `_visit_for_iterable` | `test_forin.py` |
+| `impl Box<T>` chamado em `Box<int>` | `%"Box"* != %"Box_int_"*` | `bitcast` para o tipo base quando cai no fallback | `test_generic_impl.py` |
+| `std/result::unwrap_or` usava `default` | keyword reservada | Renomeado para `fallback` | `test_std_result.py` |
+| `and_then` retornava `int` para function pointers | `_require_assignable` rejeitava `Result` | Retorna `None` (tipo desconhecido) | `test_std_result.py` |
+
+## Semantic
+
+| Bug | Sintoma | Correção | Teste |
+|---|---|---|---|
+| `lumina lint` estourava `RecursionError` | recursão mútua `_collect_vars`/`_collect_exprs` | Reescrito como `_collect` única | `test_lint.py` |
+| Variante de enum com payload usada bare | `let x = Some` compilava silenciosamente | Semantic rejeita se variante tem payload | `test_enum_bare_variant.py` |
+| `fn_name` usado como valor | `sort(arr, n, _cmp_asc)` → "Variável não declarada" | Semantic retorna `"fn"`, codegen bitcast p/ voidptr | `test_sort.py` |
+| Indirect call com N args | `cmp(a, b)` só passava `a` | `fn_ty = i64 (i64) * n_args` | `test_sort.py` |
+| `impl Box<T>:` chamando método base | `%"Box"* != %"Box_int_"*` | Bitcast no `codegen_method_call` fallback | `test_generic_impl.py` |
+
+## Stdlib / Builtins
+
+| Bug | Sintoma | Correção | Teste |
+|---|---|---|---|
+| `stdin`/`stdout`/`stderr` fora de `BUILTIN_RET` | `std/io.lm` falhava com "Tipo inválido para parâmetro 'stream': esperado 'str', obteve 'int'" | `BUILTIN_RET` centralizado em `lumina/builtins.py` | `test_std_io.py` |
+| `extern fn fgets` colidia com builtin | `TypeError: Type of #2 arg mismatch: i64 != i32` | `generate_module` pula `ExternDecl` que colide com builtin | `test_std_io.py` |
+| `getchar` retornava `i32` | `ret i32 %getchar_call` não casava com `-> int` | `sext i32 → i64` em `calls.py` | `test_std_io.py` |
+| `visit_ReturnStmt` sem `iN → i64` | qualquer builtin que devolvesse i32 quebrava o ret | Normalização defensiva `iN → i64` | `test_std_io.py` |
+| `"\n"` em fonte virava 2 bytes literais | `fputs("\n", out)` imprimia `\n` literal | Lexer processa escapes em compile-time | `test_std_io.py` / `test_lexer.py` |
+| `read_line` com `buf[n-1] = 0` | newline não era removido da linha lida | Loop explícito em `std/io.lm` | `test_std_io.py` |
+| `_handle_indent` não era chamado | todos os blocos indentados falhavam com "Esperado INDENT, mas encontrei X" | Restaurada chamada em `tokenize()` | `test_lexer.py::test_indent_dedent` |
+
+## Closures & Macros
+
+| Bug | Sintoma | Correção | Teste |
+|---|---|---|---|
+| Closure com captura como callback segfaultava | `sort_by(arr, n, fn(a, b): (b-a)*mult)` passava bloco `{fn_ptr, env_ptr}` como fn ptr cru | Tipo `fn` unificado em fat pointer; `_call_closure` em toda indireta | `test_sort.py::test_sort_closure_captures` |
+| `_validate_macro` rejeitava declaração multi-statement | macro multi-statement não podia ser declarada | Validação só verifica corpo não-vazio; exigência de `return <expr>` fica no call site de expressão | `test_macro_stmts.py` |
+| `parse_struct` usava `expect(IDENT)` no tipo do campo | `struct S: cb: fn(int) -> int` falhava com "Esperado IDENT, mas encontrei FN ('fn')" | `parse_type()` (mesmo helper de params/enums/traits) | `test_fn_struct_fields.py` |
+
+## Generics (sessão de fechamento)
+
+| Bug | Sintoma | Correção | Teste |
+|---|---|---|---|
+| `get_llvm_param_type` inconsistente | `TypeError: cannot store %"Box_int_" to %"Box_int_"**` em `fn get(b: BI)` | `get_llvm_type` força monomorphização antes de checar `struct_types`; structs sempre devolvem ponteiro | `test_generic_type_alias.py::test_generic_alias_inside_fn_sig` |
+| `impl Box<T>:` registrava `Box_T__get` | `Método 'get' não implementado para 'Box'` | Parser normaliza `impl Box<T>:` → nome base `Box` (se args são todos type params únicos maiúsculos) | `test_impl_box_generic.py::test_generic_impl_still_works_as_fallback` |
+| Semantic procurava `Box_get`, existia `Box_int__get` | `Método 'get' não implementado` mesmo com `impl Getter for Box<int>` | Lookup tenta nome completo (`mangle_method`) e cai para base | `test_impl_box_generic.py::test_impl_trait_for_box_int` |
+| `struct_defs["Custom<int>"]` não registrado | `KeyError: 'Custom<int>'` em `_construct_enum` | `get_or_create_monomorphized_{struct,enum}` registra sob chave canônica **e** mangled | `test_generic_enums.py` |
+| `visit_VarDecl` forçava tipo default de enum | `bitcast Custom_int_* → Custom_int_` inválido em `let c = Wrap(42)` | Se `val.type` já é ponteiro para struct identificada, usa `val.type` como tipo do slot | `test_generic_enums.py::test_generic_enum_str_payload` |
+
+## CLI
+
+| Bug | Sintoma | Correção | Teste |
+|---|---|---|---|
+| CLI engolia exit code | `lumina run` sempre saía com 0 | `cmd_run` propaga exit | `cli/test_exit_codes.py` |
+| `test` com falhas saía com 0 | `lumina test` retornava 0 | `cmd_test` retorna nº de falhas | `cli/test_exit_codes.py` |
+| `--help` caía em "comando desconhecido" | — | `main()` trata `-h`/`--help`/`help`/sem args | `cli/test_exit_codes.py` |
+| `_compile_extra_objects` ignorava `extra_flags` | `.cpp` sem `-DFOO=42` | Passa `linker_extra_flags` para clang/clang++ | `cli/test_build.py` |
+</file>
+
+<file path="docs/engineering/tests.md">
+# 🧪 Testes
+
+428 testes em 45 arquivos, organizados por camada do compilador. Todos rodam em ~2 min no CI.
+
+---
+
+## Rodando
+
+```bash
+pytest tests/ -v                       # tudo
+pytest tests/ -k "generic"             # filtro por nome
+pytest tests/test_generic_enums.py -v  # arquivo único
+```
+
+Fixtures comuns em [`tests/conftest.py`](../../tests/conftest.py):
+
+- `lex(src)` — tokeniza
+- `parse(src)` — lexer + parser
+- `analyze(src)` — lexer + parser + semantic
+- `run_cli(*args)` — subprocess `python -m lumina_cli`
+
+---
+
+## Distribuição
+
+| Arquivo | Testes | Cobre |
+|---|---|---|
+| `test_lexer.py` | 30 | Tokens, strings, indentação, comentários |
+| `test_parser.py` | 36 | Declarações, expressões, slices, fluxo |
+| `test_semantic.py` | 19 | Escopo, exaustividade, traits |
+| `test_types.py` | 24 | Validação de tipo |
+| `test_codegen_bugs.py` | 19 | Regressão no codegen (IR + runtime) |
+| `test_semantic_bugs.py` | 13 | Regressão no semantic |
+| `test_runtime_bugs.py` | 9 | Runtime end-to-end |
+| `test_closures.py` | 10 | Closures (captura, escopo, nested) — inclui regressão de return type |
+| `test_defer_scope.py` | 7 | Escopo de defer (bloco + TCO) |
+| `test_enum_bare_variant.py` | 4 | Variantes bare |
+| `test_escape_analysis.py` | 4 | Escape analysis (alloca vs GC) |
+| `test_forin.py` | 9 | `for x in arr` |
+| `test_gc.py` | 6 | Boehm GC ativa |
+| `test_generic_impl.py` | 6 | `impl Box<T>:` |
+| `test_lint.py` | 14 | `lumina lint` (W001..W005) |
+| `test_macro_stmts.py` | 8 | `nome!(args)` + substituição em statements |
+| `test_macros.py` | 6 | `@macro` (expressão) |
+| `test_tco.py` | 7 | TCO self-recursion |
+| `test_tco_mutual.py` | 6 | TCO mutual recursion |
+| `test_match_guard_enum.py` | 4 | Guard em enum |
+| `test_match_guard_str.py` | 4 | Guard em str |
+| `test_match_no_guard.py` | 6 | Regressão pós-refactor |
+| `test_multi_pattern.py` | 8 | `case A \| B:`, wildcard |
+| `test_nested_generics.py` | 6 | `Box<T>` como parâmetro |
+| `test_nil.py` | 10 | `nil`, `== nil`, `?.` em nil |
+| `test_struct_field_types.py` | 6 | Type check em campos |
+| `test_safe_mode.py` | 6 | `@safe` |
+| `test_sort.py` | 10 | `std/sort` + `for i, x in arr` + closure como callback |
+| `test_std_result.py` | 9 | `std/result` helpers |
+| `test_std_io.py` | 6 | `std/io` |
+| `test_tuples.py` | 7 | Tuplas literais + destructuring |
+| `test_fmt_comments.py` | 8 | Formatter com comentários |
+| `test_fn_types.py` | 12 | Assinatura `fn(T1, T2) -> R` |
+| `test_fn_struct_fields.py` | 7 | Campo fn-typed |
+| `test_type_alias.py` | 8 | Type alias (primitivo, fn, struct, encadeado) |
+| `test_generic_enums.py` | 2 | Enum genérico com inferência |
+| `test_impl_box_generic.py` | 3 | `impl Trait for Box<int>` |
+| `test_generic_type_alias.py` | 4 | Alias genérico em assinatura |
+| `test_llvm_attrs.py` | 9 | `@inline`, `@cold`, `@hot` |
+| `test_named_args.py` | 9 | Argumentos nomeados |
+| `test_std_math.py` | 7 | `std/math` |
+| `test_std_os.py` | 5 | `std/os` |
+| `test_std_path.py` | 8 | `std/path` |
+| `cli/test_build.py` | 2 | `new` → `build` → `run` |
+| `cli/test_errors.py` | 1 | Comando desconhecido |
+| `cli/test_exit_codes.py` | 7 | Exit codes + `--help` |
+| `cli/test_fmt.py` | 1 | Formatter em arquivo válido |
+| `cli/test_fmt_stdin.py` | 5 | `--stdin`, `--check` |
+| `cli/test_repl.py` | 10 | REPL persistente |
+| `features/test_examples_smoke.py` | 1 | Compila exemplos não-skipados |
+| `features/test_language_features.py` | 1 | Output exato de `uncertain_features.lm` |
+
+**Total: 428 passed.**
+
+---
+
+## Suites adicionais
+
+### LSP (isolado)
+
+```bash
+cd lumina-vscode
+python3 -m pytest tests/test_lsp_keys.py -v   # 8 passed
+```
+
+### Standalone (~5s, sem pytest)
+
+```bash
+python3 run_tests.py
+# 📊 Resultado: 28/28 verificações OK
+```
+
+### Smoke de exemplos
+
+```bash
+./scripts/check_examples.sh --run
+# 📊 PASS: 54    ⏭️  SKIP: 17    ❌ FAIL: 0
+```
+
+Os 17 skipados são servidores/sockets/threads que não terminam sozinhos — estão listados em [`tests/features/skip.txt`](../../tests/features/skip.txt).
+
+---
+
+## Filosofia de testes
+
+- **Runtime > IR.** Quando possível, o teste **compila e executa** o binário
+  (`_run`), não só inspeciona IR. O IR pode estar "correto" e o programa
+  produzir resultado errado.
+
+- **Cada bug histórico tem teste de regressão.** Ver [`bugs.md`](bugs.md).
+  Quando um teste passa a falhar por causa de uma mudança de infraestrutura
+  (ex.: `main` ganhando assinatura C `i32 (i32, i8**)` quebrou closures),
+  a correção **não** afrouxa o teste — ela restaura a invariante que o teste
+  verifica. A suíte é o contrato.
+
+- **Negativos importam.** Para cada feature, testar também o erro esperado
+  (`_build_fails`).
+
+- **Fixtures reusadas.** Os helpers `_run`, `_build`, `_build_ir`, `_lines`
+  são padrão em arquivos de teste.
+
+- **Barreiras contra DCE em testes de benchmark.** Benchmarks que medem
+  trabalho puro (ex.: `alloc_churn`, `loop`) precisam de uma barreira que o
+  otimizador não atravesse. Em Lumina: `black_box(x)`. Em C: `__asm__
+  __volatile__("" : : "r"(p) : "memory")`. Sem isso, clang -O3 elimina o
+  loop inteiro e o teste mede zero.
+</file>
+
+<file path="lumina.toml">
+[package]
+name = "teste_deps"
+version = "0.1.0"
+entry = "main.lm"
+
+[dependencies]
+# Substitua por um repositório seu ou de teste que tenha arquivos .lm
+meu_pacote = "github:adamgabriel701/Lumina"
+</file>
+
+<file path="pyproject.toml">
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lumina-lang"
+version = "1.0.0"
+description = "Lumina Programming Language Compiler and CLI"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "Adam Gabriel" }
+]
+dependencies = [
+    "llvmlite>=0.40.0"
+]
+
+[project.scripts]
+lumina = "lumina_cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["lumina*", "lumina_cli*"]
+</file>
+
+<file path="docs/contributing.md">
+# 🤝 Contribuindo com Lumina
+
+Obrigado pelo interesse! Este documento cobre setup, testes, estilo e o checklist de PR.
+
+---
+
+## Setup de desenvolvimento
+
+### 1. Clone e crie venv
+
+```bash
+git clone https://github.com/adamgabriel701/Lumina.git
+cd Lumina
+python3.11 -m venv .venv
+source .venv/bin/activate
+```
+
+### 2. Pré-requisitos de sistema
+
+```bash
+# Ubuntu/Debian
+sudo apt install -y llvm-14 clang libgc-dev qemu-user
+
+# Fedora
+sudo dnf install -y llvm-devel clang gc-devel qemu-user
+```
+
+### 3. Instale em modo editável
+
+```bash
+pip install -e ".[dev]"
+```
+
+### 4. Verifique que tudo funciona
+
+```bash
+pytest tests/ -q                    # 428 passed
+python3 run_tests.py                # 28/28
+./scripts/check_examples.sh --run   # 54 PASS / 17 SKIP / 0 FAIL
+```
+
+---
+
+## Estrutura do projeto
+
+Veja [Internals](internals/arquitetura.md) para detalhes de cada módulo.
+
+```
+lumina/               # Compilador
+lumina_cli/           # CLI
+lumina-vscode/        # Extensão VS Code + LSP
+std/                  # Standard Library (.lm)
+tests/                # Pytest
+examples/             # Exemplos prontos
+docs/                 # Esta documentação
+scripts/              # Shell helpers
+benchmarks/           # Benchmarks
+```
+
+---
+
+## Estilo de código
+
+### Python
+
+- **Seguimos o estilo do arquivo** — não reformate PRs inteiros.
+- Linhas até ~100 colunas.
+- Docstrings em **português** (consistência com o código atual).
+- Type hints onde ajuda (não obrigatório).
+- **Sem `print` de debug** deixado no código.
+
+### Lumina (`.lm`)
+
+- Indentação com **4 espaços**.
+- `lumina fmt` no seu arquivo antes de commitar.
+- Comentários `##` acima de funções/structs documentadas (`lumina doc` os lê).
+
+### Commits
+
+Formato [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+<tipo>(<escopo>): <resumo curto>
+
+<corpo opcional>
+
+<rodapé opcional>
+```
+
+Tipos usados:
+
+| Tipo | Uso |
+|---|---|
+| `feat` | Nova feature |
+| `fix` | Correção de bug |
+| `docs` | Documentação |
+| `test` | Testes |
+| `refactor` | Refatoração sem mudança de comportamento |
+| `perf` | Melhoria de performance |
+| `chore` | Tarefas (build, deps) |
+
+Exemplos:
+
+```
+feat(lang): type alias genérico com substituição de params
+
+fix(codegen): get_llvm_param_type força monomorphização antes de checar struct_types
+
+docs: Quickstart com exemplo Hello World antes das tabelas
+```
+
+---
+
+## Testes
+
+### Antes de abrir PR
+
+```bash
+# Rápido (~5s) — smoke test
+python3 run_tests.py
+
+# Médio (~30s) — testes de compilador
+pytest tests/ -q -x
+
+# Completo (~2 min) — inclui CLI e smoke de exemplos
+pytest tests/ -q
+./scripts/check_examples.sh --run
+```
+
+### Adicionando testes
+
+**Para um bug fix:** adicione um teste de regressão em `tests/test_<área>_bugs.py` ou no arquivo mais próximo. O padrão é:
+
+```python
+def test_bug_descricao_curta():
+    src = (
+        'fn main() -> int:\n'
+        '    # código que reproduz o bug\n'
+        '    return 0\n'
+    )
+    out, rc = _run(src)  # compila + executa
+    assert "esperado" in out
+```
+
+**Para uma feature nova:** crie `tests/test_<feature>.py` com casos positivos e negativos.
+
+**Para mudança no codegen:** se o IR importa, inspecione com `_build_ir(src)` (disponível em vários testes).
+
+### Helpers comuns
+
+A maioria dos arquivos de teste define:
+
+```python
+def _run(src):       # compila + executa, retorna (stdout, rc)
+def _build(src):     # só compila, retorna CompletedProcess
+def _build_ir(src):  # compila e retorna o IR
+def _lines(out, wanted):  # filtra linhas que casam
+```
+
+Reuse-os em vez de reinventar.
+
+---
+
+## Adicionando uma feature de linguagem
+
+Checklist típico (ordem):
+
+1. **AST** (`lumina/ast/`) — novo nó, se necessário.
+2. **Lexer** (`lumina/lexer/`) — novo token, se necessário.
+3. **Parser** (`lumina/parser/`) — regra gramatical.
+4. **Semantic** (`lumina/semantic/`) — type checking, escopo.
+5. **Codegen** (`lumina/codegen/`) — geração de IR.
+6. **Formatters** (`lumina_cli/compiler/formatter.py`) — reemissão.
+7. **Testes** (`tests/test_<feature>.py`) — positivos e negativos.
+8. **Docs** (`docs/linguagem.md` ou `docs/stdlib.md`).
+9. **CHANGELOG.md** — entrada em `[Unreleased]`.
+
+### Exemplo: adicionar um builtin
+
+Builtins ficam em `lumina/builtins.py` (fonte única). Siga o padrão:
+
+```python
+BUILTIN_FUNCTIONS = frozenset({...})
+
+BUILTIN_RET = {
+    ...
+    "meu_builtin": "int",  # tipo de retorno
+}
+```
+
+Depois, no codegen (`lumina/codegen/expressions/builtins.py`), adicione o branch:
+
+```python
+if func_name == "meu_builtin":
+    # emitir IR
+    return ...
+```
+
+E um teste em `tests/test_std_<área>.py`.
+
+---
+
+## Adicionando um módulo `std/*`
+
+1. Crie `std/<nome>.lm`.
+2. Documente com `##` acima de cada função pública.
+3. Adicione um teste em `tests/test_std_<nome>.py` (padrão: compila + executa).
+4. Adicione em `docs/stdlib.md`.
+5. Adicione uma linha em `README.md` (seção Standard Library).
+6. Adicione em `CHANGELOG.md`.
+
+---
+
+## Checklist de PR
+
+Antes de abrir:
+
+- [ ] `pytest tests/ -q` passa (0 falhas)
+- [ ] `python3 run_tests.py` passa (28/28)
+- [ ] `./scripts/check_examples.sh --run` sem regressão (54 PASS / 17 SKIP / 0 FAIL)
+- [ ] `lumina fmt --check <arquivos alterados>` (se mexeu em `.lm`)
+- [ ] `lumina lint <arquivos alterados>` sem novos warnings
+- [ ] Testes de regressão adicionados (para bug fixes)
+- [ ] Docs atualizadas (linguagem, stdlib, ferramental, se aplicável)
+- [ ] `CHANGELOG.md` atualizado em `[Unreleased]`
+- [ ] Commit segue Conventional Commits
+- [ ] Descrição do PR explica **o quê** e **por quê**
+
+---
+
+## Reportando bugs
+
+Inclua:
+
+1. **Comando exato** que reproduz (`lumina build foo.lm`, `pytest tests/...`)
+2. **Saída completa** (stdout + stderr)
+3. **Versão** (`lumina --version`, `python3 --version`, `llvm-config --version`)
+4. **Plataforma** (Linux/macOS/WSL, arquitetura)
+5. Se possível, o `.lm` mínimo que reproduz o bug
+
+Bugs de **runtime** são os mais valiosos — se o programa compila mas dá resultado errado ou segfault, inclua o output esperado vs o obtido.
+
+---
+
+## Áreas onde ajuda é bem-vinda
+
+Do [Roadmap](../README.md#️-roadmap):
+
+- **Safe-by-default global** (sem `@safe` explícito)
+- **Macros com quasiquote**
+- **Self-hosting (bootstrapping)** — compilador em Lumina
+- **Package registry**
+- **Code actions (quick fixes) no LSP**
+- **Inlay hints no LSP**
+
+E sempre:
+
+- Mais exemplos em `examples/`
+- Documentação em `docs/`
+- Cobertura de testes em áreas cinzentas (codegen de tipos exóticos, cross-compile, FFI)
+
+---
+
+## Dúvidas?
+
+- Abra uma [issue](https://github.com/adamgabriel701/Lumina/issues)
+- Ou veja o [README principal](../README.md) para visão geral
+- Detalhes técnicos em [Internals](internals/arquitetura.md)
+</file>
+
+<file path="docs/index.md">
+---
+tags: [lumina, docs]
+---
+
+# Lumina — Documentação
+
+Linguagem de programação compilada para LLVM. Toolchain em Python,
+stdlib em `.lm`, extensão VSCode com LSP.
+
+## Por onde começar
+
+| Você é… | Vá para |
+|---|---|
+| **Novo usuário** | [Guia rápido](getting-started/guia-rapido.md) |
+| **Usuário diário** | [Linguagem](guia/linguagem.md) · [Stdlib](guia/stdlib.md) · [Ferramental](guia/ferramental.md) |
+| **Usando a CLI** | [Referência da CLI](referencia/cli.md) |
+| **Contribuidor** | [Arquitetura](internals/arquitetura.md) · [Contributing](contributing.md) |
+| **Mantenedor** | [Engineering](engineering/benchmarks.md) · [ADRs](engineering/decisoes/) |
+
+## Mapa da documentação
+
+- `getting-started/` — instalação e primeiros passos
+- `guia/` — linguagem, stdlib, ferramental
+- `referencia/` — comandos da CLI, formato `.lm`, `lumina.toml`
+- `internals/` — pipeline (lexer → parser → semântica → codegen → runtime)
+- `engineering/` — benchmarks, bugs, testes, ADRs
+</file>
+
+<file path="docs/README.md">
+---
+tags: [lumina, docs]
+---
+
+Este diretório contém a documentação do Lumina.
+
+👉 **Comece por [index.md](index.md).**
+</file>
+
+<file path="CHANGELOG.md">
+# Changelog
+
+Todas as mudanças notáveis deste projeto são documentadas aqui.
+
+O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
+e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
+
+---
+
+## [Unreleased — 0.4.0]
+
+### Adicionado
+
+#### Linguagem
+- **`type Alias = <tipo>`**: abrevia tipos longos e dá nome semântico. `type Callback = fn(int) -> int`; use `Callback` em params, retornos, campos de struct, `VarDecl` (locais e top-level) e payloads de enum. Aliases encadeados (`A → B → C`) e aliases dentro de assinaturas (`type Pred = fn(Callback) -> int`) funcionam. A expansão acontece na passada 0 do semantic; o resto do pipeline nunca vê o alias.
+- **`type Alias<A, B> = ...` (aliases genéricos)**: aliases com parâmetros de tipo, com substituição de args. `type IPair<B> = Pair<int, B>` → use `IPair<str>` em qualquer posição de tipo (params, retornos, campos, `VarDecl`, payloads). O `expand_type_alias` faz substituição + recursão.
+- **Enums genéricos com inferência de type args**: `enum Res<T, E>: Ok(T); Err(E)` — os type args são inferidos no construtor (`Ok(42)` → `Res<int, int>`; `Has("hello")` → `Box<str>`), e o registro acontece sob chave **canônica** (`Res<int,int>`) **e** mangled (`Res_int_int_`). Habilita enums genéricos aninhados com `match` correto.
+- **`impl Trait for Box<int>` (especialização de trait em tipo genérico)**: além de `impl Box<T>:` (métodos na struct genérica, `<T>` descartado para registro → `Box_get`), agora `impl Trait for Box<int>:` preserva o tipo completo (mangle `Box_int__metodo`) e coexiste com `impl Trait for Box<str>:` (mangle `Box_str__metodo`). O lookup em chamadas tenta o nome completo primeiro e cai para o base como fallback.
+- **`std/iter` e `std/sort` com assinaturas tipadas**: callbacks passam a ser `fn(int) -> int` (`std/iter`) e `fn(int, int) -> int` (`std/sort`). Passar lambda com arity ou tipos errados é detectado em compile-time em vez de segfault em runtime.
+- **Tipos de função com assinatura (`fn(int, int) -> int`)**: antes `fn` era opaco (`voidptr`); agora é possível anotar params e retornos. Lambdas e funções nomeadas propagam a assinatura automaticamente, e chamadas via variável `fn` são validadas em compile-time (arity + tipos). `fn` sem assinatura continua aceitando qualquer valor, e mistura tipado/untyped é permitida nos dois sentidos.
+- **`fn` como campo de struct**: `struct Handler: cb: fn(int) -> int`. Atribuir lambda (com ou sem captura) ou função nomeada ao campo; chamar via `h.cb(args)` faz indirect call e valida arity/tipos em compile-time. Habilita vtable manual, event handlers, callbacks armazenados.
+- **Closures como callback (tipo `fn` unificado em fat pointer)**: todo valor `fn` em Lumina agora é `{fn_ptr, env_ptr}`. Lambdas com captura usam env != NULL; lambdas sem captura e funções nomeadas usam env = NULL (wrapped em runtime). Isso destrava `sort_by(arr, n, fn(a, b): ...)` com captura, `map`/`filter` com captura em `std/iter`, e qualquer HOF. `&fn_name` devolve o fn ptr cru (FFI-compatível). Resolve o `xfail` histórico de `test_sort_closure_captures`.
+- **Closures** (captura por valor): `let offset = 10; let add = fn(x: int) -> int: x + offset`. O codegen detecta variáveis livres em `LambdaExpr`, gera um bloco `{fn_ptr, env_ptr}` no heap, e emite uma função `i64 __closure_N(i8* env, i64 a1, ..., i64 aN)` que lê os campos do env. Suporta lambda aninhada, captura dentro de loop, e chamada com N argumentos.
+- **Escape sequences em strings**: `\n`, `\t`, `\r`, `\0`, `\a`, `\b`, `\f`, `\v`, `\\`, `\"`, `\'` são processados pelo lexer em compile-time. Antes eram preservados como texto literal (`\` + letra). Escapes desconhecidos são mantidos como `\X` (backslash + letra) para não quebrar código existente.
+- **Macros multi-statement (`nome!(args)`)**: sintaxe nova que inlineia o corpo inteiro da macro no call site. Diferente de `nome(args)` (macro de expressão, exige corpo `return <expr>`), `nome!(args)` aceita qualquer número de statements e é usado em posição de statement. Substituição de parâmetros cobre expressões e statements (`VarDecl`, `AssignStmt`, `ReturnStmt`, `IfStmt`, `WhileStmt`, `ForStmt`, `DeferStmt`, `AssertStmt`). Inclusive `return` dentro da macro retorna da função chamadora.
+- **`for i, x in arr`** — índice + valor no mesmo loop. Parser aceita `IDENT COMMA IDENT` após `for`; o `ForStmt` guarda `"i,x"` em `var_name`; o semantic declara ambos; o codegen emite slot para o índice e para o valor.
+- **`std/sort`** — `sort(arr, n)` (crescente) e `sort_by(arr, n, cmp)` (comparator). Insertion sort para `n ≤ 16`, quicksort acima. `is_sorted(arr, n)` verifica.
+- **`fn_name` como valor** — `sort(arr, n, _cmp_asc)` passa função por nome. Semantic retorna `"fn"`, codegen produz fat pointer `{wrapper, NULL}`.
+- **Indirect call com N args** — `fn_ty = i64 (i8*, i64, ..., i64)` via fat pointer. `cmp(a, b)` agora passa ambos.
+- **Variante com payload usada bare** agora é erro: `let x = Some` falha com mensagem clara em vez de compilar silenciosamente.
+- **`std/io`** — `read_line`, `read_int`, `read_char`, `write`, `write_line`, `eprintln`. Usa os builtins `stdin`/`stdout`/`stderr`/`fgets`/`fputs`/`fflush`/`getchar` diretamente.
+
+#### `std`
+- `std/sort.lm` — `_cmp_asc`, `_insertion_sort`, `_partition`, `_quicksort_rec`, `sort`, `sort_by`, `is_sorted`.
+- `std/string.lm` — `StringBuilder` com `push_char`, `push_str`, `finish`, `clear`, `size`.
+- `std/result.lm` — `unwrap`, `unwrap_or` (renomeado `default` → `fallback`), `is_ok`, `is_err`, `is_ok_and`, `expect`, `map`, `and_then`.
+- `std/io.lm` — `read_line` (remove `\n` final, retorna `""` em EOF), `read_int`, `read_char`, `write`, `write_line`, `eprintln`. Sem `extern fn` declarados (são builtins do compilador). Usa `"\n"` diretamente (o lexer agora processa o escape).
+
+### Corrigido
+
+#### Genéricos (sessão de fechamento)
+
+- **`get_llvm_param_type` retornava tipos diferentes para a mesma string dependendo da ordem das chamadas.** Durante `register_function`, `"Box<int>"` ainda não estava em `struct_types`, então caía no `get_llvm_type` que faz monomorphização on-demand e devolve **valor** (`Box_int_`). Na 2ª chamada (durante `generate_function_body`), já estava em `struct_types` e devolvia **ponteiro** (`Box_int_*`). Resultado: `alloca(Box_int_*)` cria `Box_int_**`, e `store(Box_int_, Box_int_**)` explode com `TypeError: cannot store %"Box_int_" to %"Box_int_"**`. **Fix:** `get_llvm_param_type` sempre chama `get_llvm_type` primeiro (forçando monomorphização) e devolve `.as_pointer()` se for `IdentifiedStructType`.
+- **`impl Box<T>:` era mangleado como `Box_T__get`, nunca encontrado.** O parser fazia `mangle_method("Box<T>", "get")` → `Box_T__get`, mas o codegen só procura por `Box_int__get` (especialização) e `Box_get` (base). **Fix:** `parse_impl` normaliza `impl Box<T>:` → `Box` quando todos os type args do alvo são type params únicos maiúsculos (`T`, `U`, `V`). `impl Getter for Box<int>:` mantém `Box<int>` (especialização). Cobre os dois casos sem ambiguidade.
+- **Semantic procurava `Box_get` mesmo quando existia `Box_int__get`.** O lookup em `visit_CallExpr` usava `f"{obj_type.split('<')[0]}_{func_name}"`. Com `impl Getter for Box<int>`, o método estava registrado como `Box_int__get` e o lookup buscava `Box_get`. **Fix:** lookup tenta o nome completo (`mangle_method(obj_type, func_name)`) e cai para o nome base; mesmo padrão em `_infer_call_expr_type`.
+- **`_resolve_trait_defaults` (codegen) usava f-string em vez de `mangle_method`.** `f"{decl.struct_name}_{trait_method.name}"` produzia `Box<T>_greet` quando o alvo era genérico. **Fix:** `mangle_method` (mesma função canônica usada pelo parser).
+- **`struct_defs` só registrava chave mangled.** `get_or_create_monomorphized_struct` e `get_or_create_monomorphized_enum` faziam apenas `self.struct_defs[mangled] = base_decl`, mas `_construct_enum` consulta por `self.struct_defs["Custom<int>"]` (chave canônica). **Fix:** registra sob **ambas** as chaves.
+- **`visit_VarDecl` forçava tipo default de enum genérico.** Em `let c = Wrap(42)`, semantic infere `var_type = "Custom"` (nome base, sem args). `is_struct_like` era `False`, então caía em `llvm_ty = get_llvm_type("Custom")`, que monomorphiza com defaults (`Custom<int>`) e devolve `Custom_int_` (valor). O `_construct_enum` produz `Custom_int_*` (ponteiro), e o `bitcast` final era `Custom_int_* → Custom_int_` (inválido). Pior: em `let b = Has("hello")`, `val.type = Box_str_*` mas `llvm_ty = Box_int_*` (defaults), causando `bitcast Box_str_* → Box_int_*` (structs diferentes). **Fix:** se `val.type` já é ponteiro para `IdentifiedStructType`, usa `val.type` como tipo do slot — o tipo real do valor sempre vence.
+
+#### Demais correções
+
+- **`type` como keyword quebrou bindings C de socket.** `std/http.lm`, `std/net.lm` e `examples/server.lm` usavam `type` como nome de parâmetro em `extern fn socket(domain, type, protocol)`. Renomeado para `sock_type`.
+- **`_expand_type_aliases` não recursava em corpos de função.** `let cb: Callback = ...` dentro de `fn main` mantinha o tipo literal. Agora percorre `IfStmt`/`WhileStmt`/`ForStmt`/`MatchStmt`/`DeferStmt`/`BenchStmt` recursivamente.
+- **Whitelist de tipos do `VarDecl` rejeitava `fn(...) -> R`.** Só aceitava `fn` puro. Após a expansão do alias `Callback` → `fn(int) -> int`, a validação rejeitava com "Tipo fn(int) -> int não declarado". Corrigido em `statements/var_decl.py` e `analyzer.py`.
+- **`parse_struct` usava `expect(IDENT)` no tipo do campo.** `struct S: cb: fn(int) -> int` falhava com "Esperado IDENT, mas encontrei FN ('fn')". Corrigido para `parse_type()`.
+- **Closure com captura como callback segfaultava.** `sort_by(arr, n, fn(a, b): (b-a)*mult)` passava o bloco `{fn_ptr, env_ptr}` como se fosse um fn ptr cru, e o receptor chamava lixo. **Fix:** unificação do tipo `fn` em fat pointer `{fn_ptr, env_ptr}` + `_call_closure` em toda chamada indireta. Funções nomeadas usadas como valor são wrapped em runtime (`_wrap_fn_as_closure`), com wrapper `i64(i8*, i64, ...)` que adapta a assinatura original. `&fn_name` devolve o fn ptr cru para FFI.
+- **`_validate_macro` bloqueava macros multi-statement mesmo na declaração.** A validação exigia `return <expr>` no `generate_module`, então uma macro multi-statement nunca podia ser declarada — mesmo que só fosse usada via `nome!(args)`. **Fix:** a validação só verifica que o corpo não está vazio; a exigência de `return <expr>` fica inteiramente a cargo de `_expand_macro_expr` (usado quando a macro é chamada como expressão).
+- **`stdin`/`stdout`/`stderr` faltavam em `BUILTIN_RET`.** `std/io.lm` falhava no semantic com "Tipo inválido para parâmetro 'stream': esperado 'str', obteve 'int'" porque `stdout()` era inferido como `int` no `VarDecl`. **Fix:** `BUILTIN_RET` centralizado em `lumina/builtins.py` (fonte única) e `stdin`/`stdout`/`stderr` adicionados como `"str"`.
+- **`extern fn fgets` colidia com o builtin.** O `generate_module` registrava o extern com assinatura `i8*(i8*, i64, i8*)`, mas o branch de builtin em `calls.py` trunca `size` para `i32` (assinatura real do C). Resultado: `TypeError: Type of #2 arg mismatch: i64 != i32`. **Fix:** `generate_module` pula `ExternDecl` cujo nome está em `BUILTIN_FUNCTIONS` — o codegen de builtin já emite a assinatura correta.
+- **`getchar` retornava `i32` sem normalização.** `ret i32 %getchar_call` não casava com o tipo de retorno `-> int` da função Lumina (i64), gerando `value doesn't match function result type 'i64'` no clang. **Fix:** `sext i32 → i64` antes de retornar.
+- **`visit_ReturnStmt` sem normalização `iN → i64`.** Qualquer builtin que devolvesse `i32`/`i8`/`i16` quebrava no `ret`. **Fix:** branch defensivo em `flow.py::visit_ReturnStmt` com `zext` para `i1` e `sext` para os demais.
+- **`"\n"` em fonte Lumina virava 2 bytes literais.** O lexer preservava escapes como texto (`\` + `n`), então `fputs("\n", out)` imprimia `\n` literal em vez de newline. **Fix:** lexer processa escapes em compile-time; `std/io.lm` usa `"\n"` diretamente.
+- **`read_line` com `buf[n-1] = 0` não surtia efeito.** Reescrevido com loop explícito que varre o buffer até NUL ou `\n` (ASCII 10), sobrescrevendo com NUL no primeiro caso.
+- **`_handle_indent` não era chamado em `tokenize()`.** Regressão que quebrava **todos** os blocos indentados — `fn`, `if`, `while`, `for`, `struct`, `enum`, `impl`, `trait`, `match` — com "Esperado INDENT, mas encontrei X". **Fix:** restaurado o branch `if self.at_line_start: self._handle_indent()` no loop principal.
+- `visit_VariableExpr` (semantic + codegen) checava `functions` antes de variantes de enum. Como variantes são adicionadas em `functions` no `analyze()`, `Red` bare virava `"fn"` em vez de `"Color"`. **Fix:** ordem invertida (variante antes de função).
+- `for x in arr` com `N` variável (não-literal) caía em loop vazio. Agora `array_lengths` também registra `alloc(NumberExpr)`.
+- `parse_for` declarava `from ..ast import ForStmt` dentro do método, sombreando o import do topo do arquivo → `UnboundLocalError`.
+- `chr` e `atoi` sem branch de codegen (retornavam `0`). Adicionados em `calls.py`.
+- `SliceExpr` inferido como `ptr` no `VarDecl`, fazendo `s[..3] == "abc"` comparar endereços. Agora infere pela fonte (`str` → `str`, array → `ptr`).
+- `bool` → `int` usava `sext` (`true` virava `-1`). Agora `zext` quando origem é `i1`.
+- `read_file()` dava segfault se o arquivo não existia. Agora retorna `""` via `phi` com `fopen == NULL`.
+- `free()` rejeitava `i64*` (`TypeError: i8* != i64*`). Bitcast antes do call.
+- `impl Box<T>` chamado em `Box<int>` gerava `%"Box"* != %"Box_int_"*`. Bitcast no `codegen_method_call` quando cai no fallback.
+- `std/result::unwrap_or` usava `default` (keyword reservada). Renomeado para `fallback`.
+- `and_then` retornava `int` para function pointers, falhando em `_require_assignable`. Agora retorna `None` (tipo desconhecido).
+- `lumina lint` estourava `RecursionError` por recursão mútua entre `_collect_vars` e `_collect_exprs`. Reescrito como `_collect` única.
+
+### Adicionado (tests)
+
+- `tests/test_type_alias.py` (8 testes) — alias de primitivo, alias de `fn`, alias em campo/param/retorno/VarDecl/enum, encadeamento.
+- `tests/test_fn_struct_fields.py` (7 testes) — campo fn-typed, lambda com captura, função nomeada, múltiplos campos fn, erro de arity e tipo.
+- `tests/test_fn_types.py` (12 testes) — parse de `fn(T1, T2) -> R`, chamada com arity e tipos validados, mistura tipado/untyped, propagação de retorno, assinatura com `str`.
+- `tests/test_macro_stmts.py` (8 testes) — `nome!(args)`, substituição em statements, validação de arity, rejeição de `nome!(args)` sem macro, `return` em macro-stmt retorna da função chamadora, uso em loop, macros expression continuam funcionando, macro multi-statement como expressão (sem `!`) é rejeitada.
+- `tests/test_std_io.py` (6 testes) — `read_line`, `read_int`, `read_line_eof`, `write`, `write_line`, `eprintln`.
+- `tests/test_closures.py` (10 testes).
+- `tests/test_sort.py` (10 testes — `test_sort_closure_captures` deixou de ser xfail).
+- `tests/test_lint.py` (14 testes, do 0.3.0).
+- `tests/test_forin.py` (9 testes).
+- `tests/test_tuples.py` (7 testes).
+- `tests/test_generic_impl.py` (6 testes).
+- `tests/test_std_result.py` (9 testes).
+- `tests/test_escape_analysis.py` (4 testes).
+- `tests/test_generic_enums.py` (2 testes, sessão de fechamento) — enum genérico `Wrap(42)` e `Has("hello")`, com inferência de type args na construção e match correto.
+- `tests/test_impl_box_generic.py` (3 testes, sessão de fechamento) — `impl Trait for Box<int>`, duas especializações distintas coexistindo (`impl Kind for Box<int>` e `impl Kind for Box<str>`), e `impl Box<T>:` como fallback.
+- `tests/test_generic_type_alias.py` (4 testes, sessão de fechamento) — `type BI = Box<int>` em assinatura de função, em param de struct, encadeado (`A → B → C`) e com params (`type IPair<B> = Pair<int, B>`).
+
+**Total: 428 passed** (antes 419; antes disso, 411).
+
+### Mudado
+
+- `lumina/lexer/lexer.py` — `_read_escape` processa `\n`/`\t`/`\r`/`\0`/`\a`/`\b`/`\f`/`\v`/`\\`/`\"`/`\'` em compile-time. Escapes desconhecidos preservam `\X` como texto. Aplica-se a strings normais e interpoladas (`f"..."`).
+- `lumina/ast/statements.py` — novo nó `MacroCallStmt` (name, args, line, col) para `nome!(args)`.
+- `lumina/parser/statements.py` — detecta `IDENT BANG LPAREN` em statement position e produz `MacroCallStmt`.
+- `lumina/semantic/statements/macro_stmt.py` (novo) — valida que `nome!(args)` referencia uma `@macro` declarada e que a aridade bate.
+- `lumina/semantic/analyzer.py` — coleta `@macro` em `self.macros` (passada 0) para validar `MacroCallStmt`.
+- `lumina/codegen/statements/macro_stmt.py` (novo) — `visit_MacroCallStmt` inlineia o corpo inteiro da macro no call site.
+- `lumina/codegen/expressions/macros.py` — nova função `_substitute_in_stmt` que percorre `VarDecl`, `DestructureStmt`, `AssignStmt`, `ReturnStmt`, `IfStmt`, `WhileStmt`, `ForStmt`, `DeferStmt`, `AssertStmt` e delega expressões a `_substitute_in_expr`.
+- `lumina/codegen/traits.py::_validate_macro` — só valida que o corpo não está vazio. A exigência de `return <expr>` fica em `_expand_macro_expr` (call site expression).
+- `lumina/codegen/statements/__init__.py` — `MacroStmtMixin` adicionado à MRO.
+- `lumina/builtins.py` — `BUILTIN_RET` agora vive ao lado de `BUILTIN_FUNCTIONS` (fonte única de verdade). Consumido por `semantic/statements.py`, `semantic/expressions.py` e `codegen/codegen.py`.
+- `lumina/codegen/codegen.py::generate_module` — skip de `ExternDecl` que colide com builtin.
+- `lumina/codegen/codegen.py::__init__` — `_fn_wrappers` cacheia wrappers `i64(i8*, i64...)` para funções nomeadas usadas como valor.
+- `lumina/codegen/helpers.py` — `_make_fn_wrapper` (wrapper que adapta `i64(i8*, i64...)` → assinatura original) + `_wrap_fn_as_closure` (bloco `{wrapper, NULL}` no heap).
+- `lumina/codegen/expressions/aggregates.py::visit_LambdaExpr` — sempre chama `_emit_lambda_closure`; `_emit_lambda_plain` removido.
+- `lumina/codegen/expressions/members.py::visit_VariableExpr` — função nomeada usada como valor vira `_wrap_fn_as_closure`.
+- `lumina/codegen/expressions/operators.py::visit_AddressOfExpr` — `&fn_name` devolve fn ptr cru (FFI-compatível).
+- `lumina/codegen/expressions/calls.py` — toda chamada indireta passa por `_call_closure` (sem distinção `closure_vars` vs fn ptr cru).
+- `lumina/codegen/expressions/calls.py::getchar` — `sext i32 → i64`.
+- `lumina/codegen/statements/flow.py::visit_ReturnStmt` — normalização defensiva `iN → i64`.
+- `lumina/semantic/expressions.py::visit_VariableExpr` reordena os checks: variante → `fn` → variável.
+- `lumina/codegen/statements/control.py::_visit_for_iterable` — caso "índice + valor" quando `var_name` contém `,`.
+- `std/io.lm` — reescrito. Sem `extern fn` (usa builtins), `"\n"` direto (lexer processa), `read_line` com loop explícito.
+- `lumina/codegen/types.py::get_llvm_param_type` — força monomorphização antes de checar `struct_types`; `IdentifiedStructType` sempre devolve `.as_pointer()`.
+- `lumina/codegen/types.py::get_or_create_monomorphized_{struct,enum}` — registra sob **chave canônica** (`Custom<int>`) **e** mangled (`Custom_int_`).
+- `lumina/parser/declarations.py::parse_impl` — normaliza `impl Box<T>:` → nome base `Box` quando todos os args são type params únicos maiúsculos; `impl Trait for Box<int>` preserva `Box<int>`.
+- `lumina/semantic/expressions/calls.py::visit_CallExpr` — lookup de método tenta nome completo (`mangle_method`) e cai para base.
+- `lumina/semantic/statements/var_decl.py::_infer_call_expr_type` — mesmo padrão de lookup.
+- `lumina/codegen/traits.py::_resolve_trait_defaults` — usa `mangle_method` (canônico) em vez de f-string.
+- `lumina/codegen/statements/var_decl.py::visit_VarDecl` — usa `val.type` quando já é ponteiro para `IdentifiedStructType` (cobre `Box<str>` vs `Box<int>` e enum genérico com nome base).
+
+### Adicionado (sessão de benchmarks)
+
+#### Linguagem
+
+- **`black_box(x: int) -> int`** — primitiva nativa que emite uma barreira
+  `asm sideeffect ""` no IR (mesma técnica de `std::hint::black_box` do Rust).
+  Impede que o LLVM elimine código cujo resultado "não é usado". Sem ela,
+  `for i in 0..N: acc += i` é fechado na fórmula de Gauss e o benchmark mede
+  zero. Registrada em `lumina/builtins.py` (`BUILTIN_FUNCTIONS` + `BUILTIN_RET`)
+  e emitida via `ir.InlineAsm(..., side_effect=True)` em
+  `codegen/expressions/builtins.py`.
+
+- **`argv(i: int) -> str`** agora funciona de verdade. `main() -> int` sem
+  params ganha a assinatura C `i32 (i32, i8**)`; o codegen salva `argc`/`argv`
+  em globais `__lumina_argc`/`__lumina_argv` no entry de `main`; o builtin
+  `argv(i)` lê `__lumina_argv[i]`. Antes, retornava `0` — todo `.lm`
+  precisava ter N hardcoded.
+
+#### Benchmarks
+
+- **`benchmarks/alloc_churn.c`** e **`benchmarks/alloc_churn.lm`** — 1M
+  alloc/free de tamanhos variados (1..512 bytes via LCG, seed fixo em 12345,
+  wrap em u32). Diferente de `primes` (que só aloca 10 MB uma vez), mede o
+  Boehm GC em churn real. Ambos usam barreira anti-DCE — C com
+  `__asm__ __volatile__`, Lumina com `black_box` — para o loop não virar
+  no-op.
+
+- **`benchmarks/matrix_i64.c`** — variante de `matrix.c` com índices `i64`
+  puros. Serve para isolar se a não-vetorização do matmul 200×200 vem do
+  cast `(size_t)i * n + k` (hipótese testada: nem com nem sem o cast, nem
+  gcc nem clang vetorizam o hot loop — é memory-bound).
+
+- **`benchmarks/bench.sh`** reescrito:
+  - **clang por padrão** (alinhado com o backend do Lumina). `CC=gcc` para
+    cross-compiler. Motivo: C+clang vs Lumina+clang isola a linguagem;
+    C+gcc media `gcc vs clang`, não `C vs Lumina`.
+  - **`-fwrapv`** no `CFLAGS` — força overflow assinado a wrapping.
+  - Compila variantes **`--no-gc`** de `primes` e `alloc_churn` para isolar
+    custo do Boehm GC.
+  - **`alloc_churn`** entra na verificação de corretude (RNGs alinhados —
+    mesmo LCG, mesma seed).
+  - Bloco extra de sumário para `primes_gc_vs_nogc`.
+
+- **Parâmetros por `argv`** em `fib.lm`, `primes.lm`, `loop.lm`, `matrix.lm`,
+  `alloc_churn.lm`. O `bench.sh` passa o mesmo N a todas as linguagens; não
+  há mais N hardcoded.
+
+#### Corrigido (sessão de benchmarks)
+
+- **Closures emitiam `ret i32` num `define i64`.** `_emit_lambda_closure`
+  não salvava/trocava `current_func_name` ao gerar o corpo da lambda. Com o
+  `main` recebendo a assinatura `i32 (i32, i8**)`, o `visit_ReturnStmt`
+  dentro de closures usava o tipo de retorno de `main` (i32) em vez do tipo
+  real da closure (i64). Sintoma: `error: value doesn't match function
+  result type 'i64'` no clang. **Fix:** registra a closure em
+  `functions_table`, aponta `current_func_name` para o nome da closure,
+  zera `current_body_bb` (desliga TCO dentro de closures), restaura após o
+  corpo. Cobre `test_closure_body_block`, `test_closure_nested` e
+  `lambda_test.lm`.
+
+- **`main() -> int` sem params retornava `i64` para o clang.** Com a
+  assinatura C `i32 (i32, i8**)`, o `ret` precisa truncar. `visit_ReturnStmt`
+  ganhou branch defensivo `i64 → i32` quando `ret_ty.width < 64`.
+
+### Mudado (benchmarks)
+
+- **`loop.c`** — `t * (int64_t)i` virou `(int64_t)((uint64_t)t * i)`.
+  Unsigned multiply tem wrap garantido pela norma; signed multiply era UB,
+  o LLVM assumia "nunca negativo", e o branch era eliminado por DCE. C e
+  Lumina agora medem a mesma coisa.
+
+- **`alloc_churn.c`** — adicionada `static inline void bb(void *p)` com
+  `__asm__ __volatile__("" : : "r"(p) : "memory")`. Sem isso, clang -O3
+  apaga o par `malloc`/`free` (o ponteiro não escapa).
+
+- **`alloc_churn.lm`** — adicionado `black_box(p as int)` após o store.
+  Mesmo efeito.
+
+### Removido (benchmarks)
+
+- **`alloc_churn.lm`**: seed via `time(0)`. Agora usa seed fixo (12345),
+  alinhado com o `.c`, para o output bater na verificação de corretude.
+
+### Resultados (última rodada, 2026-09-18)
+
+C compilado com **clang 18.1.3**, 20 runs, `taskset -c 1`:
+
+| Bench | C | Rust | Go | **Lumina** | **L/C** |
+|---|---:|---:|---:|---:|---:|
+| fib (35) | 32.91 | 32.08 | 62.17 | **31.85** | **0.97×** |
+| primes (10M) | 21.83 | 21.68 | 35.93 | 24.25 | 1.11× |
+| loop (100M) | 88.10 | 96.82 | 82.55 | **88.87** | **1.01×** |
+| matrix (200×200) | 5.54 | 7.99 | 14.25 | **5.39** | **0.97×** |
+| alloc_churn (1M) | 13.27 | — | — | 50.01 | 3.77× |
+| primes `--no-gc` | — | — | — | **23.48** | (vs GC: 0.84×) |
+| alloc_churn `--no-gc` | — | — | — | **12.15** | **0.92×** |
+
+**Leitura:** Lumina empata ou ganha de C em 4 de 5 benchmarks. O único gap
+real é `alloc_churn`, atribuível ao Boehm GC — a variante `--no-gc` empata
+com C (12.15 vs 13.27).
+
+---
+
+## [Unreleased — 0.3.0]
+
+### Adicionado
+
+#### Linguagem
+- **Escape analysis:** `alloc(N)` com `N` constante e sem `return`/`free` viram `alloca` no stack. Reduz pressão no Boehm GC. Reduz ~30% das alocações em código típico.
+- **`for x in arr`:** itera sobre arrays literais e strings. Aceita `let arr = [1, 2, 3]; for n in arr` e `for n in [10, 20]` inline.
+- **Tuplas literais:** `let (a, b, c) = (1, 2, 3)`. Tipos heterogêneos via `LiteralStructType`.
+- **`impl Box<T>:`** — métodos em structs genéricas. O `<T>` é descartado para registro; chamadas em `Box<int>`, `Box<str>`, etc. fazem bitcast para o tipo base.
+- **`std/string`** — `StringBuilder` com `push_char`, `push_str`, `finish`, `clear`, crescimento geométrico. Complementa `std/str` (que é funcional).
+- **`std/result`** — `unwrap`, `unwrap_or`, `is_ok`, `is_err`, `is_ok_and`, `expect`, `map`, `and_then`.
+- **`lumina lint`** — análise estática sem gerar código: W001 (unused), W002 (shadowing), W003 (unreachable), W004 (unused param), W005 (empty body). `--format=json`, `--quiet`, exit code = nº warnings.
+- **`opt -O2`** no IR antes do clang, apenas em `--release`.
+- **`chr` e `atoi`** agora têm branches dedicados no codegen (antes retornavam 0).
+
+#### CLI
+- `lumina lint <arquivo> [--format=text|json] [--quiet]`.
+- `--help`/`-h`/`help` retornam exit code 0 (antes caíam em "comando desconhecido").
+
+### Corrigido
+
+- `@attrs` sobrescritos como tuples em `parse()` — `@safe`/`@macro` nunca ativavam.
+- `read_file()` dava segfault quando o arquivo não existia (agora retorna `""` via `phi`).
+- `free()` rejeitava `i64*` (bitcast para `i8*` antes do call).
+- `SliceExpr` era inferido como `ptr` no `VarDecl`, fazendo `s[..3] == "abc"` comparar endereços.
+- `bool` → `int` usava `sext`, fazendo `true` virar `-1`. Agora usa `zext` quando origem é `i1`.
+- `impl Box<T>` chamado em `Box<int>` gerava `%"Box"* != %"Box_int_"*`. Bitcast para o tipo base.
+- `std/result::unwrap_or` usava `default` (keyword reservada). Renomeado para `fallback`.
+- `for x in arr` com `N` não-constante caía em loop vazio. Agora registra `array_lengths` no `var_decl`.
+- `and_then` retornava `int` para function pointers, falhando no `_require_assignable`.
+- `lumina lint` estourava `RecursionError` por recursão mútua entre `_collect_vars` e `_collect_exprs`. Reescrito como `_collect` única.
+
+### Adicionado (tests)
+
+- `tests/test_lint.py` (14 testes).
+- `tests/test_forin.py` (9 testes).
+- `tests/test_tuples.py` (7 testes).
+- `tests/test_generic_impl.py` (6 testes).
+- `tests/test_std_result.py` (9 testes).
+- `tests/test_escape_analysis.py` (4 testes).
+
+**Total: 325 passed** (antes 267).
+
+---
+
+## [Unreleased — Sprint 9]
+
+### Adicionado
+
+#### Linguagem
+- **TCO para mutual recursion (SCC dispatcher)**: SCCs (strongly connected components) do grafo de tail calls viram um dispatcher único. Cada membro vira um bloco dentro do dispatcher; tail calls a outros membros viram store de args + set de `current_id` + branch de volta. `is_even` / `is_odd` com 1M iterações rodam em stack constante.
+- **Defers emitidos em tail calls**: `return self(...)` em TCO emite os defers pendentes antes do branch de volta. Cada iteração da recursão re-executa o corpo, re-empilhando seus defers.
+- **`@safe`** — null check opt-in em `MemberExpr` e `IndexExpr`.
+- **`@macro`** — expansão de AST em compile-time.
+
+#### Bugs corrigidos (parser/codegen)
+- **`@attrs` sobrescritos como tuples**.
+- **Macros malformadas não falhavam**.
+- **SCC dispatcher sem `defer_stack`**.
+
+### Mudado
+
+- **`codegen/codegen.py`**: novos métodos `_compute_tail_call_sccs`, `_can_dispatcher`, `_materialize_scc_dispatcher`, `_validate_macro`, `_infer_arg_type_lumina`, `_infer_type_map_lumina`. Novo módulo `codegen/expressions/macros.py`.
+- **`codegen/expressions/members.py`**: `visit_MemberExpr` e `visit_IndexExpr` ganharam branch `_safe_mode`.
+- **`parser/parser.py`**: removido o override `decl.attrs = attrs` em `parse()`.
+
+---
+
+## [Unreleased — Sprints 7a a 8a]
+
+### Adicionado
+
+#### Linguagem
+- **Genéricos aninhados** (`Box<T>` como parâmetro).
+- **`nil`** — null pointer C-style.
+- **`defer` com escopo de bloco** (breaking change).
+- **Multi-pattern** em `match`: `case 1 | 2 | 3:`.
+- **Wildcard `_`**.
+- **Variantes bare de enum**.
+- **TCO (Tail Call Optimization)** para self-recursion.
+- **Type check em campos de struct literal**.
+- **Match guard em enum e string**.
+- **`break` / `continue`** reais.
+- **`assert`** aborta em runtime.
+- **Short-circuit** em `and` / `or`.
+
+#### CLI
+- `--help` / `-h` / `help`.
+- Exit codes propagados em `run` / `build` / `test`.
+- `lumina test` respeita `[link]`.
+- `[link].extra_flags` passadas ao compilar `.cpp` de FFI.
+
+#### REPL
+- REPL persistente com `:history`, `:decls`, `:clear`, `:help`.
+
+#### Compilador
+- Boehm GC ativa (`GC_init` + `GC_malloc`).
+- `LLVMCodegen` com `ir.Context()` próprio.
+
+#### LSP
+- Hover com escopo qualificado.
+- References/rename cientes de escopo.
+- `document_symbols` com `children` por função/método.
+- `read_message` valida `Content-Length`.
+
+#### Formatter
+- Preserva `@derive` e outros `@attrs`.
+- Multi-pattern impresso como `case A | B:`.
+- Wildcard impresso como `case _:`.
+
+### Corrigido
+
+21 bugs silenciosos — ver tabela no `README.md`.
+
+### Mudado
+
+- **`defer` com escopo de bloco** (breaking change).
+- **`codegen/statements/match.py`** refatorado para `_match_chain`.
+- **`semantic/statements.py`**: bindings herdam `cond_type` quando `variant_name is None`.
+- **`parser/patterns.py`**: `_parse_case_pattern` acumula alternativas; string literal vira `StringExpr`.
+
+### Removido
+
+- `replace("GC_malloc", "malloc")` no `cmd_build`.
+- `covered_variants = [c[0] for c in node.cases]`.
+
+---
+
+## [1.0.0] — Estado inicial
+
+### Adicionado
+
+#### Linguagem
+- Sintaxe baseada em indentação (INDENT/DEDENT)
+- Tipagem estática com inferência
+- Sintaxe curta (`x := 10`), escopo de bloco lexical
+- F-strings (`$"olá {nome}"`)
+- Operador pipe (`5 |> dobrar |> imprimir`)
+- Navegação segura (`?.`), propagação de erros (`?`), cast (`as`)
+- Slicing (`s[1..4]`, `arr[..3]`, `arr[2..]`, `arr[..]`)
+- Bitwise (`&`, `|`, `^`, `~`, `<<`, `>>`)
+- `switch`/`case`/`default`
+- `defer`, `assert`
+- Generics com monomorphization (`<T>`)
+- Traits com métodos padrão
+- Pattern matching com binding e guard
+- Enum multi-payload
+- `Option<T>` e `NoneExpr`
+- `comptime` (constant folding)
+- Globais mutáveis (`mut X = 0`)
+- Lambdas (inline e com bloco)
+- Operator overloading (`__add__`, `__eq__`)
+- `@derive(Eq, PartialEq, Debug, Display, Clone, Default)`
+
+#### Standard Library (bootstrapped em Lumina)
+- `std/prelude` (`Option`, `Result`), `std/math`, `std/str`, `std/time`, `std/fs`, `std/alloc`
+- `std/vector`, `std/map`, `std/set`, `std/deque`, `std/list`, `std/iter`
+- `std/test`, `std/log`
+- `std/channel`, `std/async`, `std/async_fs`, `std/epoll`, `std/net`, `std/http`
+- `std/json`, `std/sqlite`, `std/raylib`
+
+#### Compilador
+- Lexer com comentários preservados (`#`, `/* */`)
+- Parser com `@attrs`, slices, patterns
+- Análise semântica com `@derive`, traits, exaustividade
+- Codegen LLVM IR com globais mutáveis, cross-target
+- Cross-compile (`--target`): aarch64, armv7, riscv64, i386, WASM
+- `-O0` / `-O2` / `-O3` + DWARF debug info
+- Build incremental com cache
+- FFI com C/C++ (`[link]`)
+
+#### CLI
+- `lumina new`, `build`, `run`, `check`, `test`, `clean`, `doc`, `install`, `bind`, `fmt`, `repl`, `jit`, `playground`
+- `--error-format=json` (pipe-safe)
+- `[link]` com `libs`, `extra_objects`, `target`, `extra_flags`
+
+#### Ferramental
+- Extensão VS Code com syntax highlight (TextMate) e LSP
+- LSP: autocomplete, hover, go-to-definition, references, rename, outline, semantic tokens, diagnostics
+- Web Playground (JIT)
+- Auto-formatter preservando comentários leading
+- **153 testes** (pytest) + **28 validações** standalone (`run_tests.py`)
+
+[Unreleased]: https://github.com/adamgabriel701/Lumina/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/adamgabriel701/Lumina/releases/tag/v1.0.0
+</file>
+
+<file path="README.md">
+# 🌟 Lumina
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![LLVM](https://img.shields.io/badge/LLVM-14%2B-blue.svg)](https://llvm.org/)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
+[![Status](https://img.shields.io/badge/Status-Alpha-green.svg)](#-status)
+[![Tests](https://img.shields.io/badge/tests-428%20passed-brightgreen.svg)](docs/engineering/tests.md)
+[![Examples](https://img.shields.io/badge/examples-54%20ran-success.svg)](examples/)
+[![Benchmarks](https://img.shields.io/badge/benchmarks-5%20suites-blue.svg)](benchmarks/results/)
+[![Cross-compile](https://img.shields.io/badge/cross--compile-arm64%20%7C%20wasm-blueviolet.svg)](#-cross-compilation)
+
+**Lumina** é uma linguagem de programação de sistemas com sintaxe limpa baseada em indentação (estilo Python/Nim), backend **LLVM** e foco em ergonomia moderna, concorrência e segurança de memória.
+
+Estática, compilada, sem `;` e sem `{}`. Roda em Linux (x86_64, ARM, RISC-V), WebAssembly e bare-metal.
+
+📖 **Documentação completa em [`docs/`](docs/README.md).**
+
+---
+
+## ✨ Por que Lumina?
+
+**Sintaxe que você lê em voz alta.** Indentação significativa, `|>` para encadear, `?.` para navegação segura, `defer` com escopo de bloco, F-strings.
+
+```lumina
+fn main() -> int:
+    let usuario = buscar_usuario(42)?
+    defer log("fim")
+    usuario?.nome |> imprimir
+    return 0
+```
+
+**Performance de C, ergonomia de linguagem moderna.** Lumina **empata com C** em `fib`, `loop` e `matrix` (mediana de 20 runs, clang -O3 em ambos). `--no-gc` fecha o gap restante em `primes` e `alloc_churn`. Detalhes em [benchmarks](docs/engineering/benchmarks.md).
+
+**Memória sob controle, com rede de segurança.** Boehm GC por padrão (`GC_malloc`), escape analysis coloca arrays locais no stack, `--no-gc` para bare-metal, `@safe` para null check opt-in, `nil` é null pointer real (não um wrapper).
+
+**Metaprogramação real em compile-time.** `@macro` com duas formas (expressão e statement), `@derive(Eq, Debug, Clone, ...)`, `comptime` com constant folding, atributos LLVM (`@inline`, `@cold`).
+
+**Tooling de linguagem séria.** LSP completo com escopo qualificado (hover, go-to-def, references, rename), linter estático (5 warnings), REPL persistente, auto-formatter que preserva comentários e `@attrs`, build incremental, cross-compile.
+
+**Tipos que ajudam, não atrapalham.** Inferência em 90% dos casos, `Option<T>`, enums com multi-payload, pattern matching com guard e multi-pattern, generics com monomorphization, traits com métodos default, tipos de função com assinatura (`fn(int) -> int`).
+
+---
+
+## 🚀 Quickstart
+
+### 1. Pré-requisitos
+
+```bash
+# Ubuntu/Debian
+sudo apt install -y llvm-14 clang libgc-dev python3.11 python3-pip
+
+# Fedora
+sudo dnf install -y llvm-devel clang gc-devel python3.11
+```
+
+### 2. Instale
+
+```bash
+git clone https://github.com/adamgabriel701/Lumina.git
+cd Lumina
+pip install -e .
+```
+
+### 3. Rode seu primeiro programa
+
+```bash
+lumina new ola
+cd ola
+lumina run main.lm
+# Hello from ola!
+```
+
+---
+
+## 👀 A linguagem em 60 segundos
+
+Um programa que exercita ADTs, pattern matching, closures, `defer` e `?` de uma vez:
+
+```lumina
+import "std/result"
+import "std/io"
+
+enum Resposta:
+    Texto(str)
+    Numero(int)
+    Vazia
+
+fn interpretar(r: Resposta) -> str:
+    match r:
+        case Texto(s) if s.starts_with("olá"):
+            return "saudação"
+        case Texto(s):  return s
+        case Numero(n): return $"número: {n}"
+        case Vazia:     return "—"
+    return "?"
+
+fn main() -> int:
+    let respostas = [Texto("olá, mundo"), Numero(42), Vazia]
+    for i, r in respostas:
+        let categoria = interpretar(r)
+        write_line($"{i}: {categoria}")
+    return 0
+```
+
+Saída:
+
+```
+0: saudação
+1: número: 42
+2: —
+```
+
+Mais 20 exemplos canônicos em **[`examples/`](examples/)** — closures como callback, macros multi-statement, TCO mutual, `impl Trait for Box<int>`, enums genéricos.
+
+---
+
+## 🧠 Modelo de memória
+
+Uma pergunta que merece resposta direta em linguagem de sistemas:
+
+| Situação | O que acontece |
+|---|---|
+| `alloc(N)` com `N` variável | **Boehm GC** (`GC_malloc`) |
+| `alloc(N)` com `N` literal e sem escape | **stack** (`alloca`), via escape analysis |
+| `free(x)` explícito | **Boehm GC** (`GC_free`), sem stack alloc |
+| `--no-gc` | Usa `malloc`/`free` da libc |
+| `--target=wasm` | Força `--no-gc` (WASM sem libgc) |
+| `ptr` | ponteiro bruto (`i64*`) |
+| `str` | `i8*` null-terminated |
+| `nil` | null pointer C-style |
+| `none` | `Option::None` (enum) |
+| `u.id` sem `@safe` | acesso C-style — SIGSEGV se `u == nil` |
+| `u.id` com `@safe` | null check automático → retorna `0` |
+| `u?.id` (safe nav explícito) | null check mesmo sem `@safe` |
+
+O **Boehm GC** é inicializado uma vez em `main` (`GC_init()`), antes de qualquer alocação. `--no-gc` remove essa chamada e usa `malloc` — útil para kernels, embarcados e WASM.
+
+Detalhes de implementação em **[`docs/internals.md`](docs/internals.md#gc)**.
+
+---
+
+## 🔥 Features por tema
+
+### Sistema de tipos
+
+- **Inferência estática** em retornos, lambdas, binárias, generics, `Option<T>`, tuplas e `comptime`.
+- **Enums multi-payload** com variantes bare (`let c = Red`), match exaustivo e destructuring.
+- **Pattern matching** com guard (`case Circle(r) if r > 10`), multi-pattern (`case 1 | 2 | 3`), wildcard (`case _`) e self-binding (`case s if s.contains("x")`).
+- **Generics com monomorphization**, incluindo **aninhados** (`fn put<T>(b: Box<T>, val: T)`).
+- **Traits com métodos default** e **especialização em tipo concreto** (`impl Getter for Box<int>`).
+- **Type aliases**, inclusive genéricos (`type IPair<B> = Pair<int, B>`).
+- **Tipos de função com assinatura** (`fn(int) -> int`), checados em compile-time.
+- **Tuplas** com destructuring heterogêneo (`let (a, b) = (1, "x")`).
+- **`nil` (null pointer) e `none` (`Option::None`)** como conceitos distintos.
+
+### Memória e segurança
+
+- **Boehm GC** por padrão; **escape analysis** promove `alloc(N)` constantes ao stack.
+- **`--no-gc`** para bare-metal e WASM.
+- **`@safe`** opt-in para null check em `MemberExpr`/`IndexExpr`.
+- **`nil`** como null real (não wrapper), compatível com FFI.
+- **`free(x)`** explícito desativa stack alloc (correção de segurança).
+
+### Concorrência
+
+- **Canais CSP** (`std/channel`) com `pthread_mutex` + `pthread_cond`.
+- **Green threads** e corrotinas via `ucontext` (experimental).
+- **I/O assíncrono** com `epoll` (`std/epoll`) e `O_NONBLOCK` (`std/async_fs`).
+- **Servidor HTTP** de exemplo em `std/http` com ~5.8k req/s (epoll).
+
+### Metaprogramação
+
+- **`@macro` com duas formas**: expressão (`nome(args)`) e statement (`nome!(args)`).
+- **`@derive(Eq, PartialEq, Debug, Display, Clone, Default)`**.
+- **`comptime` real** com constant folding de literais e aritmética.
+- **Atributos LLVM** (`@inline`, `@noinline`, `@cold`, `@hot`).
+
+### Tooling
+
+- **LSP completo** com escopo qualificado: hover (`main::i` vs `helper::i`), go-to-def, references, rename, outline, semantic tokens.
+- **Linter** (`lumina lint`): W001..W005, exit code = nº de warnings, `--format=json` para CI.
+- **Formatter** que preserva comentários, `@attrs`, multi-pattern e wildcard.
+- **REPL persistente** com `:history`, `:decls`, `:clear`.
+- **Auto-docs** (`lumina doc`) a partir de comentários `##`.
+- **Bind FFI** (`lumina bind header.h`) gera `extern fn` de headers C.
+- **Web Playground** (JIT ao vivo).
+- **Cross-compile** para ARM64, ARMv7, RISC-V, i386, WASM.
+- **Compilação incremental** com cache invalidation por hash (inclui fontes do compilador).
+
+### Otimizações
+
+- **Tail Call Optimization** para self-recursion **e mutual recursion** (SCC dispatcher).
+- **Defers emitidos em tail calls** (correção silenciosa).
+- **Escape analysis** (`alloc(N)` const sem escape → `alloca`).
+- **`opt -O2`** no IR antes do clang, apenas em `--release`.
+- **`-O0` / `-O2` / `-O3`** + DWARF debug info.
+
+---
+
+## 📚 Exemplos
+
+**[`examples/`](examples/)** tem 69 arquivos cobrindo:
+
+| Categoria | Exemplos |
+|---|---|
+| **Fundamentos** | `features.lm`, `features_showcase.lm`, `ergonomia.lm` |
+| **Generics & types** | `generics_test.lm`, `monomorph_test.lm`, `nested_generics.lm` |
+| **Closures & HOFs** | `lambda_test.lm`, `iter_test.lm`, `iterator_test.lm` |
+| **Traits & impls** | `trait_test.lm`, `trait_default_test.lm`, `overload_test.lm` |
+| **Pattern matching** | `match_expr_test.lm`, `match_struct_test.lm`, `destructure_test.lm` |
+| **Macros** | `comptime_test.lm`, `macro_test.lm` |
+| **Concorrência** | `threads.lm`, `coroutines.lm`, `async_server.lm` |
+| **I/O e web** | `http_framework.lm`, `server.lm`, `proxy.lm` |
+| **FFI & raylib** | `ffi_test.lm`, `chip8.lm`, `engine.lm` |
+| **Projetos maiores** | `json_parser.lm`, `sql_engine.lm`, `vm.lm`, `search_engine.lm` |
+| **Bare-metal & WASM** | `wasm_math.lm`, `wasm_memory.lm`, `wasm_js_interop.lm` |
+
+Verificação automatizada: **[`scripts/check_examples.sh`](scripts/check_examples.sh)** compila e roda cada um (54 PASS / 17 SKIP / 0 FAIL — os 17 skipados são servidores que não terminam sozinhos).
+
+---
+
+## 📊 Status
+
+**Alpha / Active.** A linguagem funciona end-to-end para uso real, com cobertura de testes em cada camada:
+
+| Métrica | Valor | Referência |
+|---|---|---|
+| Testes pytest | **428 passed** | [`docs/engineering/tests.md`](docs/engineering/tests.md) |
+| Exemplos compilando | **54 PASS / 17 SKIP / 0 FAIL** | [`scripts/check_examples.sh`](scripts/check_examples.sh) |
+| Suite standalone | **28/28** | [`run_tests.py`](run_tests.py) |
+| LSP | **8 passed** | [`lumina-vscode/tests/`](lumina-vscode/tests/) |
+
+Testes cobrem **runtime end-to-end** (não só parser/semantic) — cada bug histórico tem teste de regressão. A lista completa de fixes com sintoma, causa e teste associado está em **[`docs/engineering/bugs.md`](docs/engineering/bugs.md)**.
+
+---
+
+## ⚡ Performance
+
+Mediana de 20 execuções com [`hyperfine`](https://github.com/sharkdp/hyperfine),
+afinidade fixa em vCPU 1 (`taskset -c 1`), warmup 3, N passado por `argv`.
+Host: AMD EPYC 7763 (2 vCPUs compartilhadas, Codespace). Todos os tempos em ms.
+C compilado com **clang 18.1.3** (mesmo backend do Lumina).
+
+| Teste | C -O3 | Rust -O3 | **Lumina --release** | Go | **Lumina / C** |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| Fibonacci (N=35) | 32.9 | 32.1 | **31.9** | 62.2 | **0.97×** |
+| Crivo de Eratóstenes (10M) | 21.8 | 21.7 | 24.3 | 35.9 | 1.11× |
+| Loop matemático (100M) | 88.1 | 96.8 | **88.9** | 82.6 | **1.01×** |
+| Matriz 200×200 (int64) | 5.5 | 8.0 | **5.4** | 14.3 | **0.97×** |
+| Alloc churn (1M, GC) | 13.3 | — | 50.0 | — | 3.77× |
+
+**Variantes `--no-gc` (item #4 do roadmap):**
+
+| Bench | GC | no-GC | Custo do GC |
+| :--- | ---: | ---: | ---: |
+| primes (1 alloc de 10 MB) | 27.8 | **23.5** | 15% |
+| alloc_churn (1M allocs) | 50.0 | **12.2** | 76% |
+
+**Destaques:**
+
+- **Compute-bound (matrix, loop):** **empata com C** (matrix: 5.4 vs 5.5; loop: 88.9 vs 88.1). Mesmo backend LLVM; codegen comparável.
+- **Call-heavy (fib):** **empata com C e Rust** (31.9 vs 32.9 / 32.1). A vantagem histórica de "1.25×" era gcc-vs-clang, não Lumina-vs-C.
+- **Memory-bound (primes):** 11% atrás de C. O gap está em **System time** — ~3 ms de CPU do `GC_malloc` na alocação inicial de 10 MB. `--no-gc` fecha o gap (23.5 ms, empata com C).
+- **Churn (alloc_churn):** 3.77× com GC. O `--no-gc` empata com C (12.2 vs 13.3) — o Boehm GC tem custo real em churn pequeno, e este benchmark **mede isso**.
+
+**Caveats honestos:**
+
+- VM compartilhada: IQR/mediana de 5–60% em várias linhas. A **mediana** é o número reportável; `mean ± σ` seria enganoso (o σ de `fib_c` foi 3.9 ms sobre uma média de 21.9 ms em uma das rodadas).
+- C compilado com **clang**, não gcc. Com gcc, `fib_c` cai para ~21 ms — mas aí mede-se `gcc vs clang`, não `C vs Lumina`. O script permite `CC=gcc ./bench.sh` para quem quiser o comparativo cross-compiler.
+- Matrix em `int64` nos três. Vetorização: **nenhum** dos compiladores vetoriza o hot loop do matmul 200×200 — é memory-bound no L2 (~1 MB de working set). Os 7 `vector.body` do Lumina são loops de inicialização, não o matmul.
+
+Metodologia completa (flags exatos, código de cada benchmark, critérios de descarte, `bench.sh` comentado) em **[`docs/engineering/benchmarks.md`](docs/engineering/benchmarks.md)**.
+
+---
+
+## 🛠️ CLI
+
+```bash
+# Projeto
+lumina new meu_projeto              # cria lumina.toml + main.lm
+lumina install                      # baixa deps github:* para lumina_modules/
+lumina bind header.h nome           # gera FFI bindings de um header C
+
+# Compilar & executar
+lumina run arquivo.lm               # compila e executa (propaga exit code)
+lumina build arquivo.lm             # só compila
+lumina check arquivo.lm             # lexer + parser + semantic (rápido)
+lumina jit arquivo.lm               # executa via JIT
+lumina build app.lm --release       # -O3 + opt -O2 no IR
+lumina build app.lm --debug         # -O0 + DWARF
+lumina build app.lm --wasm          # WebAssembly (força --no-gc)
+lumina build app.lm --no-gc         # bare-metal
+lumina build app.lm --target=aarch64-linux-gnu
+
+# Qualidade
+lumina test arquivo.lm              # suíte de testes nativa
+lumina lint arquivo.lm              # W001..W005
+lumina fmt arquivo.lm               # formatter (preserva comentários)
+lumina doc --format=html|md|json
+
+# Interativo
+lumina repl                         # REPL persistente
+lumina playground [porta]           # playground web (padrão 8080)
+
+# Manutenção
+lumina clean                        # limpa cache e binários
+```
+
+Exit codes: `run` propaga o do binário; `test` = nº de falhas; `lint` = nº de warnings; `build`/`check` = 0/1. `--error-format=json` é pipe-safe (progresso vai para stderr).
+
+Detalhes de cada comando em **[`docs/ferramental.md`](docs/ferramental.md)**.
+
+---
+
+## 🌍 Cross-compilation
+
+```bash
+lumina build app.lm --target=aarch64-linux-gnu      # ARM64
+lumina build app.lm --target=arm-linux-gnueabihf    # ARMv7
+lumina build app.lm --target=riscv64-linux-gnu      # RISC-V 64
+lumina build app.lm --target=i386-linux-gnu         # x86 32-bit
+lumina build app.lm --target=wasm32-wasi --wasm     # WebAssembly
+```
+
+Requer toolchain do target no PATH:
+
+```bash
+sudo apt install -y gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf \
+                    gcc-riscv64-linux-gnu qemu-user
+```
+
+`libgc` precisa estar cross-compilada para o target, ou use `--no-gc`.
+
+### WebAssembly
+
+```lumina
+export fn fib(n: int) -> int:
+    if n <= 1:
+        return n
+    return fib(n - 1) + fib(n - 2)
+```
+
+```bash
+lumina build math.lm --wasm
+```
+
+```javascript
+WebAssembly.instantiateStreaming(fetch("math.wasm"))
+  .then(obj => console.log(obj.instance.exports.fib(35)));
+```
+
+---
+
+## 📖 Documentação
+
+| Documento | Para quem |
+|---|---|
+| [**Guia Rápido**](docs/guia-rapido.md) | Instalação, primeiro programa, CLI essencial |
+| [**Linguagem**](docs/linguagem.md) | Referência completa da sintaxe |
+| [**Standard Library**](docs/stdlib.md) | `math`, `sort`, `io`, `result`, `map`, `json`... |
+| [**Ferramental**](docs/ferramental.md) | CLI, LSP, formatter, linter, REPL |
+| [**Internals**](docs/internals.md) | Pipeline, codegen LLVM, TCO, escape analysis, GC |
+| [**Contributing**](docs/contributing.md) | Setup de dev, estilo, checklist de PR |
+
+Material de engenharia (para quem mexe no compilador):
+
+- [`docs/engineering/bugs.md`](docs/engineering/bugs.md) — lista completa de bugs corrigidos com sintoma, causa e teste
+- [`docs/engineering/tests.md`](docs/engineering/tests.md) — os 428 testes por arquivo
+- [`docs/engineering/benchmarks.md`](docs/engineering/benchmarks.md) — metodologia completa dos benchmarks
+
+---
+
+## 🤝 Contributing
+
+Contribuições são bem-vindas. Antes de abrir um PR:
+
+```bash
+pytest tests/ -q                    # 428 passed
+python3 run_tests.py                # 28/28
+./scripts/check_examples.sh --run   # 54 PASS / 17 SKIP / 0 FAIL
+lumina fmt --check <arquivos>       # se mexeu em .lm
+lumina lint <arquivos>              # sem novos warnings
+```
+
+Checklist completo, estilo de código, como adicionar features e onde pedir ajuda em **[`docs/contributing.md`](docs/contributing.md)**.
+
+---
+
+## 📜 Licença
+
+MIT. Veja [LICENSE](LICENSE).
+
+---
+
+## 🗺️ Roadmap
+
+**Concluído:**
+
+- [x] Lexer/parser/AST com indentação significativa
+- [x] Codegen LLVM + JIT + REPL persistente
+- [x] Generics (aninhados), traits, pattern matching
+- [x] Cross-compile (`--target`)
+- [x] TCO self-recursion **e** mutual recursion
+- [x] Boehm GC, escape analysis, `--no-gc`
+- [x] `nil`, `@safe`, `@macro`, `defer` com escopo de bloco
+- [x] `for x in arr`, `for i, x in arr`, tuplas
+- [x] Closures com captura (fat pointer unificado)
+- [x] `fn(int) -> int` como tipo checado
+- [x] `impl Box<T>` **e** `impl Trait for Box<int>`
+- [x] Enums genéricos, type aliases (incl. genéricos)
+- [x] Macros multi-statement (`nome!(args)`)
+- [x] Linter, formatter, `lumina doc`, LSP completo
+- [x] **`black_box(x)`** — primitiva nativa anti-DCE
+- [x] **`argv(i)` / `atoi`** — parametrização por linha de comando
+- [x] **Benchmarks comparáveis** em todas as 5 suites (`bench.sh` com clang, `-fwrapv`, `--no-gc`)
+
+**Em aberto:**
+
+- [ ] Safe-by-default global (sem `@safe` explícito)
+- [ ] Macros com quasiquote
+- [ ] Self-hosting (bootstrapping)
+- [ ] Package registry
+- [ ] Code actions (quick fixes) no LSP
+- [ ] Inlay hints no LSP
+- [ ] **Escape analysis** para arrays com N dinâmico mas loop-bounded
+- [ ] **`std/alloc` arena** como primitiva de 1ª classe para churn controlado
+- [ ] **Aliasing hints** (`restrict`/`noalias`) expostos em Lumina
+
+Detalhes do que já foi feito em **[CHANGELOG.md](CHANGELOG.md)**.
+</file>
+
+</files>

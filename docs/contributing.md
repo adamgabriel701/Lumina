@@ -43,7 +43,7 @@ python3 run_tests.py                # 28/28
 
 ## Estrutura do projeto
 
-Veja [Internals](internals.md) para detalhes de cada módulo.
+Veja [Internals](internals/arquitetura.md) para detalhes de cada módulo.
 
 ```
 lumina/               # Compilador
@@ -265,4 +265,4 @@ E sempre:
 
 - Abra uma [issue](https://github.com/adamgabriel701/Lumina/issues)
 - Ou veja o [README principal](../README.md) para visão geral
-- Detalhes técnicos em [Internals](internals.md)
+- Detalhes técnicos em [Internals](internals/arquitetura.md)

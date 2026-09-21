@@ -97,4 +97,5 @@ lumina-vscode/*.vsix
 # Binários compilados (sem extensão)
 # ============================================
 /tests/features/uncertain_features
-/tests/features/*_bin
+/tests/features/*_binctx/
+site/

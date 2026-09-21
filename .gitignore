@@ -99,3 +99,4 @@ lumina-vscode/*.vsix
 /tests/features/uncertain_features
 /tests/features/*_binctx/
 site/
+ctx/

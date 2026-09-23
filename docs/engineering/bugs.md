@@ -92,3 +92,74 @@ Lista completa de bugs silenciosos corrigidos no compilador. Todos passavam pelo
 | `test` com falhas saía com 0 | `lumina test` retornava 0 | `cmd_test` retorna nº de falhas | `cli/test_exit_codes.py` |
 | `--help` caía em "comando desconhecido" | — | `main()` trata `-h`/`--help`/`help`/sem args | `cli/test_exit_codes.py` |
 | `_compile_extra_objects` ignorava `extra_flags` | `.cpp` sem `-DFOO=42` | Passa `linker_extra_flags` para clang/clang++ | `cli/test_build.py` |
+
+---
+
+## Bugs identificados (não corrigidos)
+
+Bugs encontrados durante o desenvolvimento do linker próprio
+(`lumina-ld`). Nenhum é do linker — o linker produziu ELF válido em
+todos os casos. São bugs do **codegen** que ficaram invisíveis enquanto
+o `clang` + `glibc` faziam o link, porque forneciam um `_start` que
+fazia `exit_group` no retorno de `main` e uma stack que crescia até
+8 MB.
+
+| Bug | Sintoma | Causa | Onde | Impacto |
+|---|---|---|---|---|
+| `main` sem `ret` após tail print | `./chip8` segfaulta em `add %al,(%rax)` num endereço de padding | Codegen emite o último `call printf` como tail call, mas não emite `ret` depois. O `call` retorna para o byte seguinte ao último `call`, que não existe no `.text` do `.o` — cai no padding zeros entre `.text` e a próxima seção | `lumina/codegen/function_body.py` ou `statements/flow.py` (`_try_tail_call`, caso "último statement é call") | Todo exemplo que termina com `print()` na posição tail crasharia com `--linker=self`. Com clang+glibc funciona por sorte |
+| `alloca` dentro de loop estoura stack | `./gc_test` (1M iterações de `let lixo = "..."`) segfaulta com ~250K iterações; `ulimit -s unlimited` faz funcionar | Codegen emite `alloca` para `lixo` dentro do corpo do loop, não uma única vez no entry block. Cada iteração empilha mais um slot, esgotando os 8 MB de stack padrão | `lumina/codegen/statements/var_decl.py::visit_VarDecl` | Qualquer loop longo com variável local estoura stack. Não afeta programas curtos |
+
+### Correções propostas
+
+**Bug 1 (`main` sem `ret`)**: no `_try_tail_call`, quando o último statement
+da função é uma chamada de função, emitir `ret` no bloco `end` após o `call`.
+Verificar se o retorno da função não está sendo consumido. Teste de regressão
+mínimo:
+
+```lumina
+fn f() -> int:
+    print("oi")
+    return 0
+```
+
+com inspeção `objdump -d` para confirmar `ret` presente.
+
+**Bug 2 (`alloca` em loop)**: hoistar todos os `alloca` para o entry block
+da função. Alternativa: usar `phi` para reutilizar o slot entre iterações.
+A primeira abordagem é mais simples e cobre 100% dos casos.
+
+### Como foram descobertos
+
+Ambos só apareceram quando o `lumina-ld` passou a gerar o executável completo,
+sem o `_start` do glibc e sem a stack gerenciada pelo kernel. A lista
+completa de bugs do compilador (todos corrigidos) está nas seções anteriores
+deste documento — esses dois são os únicos em aberto até a data de hoje.
+
+### Testes de regressão (quando corrigidos)
+
+Adicionar em `tests/test_codegen_bugs.py`:
+
+```python
+def test_main_ends_with_ret():
+    """Regressão para chip8: main com print em tail position deve ter ret."""
+    src = '''
+fn main() -> int:
+    print("oi")
+    return 0
+'''
+    # compila, desmonta, confirma que .text termina com `c3` (ret)
+    ...
+
+def test_loop_locals_no_stack_growth():
+    """Regressão para gc_test: 1M iterações não podem estourar a stack."""
+    src = '''
+fn main() -> int:
+    mut i = 0
+    while i < 1000000:
+        let lixo = "Lixo " + i
+        i += 1
+    return 0
+'''
+    # compila e roda com ulimit -s 8192 (default); deve retornar 0
+    ...
+```

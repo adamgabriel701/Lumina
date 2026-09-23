@@ -18,6 +18,34 @@ from .errors import report_error
 from .linking import load_link_config, compile_extra_objects
 
 
+# ------------------------------------------------------------------
+# Caminhos do linker próprio (lumina-ld)
+#
+# Estrutura esperada:
+#   <repo>/
+#     lumina_cli/commands/build.py   ← este arquivo
+#     linker/
+#       lumina-ld
+#       runtime/
+#         start.o
+#         rt.o
+#
+# __file__ = <repo>/lumina_cli/commands/build.py
+# dirname x3 = <repo>
+# ------------------------------------------------------------------
+def _self_linker_paths():
+    """Retorna (lumina-ld, start.o, rt.o) se os 3 existirem; senão None."""
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    linker_dir = os.path.join(repo, "linker")
+    ld    = os.path.join(linker_dir, "lumina-ld")
+    start = os.path.join(linker_dir, "runtime", "start.o")
+    rt    = os.path.join(linker_dir, "runtime", "rt.o")
+    if not (os.path.exists(ld) and os.path.exists(start) and os.path.exists(rt)):
+        return None
+    return (ld, start, rt)
+
+
 def cmd_build(entry_file=None, extra_flags=[]):
     link_cfg = load_link_config(entry_file)
     libs = link_cfg.get("libs", [])
@@ -45,24 +73,45 @@ def cmd_build(entry_file=None, extra_flags=[]):
         extra_flags.append("--wasm")
         info(f"🎯 Target '{link_target}' detectado em [link] — forçando --wasm")
 
-    target_triple = None
+    # ---- Extrai flags que NÃO vão para o clang ----
+    target_triple  = None
+    linker_kind    = "clang"        # default; pode virar "self"
     filtered_flags = []
     for f in extra_flags:
         if f.startswith("--target="):
             target_triple = f.split("=", 1)[1]
+        elif f.startswith("--linker="):
+            linker_kind = f.split("=", 1)[1]
         else:
             filtered_flags.append(f)
     extra_flags = filtered_flags
+
+    if linker_kind not in ("clang", "self"):
+        report_error(LuminaError(
+            f"--linker={linker_kind} inválido. Use --linker=self ou --linker=clang.",
+            entry, 0, 0, "",
+        ))
+        return None
+    use_self_linker = (linker_kind == "self")
 
     is_wasm = "--wasm" in extra_flags
     is_debug = "--debug" in extra_flags
     is_release = "--release" in extra_flags
     is_no_gc = ("--no-gc" in extra_flags) or is_wasm
 
+    # --linker=self usa uma runtime que implementa GC_malloc como malloc.
+    # Sem --no-gc o programa aloca e nunca libera → vaza. Forçamos
+    # --no-gc para deixar explícito.
+    if use_self_linker and not is_no_gc:
+        info("🔧 --linker=self: ativando --no-gc (runtime sem GC real).")
+        is_no_gc = True
+
     opt_flag = "-O0" if is_debug else ("-O3" if is_release else "-O2")
 
     step(f"🛠️  Compilando projeto: {paint(project_name, Color.BOLD + Color.BRIGHT_CYAN)}")
     info(f"⚙️  Otimização: {paint(opt_flag, Color.BOLD)}")
+    if use_self_linker:
+        info(f"🔗 Linker: {paint('lumina-ld (self)', Color.BOLD + Color.BRIGHT_CYAN)}")
 
     cache_use = not (is_wasm or is_debug)
 
@@ -96,6 +145,9 @@ def cmd_build(entry_file=None, extra_flags=[]):
 
     debug_flag = "-g" if is_debug else ""
 
+    # ==================================================================
+    # Branch A: WebAssembly
+    # ==================================================================
     if is_wasm:
         warn("⚠️ Compilando para WebAssembly: Garbage Collector nativo desativado.")
         with open(entry, "r") as f:
@@ -123,39 +175,94 @@ def cmd_build(entry_file=None, extra_flags=[]):
         cmd_args.extend(linker_extra_flags)
 
         output_path = f"{project_name}.wasm"
+
+    # ==================================================================
+    # Branch B: nativo (x86_64)
+    # ==================================================================
     else:
-        gc_flag = "-lgc" if not is_no_gc else ""
-        if is_no_gc:
-            warn("⚠️ Modo Bare-Metal (--no-gc): Garbage Collector desativado.")
-
-        if target_triple:
-            info(f"🎯 Cross-compilando para: {paint(target_triple, Color.BOLD)}")
-            warn("⚠️ Cross-compile requer sysroot/toolchain do target no PATH "
-                 "(ex: gcc-aarch64-linux-gnu). libgc precisa estar linkável "
-                 "para o target, ou use --no-gc.")
-
-        cmd_args = ["clang"]
-        if target_triple:
-            cmd_args.append(f"--target={target_triple}")
-        cmd_args.extend([opt_flag, "-Wno-override-module", debug_flag,
-                         ir_file, "-o", project_name, "-lc", "-lm", "-lpthread"])
-        if gc_flag:
-            cmd_args.append(gc_flag)
-        cmd_args.extend(extra_obj_paths)
-        if has_cpp:
-            cmd_args.append("-lstdc++")
-        for lib in libs:
-            cmd_args.append(f"-l{lib}")
-        cmd_args.extend(linker_extra_flags)
-
         output_path = project_name
+
+        if use_self_linker:
+            # ---- B.1: lumina-ld (linker próprio) ----
+            if target_triple:
+                report_error(LuminaError(
+                    "--linker=self só suporta x86_64 nativo. "
+                    "Remova --target= ou use --linker=clang.",
+                    entry, 0, 0, "",
+                ))
+                return None
+
+            paths = _self_linker_paths()
+            if not paths:
+                report_error(LuminaError(
+                    "--linker=self requer que o linker esteja compilado. "
+                    "Rode 'make' em linker/ antes de usar esta flag.",
+                    entry, 0, 0, "",
+                ))
+                return None
+            linker_bin, start_o, rt_o = paths
+
+            # Passo 1: .ll → .o (só compila, não linka)
+            obj_file = f"{project_name}.o"
+            compile_obj_cmd = [
+                "clang", "-c", opt_flag, "-Wno-override-module",
+                "-fno-pic", "-fno-pie", "-fno-stack-protector",
+            ]
+            if debug_flag:
+                compile_obj_cmd.append(debug_flag)
+            compile_obj_cmd.extend([ir_file, "-o", obj_file])
+
+            header("4a. Codegen nativo (.ll → .o)")
+            info(f"Executando: {paint(' '.join(compile_obj_cmd), Color.MUTED)}")
+            try:
+                subprocess.run(compile_obj_cmd, check=True)
+            except subprocess.CalledProcessError:
+                report_error(LuminaError(
+                    "Erro ao gerar .o a partir do .ll.",
+                    entry, 0, 0, "",
+                ))
+                return None
+
+            # Passo 2: .o + runtime → executável
+            cmd_args = [linker_bin, start_o, obj_file, rt_o, "-o", project_name]
+            cmd_args.extend(extra_obj_paths)
+
+            if has_cpp:
+                warn("⚠️  --linker=self com objetos C++ pode falhar (sem -lstdc++).")
+            if libs:
+                warn(f"⚠️  --linker=self ignora libs externas: {libs}")
+        else:
+            # ---- B.2: clang (linker padrão) ----
+            gc_flag = "-lgc" if not is_no_gc else ""
+            if is_no_gc:
+                warn("⚠️ Modo Bare-Metal (--no-gc): Garbage Collector desativado.")
+
+            if target_triple:
+                info(f"🎯 Cross-compilando para: {paint(target_triple, Color.BOLD)}")
+                warn("⚠️ Cross-compile requer sysroot/toolchain do target no PATH "
+                     "(ex: gcc-aarch64-linux-gnu). libgc precisa estar linkável "
+                     "para o target, ou use --no-gc.")
+
+            cmd_args = ["clang"]
+            if target_triple:
+                cmd_args.append(f"--target={target_triple}")
+            cmd_args.extend([opt_flag, "-Wno-override-module", debug_flag,
+                             ir_file, "-o", project_name, "-lc", "-lm", "-lpthread"])
+            if gc_flag:
+                cmd_args.append(gc_flag)
+            cmd_args.extend(extra_obj_paths)
+            if has_cpp:
+                cmd_args.append("-lstdc++")
+            for lib in libs:
+                cmd_args.append(f"-l{lib}")
+            cmd_args.extend(linker_extra_flags)
 
     # ------------------------------------------------------------------
     # Cache incremental de LINKAGEM
     #
     # A cache só é confiável se TODAS as condições baterem:
     #   1. O arquivo de hash existe (build anterior rodou)
-    #   2. O hash do IR + opt_flag bate (código não mudou)
+    #   2. O hash do IR + opt_flag + linker_kind bate (nada mudou)
     #   3. O BINÁRIO DE SAÍDA existe em disco (não foi deletado/movido)
     #
     # Sem (3), temos o bug: cache diz "nada mudou, pulando linkagem",
@@ -164,13 +271,10 @@ def cmd_build(entry_file=None, extra_flags=[]):
     #   mv: cannot stat 'foo': No such file or directory
     # ------------------------------------------------------------------
     hash_obj_file = f".lumina_cache/{project_name}.bin_hash"
-    opt_marker = opt_flag
+    opt_marker = opt_flag + "|" + linker_kind
 
     cache_hit = False
     if (not is_wasm) and (not is_debug) and os.path.exists(hash_obj_file):
-        # Só confiamos no cache se o BINÁRIO existe. Sem isso, um
-        # `rm foo` (ou `mv foo foo_lumina`) seguido de `lumina build`
-        # cairia em cache hit e nunca regeneraria o binário.
         if os.path.exists(output_path):
             with open(hash_obj_file, "r") as f:
                 old_hash = f.read()
@@ -183,7 +287,8 @@ def cmd_build(entry_file=None, extra_flags=[]):
         success("✅ Build incremental: Nenhum código mudou. Pulando linkagem.")
         return output_path
 
-    header("4. Linkagem Nativa")
+    header("4. Linkagem Nativa" if not use_self_linker
+           else "4b. Linkagem com lumina-ld")
     info(f"Executando: {paint(' '.join(cmd_args), Color.MUTED)}")
 
     try:
@@ -202,8 +307,9 @@ def cmd_build(entry_file=None, extra_flags=[]):
 
         return output_path
     except subprocess.CalledProcessError:
+        linker_name = "lumina-ld" if use_self_linker else "clang"
         report_error(LuminaError(
-            "Erro durante a linkagem com o clang. Veja a saída acima para detalhes.",
+            f"Erro durante a linkagem com {linker_name}. Veja a saída acima para detalhes.",
             entry, 0, 0, "",
         ))
         return None

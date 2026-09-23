@@ -45,7 +45,8 @@ def usage():
     info(f"Flags de build: {paint('--release (-O3)', Color.MUTED)}, "
          f"{paint('--debug (-O0 + DWARF)', Color.MUTED)}, "
          f"{paint('--wasm', Color.MUTED)}, "
-         f"{paint('--no-gc', Color.MUTED)}")
+         f"{paint('--no-gc', Color.MUTED)}, "
+         f"{paint('--linker=self|clang', Color.MUTED)}")
     info(f"Flags globais: {paint('--error-format=text|json', Color.MUTED)}")
     info(f"Exemplo: {paint('lumina new meu_projeto', Color.MUTED)}")
 

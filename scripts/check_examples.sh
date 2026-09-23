@@ -3,28 +3,44 @@
 # Compila todos os exemplos em examples/*.lm.
 #
 # Uso:
-#   ./scripts/check_examples.sh              # só compila
-#   ./scripts/check_examples.sh --run        # compila + executa
-#   ./scripts/check_examples.sh --run-only   # só executa (assume já compilados)
+#   ./scripts/check_examples.sh                    # só compila (clang)
+#   ./scripts/check_examples.sh --run              # compila + executa
+#   ./scripts/check_examples.sh --run-only         # só executa
+#   ./scripts/check_examples.sh --linker=self      # usa lumina-ld
+#   ./scripts/check_examples.sh --run --linker=self
 #
 # Comportamento do --run:
 #   - Se existe examples/<nome>.expected, compara output linha a linha
 #   - Senão, verifica apenas exit code 0
 #   - Timeout de 10s por binário
+#
+# --linker=self:
+#   Usa o linker próprio (`lumina-ld`) em vez do clang na etapa de link.
+#   Requer que `make` já foi rodado em `linker/`. Alguns exemplos que
+#   dependem de bibliotecas externas (raylib, pthread, FFI C++) vão
+#   falhar — a skip list precisa ser ajustada, ou use sem a flag para
+#   o baseline.
 # =========================================================
 
 set -u
 
 RUN_MODE=0
 RUN_ONLY=0
+LINKER_FLAG=""
 for arg in "$@"; do
     case "$arg" in
-        --run)      RUN_MODE=1 ;;
-        --run-only) RUN_MODE=1; RUN_ONLY=1 ;;
+        --run)          RUN_MODE=1 ;;
+        --run-only)     RUN_MODE=1; RUN_ONLY=1 ;;
+        --linker=self)  LINKER_FLAG="--linker=self" ;;
+        --linker=clang) LINKER_FLAG="" ;;   # explícito, no-op
+        *)
+            echo "aviso: argumento desconhecido: $arg" >&2
+            ;;
     esac
 done
 
 SKIP_FILE="tests/features/skip.txt"
+
 # Skips específicos do modo --run
 declare -A RUN_SKIP_MAP
 if [ -f "tests/features/run_skip.txt" ] && [ "$RUN_MODE" = "1" ]; then
@@ -34,6 +50,7 @@ if [ -f "tests/features/run_skip.txt" ] && [ "$RUN_MODE" = "1" ]; then
         RUN_SKIP_MAP["$name"]=1
     done < "tests/features/run_skip.txt"
 fi
+
 PASS=0
 SKIP=0
 FAIL=0
@@ -54,7 +71,7 @@ compile_one() {
     local f="$1"
     rm -rf .lumina_cache
     local output
-    output=$(timeout 20 python3 -u -m lumina_cli build "$f" 2>&1)
+    output=$(timeout 20 python3 -u -m lumina_cli build "$f" $LINKER_FLAG 2>&1)
     if echo "$output" | grep -q "Build concluído"; then
         return 0
     fi
@@ -95,6 +112,14 @@ run_one() {
     fi
 }
 
+# ---------- Cabeçalho ----------
+echo "============================================================"
+echo "  check_examples.sh"
+echo "  modo: $([ "$RUN_MODE" = "1" ] && echo "run" || echo "compile")"
+echo "  linker: ${LINKER_FLAG:-clang (default)}"
+echo "============================================================"
+echo
+
 # ---------- Loop principal ----------
 for f in examples/*.lm; do
     [ -f "$f" ] || continue
@@ -105,7 +130,7 @@ for f in examples/*.lm; do
         SKIP=$((SKIP + 1))
         continue
     fi
-    
+
     if [ "$RUN_MODE" = "1" ] && [ -n "${RUN_SKIP_MAP[$base]:-}" ]; then
         echo "⏭️  SKIP (run): $base"
         SKIP=$((SKIP + 1))
@@ -141,9 +166,9 @@ done
 echo
 echo "============================================================"
 if [ "$RUN_MODE" = "1" ]; then
-    echo "📊 PASS: $PASS    ⏭️  SKIP: $SKIP    ❌ FAIL: $FAIL  (modo: run)"
+    echo "📊 PASS: $PASS    ⏭️  SKIP: $SKIP    ❌ FAIL: $FAIL  (modo: run${LINKER_FLAG:+, linker: self})"
 else
-    echo "📊 PASS: $PASS    ⏭️  SKIP: $SKIP    ❌ FAIL: $FAIL  (modo: compile)"
+    echo "📊 PASS: $PASS    ⏭️  SKIP: $SKIP    ❌ FAIL: $FAIL  (modo: compile${LINKER_FLAG:+, linker: self})"
 fi
 echo "============================================================"
 
@@ -156,3 +181,14 @@ if [ ${#FAILED_FILES[@]} -gt 0 ]; then
     exit 1
 fi
 exit 0
+```
+
+**Como usar:**
+
+```bash
+# Baseline (clang) — comportamento de sempre
+./scripts/check_examples.sh --run
+
+# Com linker próprio
+( cd linker && make clean && make )
+./scripts/check_examples.sh --run --linker=self

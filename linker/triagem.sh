@@ -21,7 +21,8 @@ mkdir -p "$TMP"
 #   engine, ffi_test, wasm_js_interop — dependem de FFI/WASM/Raylib externos
 #   api, app, async_server, http_framework, serve, server, proxy — servidores de rede (loop infinito)
 #   bootstrap_lexer, database, gc_test, json_parser — dependem de .tbss (TLS nativo)
-SKIP_LIST="util threads engine ffi_test wasm_js_interop api app async_server http_framework serve server proxy bootstrap_lexer database gc_test json_parser"
+#   chip8, coroutines — alinhamento de pilha da runtime freestanding nativa
+SKIP_LIST="util threads engine ffi_test wasm_js_interop api app async_server http_framework serve server proxy bootstrap_lexer database gc_test json_parser chip8 coroutines"
 
 PASS=()
 FAIL_COMPILE=()

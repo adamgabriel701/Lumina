@@ -235,3 +235,18 @@ class NilExpr(Expr):
 class ComptimeExpr(Expr):
     expr: Expr
     folded: Optional[Expr] = None   # preenchido pelo semantic
+
+@dataclass
+class ChainedComparisonExpr(Expr):
+    """`a < b < c < d` — comparação encadeada.
+
+    Guarda os operandos e operadores em listas paralelas, para que o
+    codegen avalie cada operando UMA vez (diferente da transformação
+    ingênua `(a<b) and (b<c)`, que avalia `b` duas vezes).
+
+    Invariantes:
+      - `len(ops) == len(operands) - 1`
+      - `len(operands) >= 3` (o caso de 2 operandos é `BinaryExpr`)
+    """
+    operands: List[Expr]
+    ops: List[str]

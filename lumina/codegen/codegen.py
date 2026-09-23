@@ -12,7 +12,7 @@ Ordem da MRO (da esquerda para a direita):
   5. SetupMixin            — setup_libc_functions, _emit_mutable_global
   6. RegistrationMixin     — register_*, _apply_llvm_attrs, _llvm_ty_to_str
   7. GenericsMixin         — materialize_generic, _infer_type_map_lumina
-  8. TraitsMixin           — _resolve_trait_defaults, _validate_macro
+  8. TraitsMixin           — _validate_macro (resolve_trait_defaults migrou p/ semantic)
   9. TCOMixin              — SCCs + dispatcher
  10. FunctionBodyMixin     — generate_function_body
 """
@@ -31,6 +31,7 @@ from .tco import TCOMixin
 from .function_body import FunctionBodyMixin
 
 from ..ast import Function as AstFunction, TraitDecl, ExternDecl
+from .context import normalize_attrs
 
 
 class LLVMCodegen(
@@ -150,8 +151,8 @@ class LLVMCodegen(
         self.macros = {}
         for decl in ast:
             if isinstance(decl, AstFunction):
-                attrs = getattr(decl, 'attrs', None) or []
-                if 'macro' in attrs:
+                attrs_norm = normalize_attrs(getattr(decl, 'attrs', None))
+                if any(name == 'macro' for name, _args in attrs_norm):
                     self._validate_macro(decl)
                     self.macros[decl.name] = decl
 
@@ -164,8 +165,14 @@ class LLVMCodegen(
             elif hasattr(decl, 'variants'):
                 self.register_enum(decl)
 
-        # 1.5. Resolve métodos default de traits
-        self._resolve_trait_defaults(ast)
+        # 1.5. (REMOVIDO) A resolução de métodos default de traits vivia
+        # aqui como uma duplicata do que `SemanticAnalyzer` já faz em
+        # `_resolve_trait_defaults`. Manter as duas era fonte de divergência:
+        # na primeira feature nova de trait, uma implementação seria
+        # atualizada e a outra não. Agora, a única fonte é
+        # `lumina/semantic/trait_resolution.py`. Como o pipeline roda
+        # semantic ANTES do codegen, `ImplBlock.methods` já contém os
+        # defaults quando `generate_module` é chamado.
 
         # 2. Pré-registra todas as funções e métodos de impls.
         # TraitDecl NÃO é registrado.

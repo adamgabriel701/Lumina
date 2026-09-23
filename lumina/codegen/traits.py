@@ -1,49 +1,19 @@
-"""Resolução de métodos default de traits e validação de macros."""
-from ..ast import Function as AstFunction, Param
+"""Validação de macros.
+
+A resolução de métodos default de traits foi movida para o semantic
+(`lumina/semantic/trait_resolution.py::TraitResolutionMixin`).
+
+Motivo: existiam duas implementações quase idênticas — uma aqui, outra
+no semantic — e elas iam divergir na primeira feature nova de trait.
+Como `SemanticAnalyzer.analyze` muta a AST antes do codegen rodar, o
+`ImplBlock.methods` já contém os defaults quando
+`LLVMCodegen.generate_module` é chamado. Re-resolver aqui era
+redundante e arriscado.
+"""
 from ..errors import LuminaError
-from ..common.mangle import mangle_method
 
 
 class TraitsMixin:
-
-    # ==================================================================
-    # Trait defaults
-    # ==================================================================
-    def _resolve_trait_defaults(self, ast):
-        """Copia métodos default do trait para o ImplBlock que não os sobrescreve.
-
-        Roda ANTES de registrar funções, tanto no semantic quanto no codegen,
-        pra que `Struct_metodo` exista nos dois lados.
-        """
-        traits_by_name = {}
-        for decl in ast:
-            if hasattr(decl, 'methods') and not hasattr(decl, 'struct_name'):
-                traits_by_name[decl.name] = decl
-
-        for decl in ast:
-            if not (hasattr(decl, 'methods') and hasattr(decl, 'struct_name')):
-                continue
-            trait_name = getattr(decl, 'trait_name', None)
-            if not trait_name or trait_name not in traits_by_name:
-                continue
-
-            trait_def = traits_by_name[trait_name]
-            explicit_names = {m.name for m in decl.methods}
-
-            for trait_method in trait_def.methods:
-                full_name = mangle_method(decl.struct_name, trait_method.name)
-                if full_name in explicit_names:
-                    continue
-                if not trait_method.body:
-                    continue
-
-                default_method = AstFunction(
-                    full_name,
-                    [Param('self', decl.struct_name)] + list(trait_method.params),
-                    trait_method.return_type,
-                    list(trait_method.body),
-                )
-                decl.methods.append(default_method)
 
     # ==================================================================
     # Validação de macros
@@ -72,4 +42,3 @@ class TraitsMixin:
                 col=getattr(fn, 'col', 0) or 0,
                 source_code="",
             )
-        

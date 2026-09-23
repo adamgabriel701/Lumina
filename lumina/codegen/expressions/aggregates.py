@@ -3,6 +3,7 @@ from ...ast import (
     StringExpr, VariableExpr, StructLiteralExpr,
     StructLiteralField, LambdaExpr, TupleExpr,
 )
+from ..context import push_context
 
 
 class AggregatesMixin:
@@ -122,8 +123,19 @@ class AggregatesMixin:
           2. Função `i64 __closure_N(i8* env, i64 a1, ..., i64 aN)`.
           3. Bloco closure `{i8* fn, i8* env}` alocado no heap.
         Retorna ponteiro para o bloco closure (i8*).
+
+        Refatoração (Fase 1):
+          Antes, 6 campos (`builder`, `symbol_table`, `var_types`,
+          `defer_stack`, `closure_vars`, `current_func_name` +
+          `current_body_bb`) eram salvos/restaurados manualmente, sem
+          cobrir `_safe_mode` e sem garantia em caso de exceção. Agora
+          usa `push_context`, que restaura TUDO (inclusive em exception).
         """
         free = list(node.free_vars)
+
+        # Captura o conjunto de closure_vars do escopo EXTERNO antes de
+        # entrar no novo contexto (push_context restaura este estado).
+        outer_closure_vars = set(self.closure_vars)
 
         # 1) Tipos dos campos do env + ponteiros externos para os valores
         env_field_tys = []
@@ -152,7 +164,7 @@ class AggregatesMixin:
             name=f"closure_env_typed_{self.lambda_counter}",
         )
 
-        # 3) Copia os valores capturados
+        # 3) Copia os valores capturados (usa symbol_table do ESCOPO EXTERNO)
         for i, name in enumerate(free):
             outer_ptr = env_field_ptrs[i]
             if outer_ptr is None:
@@ -173,98 +185,86 @@ class AggregatesMixin:
         func_ty = ir.FunctionType(self.i64_ty, param_tys)
         func = ir.Function(self.module, func_ty, name=func_name)
 
-        # ==================================================================
-        # NOVO: registra a closure em functions_table e aponta
-        # `current_func_name` para ela. Sem isso, o `visit_ReturnStmt`
-        # dentro do body usa o tipo de retorno da função EXTERNA — que
-        # agora é i32 para `main`, emitindo `ret i32` numa função que
-        # espera i64. Bug visível em lambda_test.lm e nas closures.
-        # ==================================================================
+        # Registra antes de emitir o corpo (permite recursão)
         self.functions_table[func_name] = (func, func_ty)
-        old_current_func = getattr(self, 'current_func_name', None)
-        old_body_bb = getattr(self, 'current_body_bb', None)
-        self.current_func_name = func_name
-        # `current_body_bb` também precisa apontar para algo dentro da
-        # closure (não do outer), senão TCO tenta pular para o body do
-        # main. Como closures não têm TCO ainda, basta desligar.
-        self.current_body_bb = None
-
-        old_builder = self.builder
-        old_symtab = self.symbol_table
-        old_var_types = self.var_types
-        old_defer_stack = self.defer_stack
-        old_closure_vars = self.closure_vars
 
         block = func.append_basic_block(name="entry")
-        self.builder = ir.IRBuilder(block)
-        self.symbol_table = {}
-        self.var_types = {}
-        self.defer_stack = []
-        self.closure_vars = set()
+        inner_builder = ir.IRBuilder(block)
 
-        # 4a) Bind env → symbol_table
-        env_i8p = func.args[0]
-        env_typed_inner = self.builder.bitcast(
-            env_i8p, env_ty.as_pointer(), name="env_typed_inner",
-        )
-        for i, name in enumerate(free):
-            field_ty = env_field_tys[i]
-            fp = self.builder.gep(
-                env_typed_inner,
-                [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, i)],
-                name=f"env_{name}_ptr",
+        # Herda `_safe_mode` do escopo externo (comportamento anterior)
+        inherit_safe = getattr(self, '_safe_mode', False)
+
+        with push_context(
+            self,
+            builder=inner_builder,
+            symbol_table={},
+            var_types={},
+            current_func_name=func_name,
+            current_body_bb=None,          # closures não têm TCO
+            defer_stack=[],
+            closure_vars=set(),
+            _safe_mode=inherit_safe,
+            _current_scc_slots=None,
+            _current_scc_ids=None,
+            _current_scc_id_slot=None,
+            _current_scc_dispatch_bb=None,
+        ):
+            # 4a) Bind env → symbol_table
+            env_i8p = func.args[0]
+            env_typed_inner = self.builder.bitcast(
+                env_i8p, env_ty.as_pointer(), name="env_typed_inner",
             )
-            val = self.builder.load(fp, name=f"env_{name}")
-            slot = self.builder.alloca(field_ty, name=name)
-            self.builder.store(val, slot)
-            self.symbol_table[name] = slot
-            self.var_types[name] = self._llvm_ty_to_str(field_ty)
-            if name in old_closure_vars:
-                self.closure_vars.add(name)
+            for i, name in enumerate(free):
+                field_ty = env_field_tys[i]
+                fp = self.builder.gep(
+                    env_typed_inner,
+                    [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, i)],
+                    name=f"env_{name}_ptr",
+                )
+                val = self.builder.load(fp, name=f"env_{name}")
+                slot = self.builder.alloca(field_ty, name=name)
+                self.builder.store(val, slot)
+                self.symbol_table[name] = slot
+                self.var_types[name] = self._llvm_ty_to_str(field_ty)
+                if name in outer_closure_vars:
+                    self.closure_vars.add(name)
 
-        # 4b) Bind params (i64 → tipo real)
-        for i, p in enumerate(node.params):
-            p_name = p.name if hasattr(p, 'name') else p[0]
-            p_type = p.type_ann if hasattr(p, 'type_ann') else p[1]
-            p_ty = self.get_llvm_param_type(p_type)
-            arg_val = func.args[i + 1]
-            if arg_val.type != p_ty:
-                if p_ty == self.f64_ty:
-                    arg_val = self.builder.sitofp(arg_val, p_ty, name=f"p_{p_name}_itof")
-                elif isinstance(p_ty, ir.PointerType):
-                    arg_val = self.builder.inttoptr(arg_val, p_ty, name=f"p_{p_name}_itop")
-                elif isinstance(p_ty, ir.IntType) and p_ty.width < 64:
-                    arg_val = self.builder.trunc(arg_val, p_ty, name=f"p_{p_name}_trunc")
-            slot = self.builder.alloca(p_ty, name=p_name)
-            self.builder.store(arg_val, slot)
-            self.symbol_table[p_name] = slot
-            self.var_types[p_name] = p_type
+            # 4b) Bind params (i64 → tipo real)
+            for i, p in enumerate(node.params):
+                p_name = p.name if hasattr(p, 'name') else p[0]
+                p_type = p.type_ann if hasattr(p, 'type_ann') else p[1]
+                p_ty = self.get_llvm_param_type(p_type)
+                arg_val = func.args[i + 1]
+                if arg_val.type != p_ty:
+                    if p_ty == self.f64_ty:
+                        arg_val = self.builder.sitofp(arg_val, p_ty, name=f"p_{p_name}_itof")
+                    elif isinstance(p_ty, ir.PointerType):
+                        arg_val = self.builder.inttoptr(arg_val, p_ty, name=f"p_{p_name}_itop")
+                    elif isinstance(p_ty, ir.IntType) and p_ty.width < 64:
+                        arg_val = self.builder.trunc(arg_val, p_ty, name=f"p_{p_name}_trunc")
+                slot = self.builder.alloca(p_ty, name=p_name)
+                self.builder.store(arg_val, slot)
+                self.symbol_table[p_name] = slot
+                self.var_types[p_name] = p_type
 
-        # 4c) Body
-        from ...ast.expressions import Expr as ExprBase
-        for stmt in node.body:
-            if isinstance(stmt, ExprBase):
-                val = self.visit(stmt)
-                if val.type != self.i64_ty:
-                    val = self._coerce_for_store(val, self.i64_ty, name_hint="closure_ret")
-                self.builder.ret(val)
-                break
-            else:
-                self.visit(stmt)
+            # 4c) Body
+            from ...ast.expressions import Expr as ExprBase
+            for stmt in node.body:
+                if isinstance(stmt, ExprBase):
+                    val = self.visit(stmt)
+                    if val.type != self.i64_ty:
+                        val = self._coerce_for_store(
+                            val, self.i64_ty, name_hint="closure_ret"
+                        )
+                    self.builder.ret(val)
+                    break
+                else:
+                    self.visit(stmt)
 
-        if not self.builder.block.is_terminated:
-            self.builder.ret(ir.Constant(self.i64_ty, 0))
+            if not self.builder.block.is_terminated:
+                self.builder.ret(ir.Constant(self.i64_ty, 0))
 
-        # 4d) Restore
-        self.builder = old_builder
-        self.symbol_table = old_symtab
-        self.var_types = old_var_types
-        self.defer_stack = old_defer_stack
-        self.closure_vars = old_closure_vars
-        self.current_func_name = old_current_func
-        self.current_body_bb = old_body_bb
-
-        # 5) Bloco closure {fn, env}
+        # 5) Bloco closure {fn, env} — emitido no ESCOPO EXTERNO
         closure_raw = self.builder.call(
             self.malloc,
             [ir.Constant(self.i64_ty, 16)],

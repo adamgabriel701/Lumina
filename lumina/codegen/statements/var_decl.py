@@ -1,6 +1,6 @@
 from llvmlite import ir
-from ...ast import CallExpr, ArrayExpr, LambdaExpr, VariableExpr
-
+from ...ast import CallExpr, ArrayExpr, LambdaExpr, VariableExpr, NumberExpr
+from ...errors import LuminaError
 
 class VarDeclMixin:
 
@@ -56,46 +56,63 @@ class VarDeclMixin:
         self.builder.store(storage, ptr)
 
     def _try_stack_alloc(self, node):
-        """Tenta alocar `alloc(N)`/`alloc_bytes(N)` no stack.
-
-        Condições para sucesso:
-          - value é CallExpr de `alloc`/`alloc_bytes`
-          - N é literal inteiro conhecido em compile-time
-          - N > 0 e N <= LIMIT (evita estourar o stack)
-          - o nome NÃO está em `self.escapes` nem `self.freed_vars`
-
-        Retorna True se a alocação foi feita; False caso contrário.
         """
-        if not isinstance(node.value, CallExpr):
-            return False
-        if getattr(node.value, 'is_method', False):
-            return False
+        Promove `alloc(N)` com N literal para `alloca` no stack,
+        SE e SOMENTE SE:
+          - `node.value` é uma CallExpr para `alloc`/`alloc_bytes`
+          - N é inteiro positivo (n > 0)
+          - N <= LIMIT (limite de stack por var)
+          - A variável não está em `escapes` nem em `freed_vars`
 
-        callee = getattr(node.value.callee, 'name', None)
+        NÃO é escape analysis real: não propaga por campos de struct,
+        capturas de closure, retornos ou chamadas interprocedurais.
+        O nome sugere cobertura maior do que a real; considerar renomear
+        para `_try_stack_alloc_literal` numa refatoração futura.
+        """
+        # Guard: VarDecl sem inicializador (`let p: Ponto`).
+        if node.value is None:
+            return None
+
+        # Guard: só CallExpr com `callee.name` conhecido.
+        # Nested getattr evita AttributeError em BinaryExpr,
+        # NumberExpr, StructLiteralExpr, LambdaExpr, PropagateExpr, etc.
+        callee = getattr(getattr(node.value, 'callee', None), 'name', None)
         if callee not in ('alloc', 'alloc_bytes'):
-            return False
+            return None
 
         escapes = getattr(self, 'escapes', set())
         freed = getattr(self, 'freed_vars', set())
         if node.name in escapes or node.name in freed:
-            return False
+            return None
 
-        args = node.value.args
+        args = getattr(node.value, 'args', None) or []
         if not args:
-            return False
-        from ...ast import NumberExpr
+            return None
         if not isinstance(args[0], NumberExpr):
-            return False
-        if args[0].is_float:
-            return False
+            return None
+
         try:
             n = int(args[0].value, 0)
-        except (ValueError, TypeError):
-            return False
+        except (ValueError, AttributeError):
+            return None
+
+        # Guard: n <= 0 é UB em LLVM (alloca de tamanho zero).
+        if n <= 0:
+            raise LuminaError(
+                message=(
+                    f"alloc({n}) inválido: tamanho deve ser positivo. "
+                    f"Se o tamanho é dinâmico, use uma variável "
+                    f"(desabilita stack alloc e usa GC/malloc)."
+                ),
+                filename=getattr(self, 'current_filename', '<codegen>'),
+                line=getattr(args[0], 'line', 0) or 0,
+                col=getattr(args[0], 'col', 0) or 0,
+                source_code=getattr(self, 'source_code', '') or '',
+            )
 
         LIMIT = 4096
-        if n <= 0 or n > LIMIT:
-            return False
+        if n > LIMIT:
+            return None
 
         elem_ty = self.i64_ty if callee == 'alloc' else self.i8_ty
         arr_ty = ir.ArrayType(elem_ty, n)
@@ -103,16 +120,15 @@ class VarDeclMixin:
 
         zero = ir.Constant(self.i32_ty, 0)
         first_elem = self.builder.gep(
-            arr_ptr, [zero, zero], name=node.name + "_first",
+            arr_ptr, [zero, zero], name=node.name + "_first"
         )
 
         slot_ty = elem_ty.as_pointer()
         slot = self.builder.alloca(slot_ty, name=node.name)
         self.builder.store(first_elem, slot)
-
         self.symbol_table[node.name] = slot
         self.var_types[node.name] = "ptr"
-        return True
+        return slot
 
     def visit_VarDecl(self, node):
         # Escape analysis: alloc(N) com N constante e sem escape vira alloca.

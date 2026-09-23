@@ -5,12 +5,6 @@ class FlowMixin:
 
     # ==================================================================
     # Escopo de defer
-    #
-    # `_emit_scope_defers` emite SEM deletar (usado em break/continue/
-    # return — o path irmão ainda precisa emitir os mesmos defers).
-    # `_end_scope` emite E deleta (usado em fallthrough — a partir
-    # daqui, o stack não contém mais estes defers).
-    # `_emit_all_defers` emite todos os pendentes SEM deletar (return).
     # ==================================================================
     def _begin_scope(self):
         return len(getattr(self, 'defer_stack', []) or [])
@@ -40,9 +34,21 @@ class FlowMixin:
     # Helper: coerção de tipo antes do store
     # ------------------------------------------------------------------
     def _coerce_val_to(self, val, target_ty, name="val"):
+        """
+        Coerção única para store. Cobre:
+          - mesmo tipo (no-op)
+          - int↔int (zext/sext/trunc)
+          - int↔float (sitofp/fptosi)
+          - i64↔str (via snprintf)
+          - ptr↔int (ptrtoint/inttoptr)
+          - ptr↔ptr (bitcast ou load, se pointee for struct)
+          - struct por valor → ptr (alloca + store)
+        Fallback: bitcast silencioso.
+        """
         if val.type == target_ty:
             return val
 
+        # int ↔ int
         if isinstance(val.type, ir.IntType) and isinstance(target_ty, ir.IntType):
             if val.type.width == 1 and target_ty.width > 1:
                 return self.builder.zext(val, target_ty, name=f"{name}_zext")
@@ -52,15 +58,15 @@ class FlowMixin:
                 return self.builder.trunc(val, target_ty, name=f"{name}_trunc")
             return val
 
+        # int → float
         if isinstance(val.type, ir.IntType) and isinstance(target_ty, ir.DoubleType):
             return self.builder.sitofp(val, target_ty, name=f"{name}_sitofp")
 
+        # float → int
         if isinstance(val.type, ir.DoubleType) and isinstance(target_ty, ir.IntType):
             return self.builder.fptosi(val, target_ty, name=f"{name}_fptosi")
 
-        if target_ty == self.i64_ty and val.type == self.voidptr_ty:
-            return self.builder.call(self.atoi, [val], name=f"{name}_atoi")
-
+        # i64 → str (via snprintf)
         if target_ty == self.voidptr_ty and val.type == self.i64_ty:
             int_buf = self.builder.alloca(
                 ir.ArrayType(self.i8_ty, 32), name=f"{name}_int_buf"
@@ -76,18 +82,28 @@ class FlowMixin:
             )
             return int_buf_ptr
 
+        # str → i64 (via atoi)
+        if target_ty == self.i64_ty and val.type == self.voidptr_ty:
+            return self.builder.call(self.atoi, [val], name=f"{name}_atoi")
+
+        # ptr → int
         if isinstance(val.type, ir.PointerType) and isinstance(target_ty, ir.IntType):
             return self.builder.ptrtoint(val, target_ty, name=f"{name}_ptrtoint")
 
+        # int → ptr
         if isinstance(val.type, ir.IntType) and isinstance(target_ty, ir.PointerType):
             return self.builder.inttoptr(val, target_ty, name=f"{name}_inttoptr")
 
+        # ptr → ptr
         if isinstance(val.type, ir.PointerType) and isinstance(target_ty, ir.PointerType):
+            # Se o target espera um struct e val é ptr para o mesmo struct,
+            # carrega o valor.
             if (isinstance(val.type.pointee, ir.IdentifiedStructType)
                     and val.type.pointee == target_ty.pointee):
                 return self.builder.load(val, name=f"{name}_load")
             return self.builder.bitcast(val, target_ty, name=f"{name}_bitcast")
 
+        # struct (valor) → ptr pro mesmo tipo
         if (isinstance(val.type, ir.IdentifiedStructType)
                 and isinstance(target_ty, ir.PointerType)
                 and val.type == target_ty.pointee):
@@ -104,8 +120,22 @@ class FlowMixin:
     # Assign
     # ------------------------------------------------------------------
     def visit_AssignStmt(self, node):
+        """
+        Atribuição: `x = v`, `obj.field = v`, `arr[i] = v`.
+
+        Toda coerção de tipo é delegada a `_coerce_val_to`, que cobre
+        int↔int, int↔float, ptr↔int, ptr↔ptr, struct-by-ptr e str.
+
+        A versão anterior tinha uma cadeia de casts ad-hoc na branch de
+        MemberExpr que executava `ptrtoint double → i64` incondicionalmente
+        quando os tipos não batiam — quebrava `b.data = 2.5` em `Box<float>`
+        e `b.data = "hello"` em `Box<str>`.
+        """
         val = self.visit(node.value)
 
+        # ------------------------------------------------------------------
+        # Alvo: variável local ou global mutável
+        # ------------------------------------------------------------------
         if hasattr(node.target, 'name'):
             gv = getattr(self, 'global_mut_vars', {}).get(node.target.name)
             if gv is not None:
@@ -115,79 +145,60 @@ class FlowMixin:
                 return
 
             ptr = self.symbol_table.get(node.target.name)
-            if ptr:
+            if ptr is not None:
                 target_ty = ptr.type.pointee
                 val = self._coerce_val_to(val, target_ty, name=node.target.name)
                 self.builder.store(val, ptr)
+            return
 
-        elif hasattr(node.target, 'member'):
+        # ------------------------------------------------------------------
+        # Alvo: membro de struct (`obj.field = v`)
+        # ------------------------------------------------------------------
+        if hasattr(node.target, 'member'):
             obj_val = self.visit(node.target.obj)
-            if isinstance(obj_val.type, ir.PointerType) and isinstance(obj_val.type.pointee, ir.IdentifiedStructType):
+            if (isinstance(obj_val.type, ir.PointerType)
+                    and isinstance(obj_val.type.pointee, ir.IdentifiedStructType)):
                 struct_name = obj_val.type.pointee.name
-                field_idx = self.struct_fields[struct_name].get(node.target.member)
+                fields_map = self.struct_fields.get(struct_name, {})
+                field_idx = fields_map.get(node.target.member)
                 if field_idx is not None:
-                    elem_ptr = self.builder.gep(obj_val, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, field_idx)])
+                    elem_ptr = self.builder.gep(
+                        obj_val,
+                        [ir.Constant(self.i32_ty, 0),
+                         ir.Constant(self.i32_ty, field_idx)],
+                        name=f"{node.target.member}_ptr",
+                    )
                     target_ty = elem_ptr.type.pointee
-
-                    if val.type != target_ty:
-                        if isinstance(val.type, ir.PointerType) and isinstance(target_ty, ir.PointerType):
-                            val = self.builder.bitcast(val, target_ty, name="member_ptr_cast")
-                        elif isinstance(target_ty, ir.PointerType) and val.type == self.i64_ty:
-                            val = self.builder.inttoptr(val, target_ty, name="member_int_to_ptr")
-                        elif target_ty == self.i64_ty and isinstance(val.type, ir.PointerType):
-                            val = self.builder.ptrtoint(val, self.i64_ty, name="member_ptr_to_int")
-
-                    if (isinstance(val.type, ir.PointerType)
-                        and isinstance(val.type.pointee, ir.IdentifiedStructType)
-                        and val.type.pointee == target_ty):
-                        val = self.builder.load(val, name="member_load_val")
-
-                    if val.type != target_ty:
-                        if isinstance(val.type, ir.PointerType) and isinstance(target_ty, ir.PointerType):
-                            val_int = self.builder.ptrtoint(val, self.i64_ty, name="member_force_int")
-                            val = self.builder.inttoptr(val_int, target_ty, name="member_force_ptr")
-                        elif target_ty == self.i64_ty:
-                            val = self.builder.ptrtoint(val, self.i64_ty, name="member_force_int2")
-                        elif isinstance(target_ty, ir.PointerType):
-                            val = self.builder.inttoptr(val, target_ty, name="member_force_ptr2")
-
+                    val = self._coerce_val_to(
+                        val, target_ty, name=node.target.member
+                    )
                     self.builder.store(val, elem_ptr)
+            return
 
-        elif hasattr(node.target, 'index'):
+        # ------------------------------------------------------------------
+        # Alvo: índice de array/ptr (`arr[i] = v`)
+        # ------------------------------------------------------------------
+        if hasattr(node.target, 'index'):
             arr_val = self.visit(node.target.array)
             idx_val = self.visit(node.target.index)
             if isinstance(arr_val.type, ir.PointerType):
                 if isinstance(arr_val.type.pointee, ir.ArrayType):
-                    elem_ptr = self.builder.gep(arr_val, [ir.Constant(self.i32_ty, 0), idx_val])
+                    elem_ptr = self.builder.gep(
+                        arr_val,
+                        [ir.Constant(self.i32_ty, 0), idx_val],
+                        name="idx_ptr",
+                    )
                 else:
-                    elem_ptr = self.builder.gep(arr_val, [idx_val])
-
+                    elem_ptr = self.builder.gep(
+                        arr_val, [idx_val], name="idx_ptr"
+                    )
                 elem_ty = elem_ptr.type.pointee
-
-                if isinstance(elem_ty, ir.IntType) and elem_ty.width < 64:
-                    if isinstance(val.type, ir.IntType):
-                        if val.type.width > elem_ty.width:
-                            val = self.builder.trunc(val, elem_ty, name="idx_trunc")
-                        elif val.type.width < elem_ty.width:
-                            val = self.builder.sext(val, elem_ty, name="idx_sext")
-                    else:
-                        if isinstance(val.type, ir.PointerType):
-                            val = self.builder.ptrtoint(val, self.i64_ty, name="idx_ptrtoint")
-                            val = self.builder.trunc(val, elem_ty, name="idx_trunc")
-                        elif val.type == self.f64_ty:
-                            val = self.builder.fptosi(val, elem_ty, name="idx_fptosi")
-                elif elem_ty == self.f64_ty and val.type == self.i64_ty:
-                    val = self.builder.sitofp(val, self.f64_ty, name="idx_sitofp")
-                elif isinstance(elem_ty, ir.PointerType) and val.type == self.i64_ty:
-                    val = self.builder.inttoptr(val, elem_ty, name="idx_inttoptr")
-                elif elem_ty != val.type:
-                    elem_ptr_int = self.builder.ptrtoint(elem_ptr, self.i64_ty, name="idx_elem_int")
-                    elem_ptr = self.builder.inttoptr(elem_ptr_int, val.type.as_pointer(), name="idx_elem_cast")
-
+                val = self._coerce_val_to(val, elem_ty, name="elem")
                 self.builder.store(val, elem_ptr)
+            return
 
     # ------------------------------------------------------------------
-    # Return: emite TODOS os defers (do bloco mais interno ao topo)
+    # Return
     # ------------------------------------------------------------------
     def visit_ReturnStmt(self, node):
         if self.builder.block.is_terminated:
@@ -211,43 +222,53 @@ class FlowMixin:
             return
 
         val = self.visit(node.values[0])
-
         if val.type != ret_ty:
-            if ret_ty == self.f64_ty and val.type == self.i64_ty:
-                val = self.builder.sitofp(val, self.f64_ty, name="ret_cast")
-            elif ret_ty == self.i64_ty and val.type == self.f64_ty:
-                val = self.builder.fptosi(val, self.i64_ty, name="ret_cast")
-            elif isinstance(ret_ty, ir.PointerType) and val.type == self.i64_ty:
-                val = self.builder.inttoptr(val, ret_ty, name="ret_cast")
-            elif ret_ty == self.i64_ty and isinstance(val.type, ir.PointerType):
-                val = self.builder.ptrtoint(val, self.i64_ty, name="ret_cast")
-            elif isinstance(ret_ty, ir.PointerType) and isinstance(val.type, ir.PointerType):
-                if ret_ty != val.type:
-                    val = self.builder.bitcast(val, ret_ty, name="ret_ptr_cast")
-            elif isinstance(val.type, ir.PointerType) and isinstance(val.type.pointee, ir.IdentifiedStructType):
-                if val.type.pointee == ret_ty:
-                    val = self.builder.load(val, name="ret_struct_load")
-            elif ret_ty == self.i64_ty and isinstance(val.type, ir.IntType) and val.type.width < 64:
-                if val.type.width == 1:
-                    val = self.builder.zext(val, self.i64_ty, name="ret_zext")
-                else:
-                    val = self.builder.sext(val, self.i64_ty, name="ret_sext")
-            # NOVO: i64 → i32 (main() retorna int C, que é i32)
-            elif isinstance(ret_ty, ir.IntType) and ret_ty.width < 64 \
-                    and isinstance(val.type, ir.IntType) and val.type.width > ret_ty.width:
-                val = self.builder.trunc(val, ret_ty, name="ret_trunc")
+            val = self._coerce_ret(val, ret_ty)
 
         self._emit_all_defers()
         self.builder.ret(val)
 
+    def _coerce_ret(self, val, ret_ty):
+        """
+        Coerção para `return`. Diferente de `_coerce_val_to`:
+        `i64 → ptr` faz `inttoptr` (reinterpretar bits), NÃO
+        `snprintf` (formatar como string).
+
+        Isso importa quando um `str` é retornado através de uma
+        camada que o converteu para `i64` (closure fat pointer,
+        impl Box<T> com base genérica, etc). O i64 contém os bits
+        do ponteiro; reinterpretar é o comportamento correto.
+        """
+        if ret_ty == self.f64_ty and val.type == self.i64_ty:
+            return self.builder.sitofp(val, self.f64_ty, name="ret_cast")
+        if ret_ty == self.i64_ty and val.type == self.f64_ty:
+            return self.builder.fptosi(val, self.i64_ty, name="ret_cast")
+        if isinstance(ret_ty, ir.PointerType) and val.type == self.i64_ty:
+            return self.builder.inttoptr(val, ret_ty, name="ret_inttoptr")
+        if ret_ty == self.i64_ty and isinstance(val.type, ir.PointerType):
+            return self.builder.ptrtoint(val, self.i64_ty, name="ret_ptrtoint")
+        if isinstance(ret_ty, ir.PointerType) and isinstance(val.type, ir.PointerType):
+            if ret_ty != val.type:
+                return self.builder.bitcast(val, ret_ty, name="ret_ptr_cast")
+            return val
+        if (isinstance(val.type, ir.PointerType)
+                and isinstance(val.type.pointee, ir.IdentifiedStructType)
+                and val.type.pointee == ret_ty):
+            return self.builder.load(val, name="ret_struct_load")
+        if ret_ty == self.i64_ty and isinstance(val.type, ir.IntType) and val.type.width < 64:
+            if val.type.width == 1:
+                return self.builder.zext(val, self.i64_ty, name="ret_zext")
+            return self.builder.sext(val, self.i64_ty, name="ret_sext")
+        if (isinstance(ret_ty, ir.IntType) and ret_ty.width < 64
+                and isinstance(val.type, ir.IntType)
+                and val.type.width > ret_ty.width):
+            return self.builder.trunc(val, ret_ty, name="ret_trunc")
+        return val
+
     def visit_DestructureStmt(self, node):
         val = self.visit(node.value)
 
-        # ---- Struct (identificada ou literal) ----
-        # Cobre:
-        #   - user struct: `let (a, b) = p` onde p: Ponto
-        #   - tuple literal: `let (a, b, c) = (10, 20, 30)`
-        #     (o `visit_TupleExpr` cria um LiteralStructType)
+        # Struct (identificada ou literal)
         if (isinstance(val.type, ir.PointerType)
                 and isinstance(val.type.pointee,
                                (ir.IdentifiedStructType, ir.LiteralStructType))):
@@ -264,7 +285,7 @@ class FlowMixin:
                 self.var_types[name] = self._llvm_ty_to_str(fv.type)
             return
 
-        # ---- ArrayType* (alloca de ArrayType) ----
+        # ArrayType* (alloca de ArrayType)
         if (isinstance(val.type, ir.PointerType)
                 and isinstance(val.type.pointee, ir.ArrayType)):
             elem_ty = val.type.pointee.element
@@ -281,8 +302,7 @@ class FlowMixin:
                 self.var_types[name] = self._llvm_ty_to_str(elem_ty)
             return
 
-        # ---- Raw T* (alloc'd array) ----
-        # Cobre `let arr = alloc(N); let (x, y) = arr`.
+        # Raw T* (alloc'd array)
         if isinstance(val.type, ir.PointerType):
             elem_ty = val.type.pointee
             for i, name in enumerate(node.names):
@@ -306,11 +326,12 @@ class FlowMixin:
     def visit_AssertStmt(self, node):
         cond = self.visit(node.condition)
         if cond.type != ir.IntType(1):
-            cond = self.builder.icmp_signed("!=", cond, ir.Constant(cond.type, 0), name="assert_cond")
+            cond = self.builder.icmp_signed(
+                "!=", cond, ir.Constant(cond.type, 0), name="assert_cond"
+            )
 
-        ok_bb   = self.builder.append_basic_block(name="assert_ok")
+        ok_bb = self.builder.append_basic_block(name="assert_ok")
         fail_bb = self.builder.append_basic_block(name="assert_fail")
-
         self.builder.cbranch(cond, ok_bb, fail_bb)
 
         self.builder.position_at_end(fail_bb)
@@ -318,8 +339,9 @@ class FlowMixin:
         if fflush_fn is None:
             fflush_ty = ir.FunctionType(ir.IntType(32), [self.i8_ty.as_pointer()])
             fflush_fn = ir.Function(self.module, fflush_ty, name="fflush")
-        self.builder.call(fflush_fn, [ir.Constant(self.i8_ty.as_pointer(), None)])
-
+        self.builder.call(
+            fflush_fn, [ir.Constant(self.i8_ty.as_pointer(), None)]
+        )
         abort_fn = self.module.globals.get("abort")
         if abort_fn is None:
             abort_ty = ir.FunctionType(ir.VoidType(), [])
@@ -341,7 +363,7 @@ class FlowMixin:
         if not getattr(self, 'loop_stack', None):
             return
         _, break_bb, scope_start = self.loop_stack[-1]
-        self._emit_scope_defers(scope_start)      # NÃO deleta
+        self._emit_scope_defers(scope_start)
         if not self.builder.block.is_terminated:
             self.builder.branch(break_bb)
 
@@ -349,23 +371,11 @@ class FlowMixin:
         if not getattr(self, 'loop_stack', None):
             return
         continue_bb, _, scope_start = self.loop_stack[-1]
-        self._emit_scope_defers(scope_start)      # NÃO deleta
+        self._emit_scope_defers(scope_start)
         if not self.builder.block.is_terminated:
             self.builder.branch(continue_bb)
 
     def _try_tail_call(self, node):
-        """TCO para self-recursion OU mutual recursion (SCC).
-
-        Caso 1 (SCC): estamos dentro de um dispatcher de mutual
-        recursion e o alvo é outro membro. Setamos current_id +
-        args e branch de volta para dispatch_bb.
-
-        Caso 2 (self): comportamento existente — self-recursion
-        direta. Avalia args, sobrescreve slots dos params, branch
-        para body_bb.
-
-        Emite defers pendentes antes de qualquer branch (Sprint 8d).
-        """
         from ...ast import CallExpr as _CallExpr, VariableExpr as _VarExpr
         if len(node.values) != 1:
             return False
@@ -397,11 +407,10 @@ class FlowMixin:
             self._emit_all_defers()
             if self.builder.block.is_terminated:
                 return True
-
             self.builder.branch(self._current_scc_dispatch_bb)
             return True
 
-        # ---- Caso 2: self-recursion (código existente) ----
+        # ---- Caso 2: self-recursion ----
         if target != getattr(self, 'current_func_name', None):
             return False
         body_bb = getattr(self, 'current_body_bb', None)
@@ -434,6 +443,5 @@ class FlowMixin:
         self._emit_all_defers()
         if self.builder.block.is_terminated:
             return True
-
         self.builder.branch(body_bb)
         return True

@@ -1,0 +1,90 @@
+"""Contexto mutável do codegen.
+
+`push_context` salva e restaura um conjunto fixo de atributos do
+`LLVMCodegen` que mudam ao entrar em uma função, closure, cópia
+especializada de genérico ou dispatcher de SCC.
+
+A lista `_CONTEXT_FIELDS` é a fonte única de verdade. Antes, cada
+call site (`function_body`, `generics`, `aggregates`, `tco`) salvava
+e restaurava esses campos manualmente — e a lista divergia. Bug
+ativo: `_safe_mode` era setado `False` em `materialize_generic` sem
+restauração, perdendo `@safe` em funções genéricas.
+"""
+from contextlib import contextmanager
+
+
+_CONTEXT_FIELDS = (
+    "builder",
+    "symbol_table",
+    "var_types",
+    "current_func_name",
+    "current_body_bb",
+    "defer_stack",
+    "_safe_mode",
+    "closure_vars",
+    "_current_scc_slots",
+    "_current_scc_ids",
+    "_current_scc_id_slot",
+    "_current_scc_dispatch_bb",
+)
+
+
+@contextmanager
+def push_context(codegen, **overrides):
+    """
+    Salva e restaura todos os campos de contexto do codegen.
+
+    Uso:
+        with push_context(self, builder=novo, _safe_mode=True):
+            ...
+        # tudo restaurado aqui, mesmo em exceção
+
+    Args:
+        codegen: instância de `LLVMCodegen`.
+        **overrides: campos a sobrescrever. Deve estar em `_CONTEXT_FIELDS`.
+
+    Raises:
+        ValueError: override com campo fora de `_CONTEXT_FIELDS`.
+    """
+    for field in overrides:
+        if field not in _CONTEXT_FIELDS:
+            raise ValueError(
+                f"Campo '{field}' não está em _CONTEXT_FIELDS. "
+                f"Adicione-o em lumina/codegen/context.py."
+            )
+
+    saved = {field: getattr(codegen, field, None) for field in _CONTEXT_FIELDS}
+
+    for field, value in overrides.items():
+        setattr(codegen, field, value)
+
+    try:
+        yield codegen
+    finally:
+        for field, value in saved.items():
+            setattr(codegen, field, value)
+
+def normalize_attrs(attrs):
+    """
+    Normaliza `Function.attrs` para `List[Tuple[str, List]]`.
+
+    O parser emite `List[Tuple[str, List]]` (ex: `[('safe', []),
+    ('inline', [])]`), mas este helper também aceita `List[str]`
+    (ex: `['safe', 'inline']`), tornando os call sites imunes a
+    mudança de formato.
+
+    Uso:
+        for name, args in normalize_attrs(fn.attrs):
+            ...
+    """
+    if not attrs:
+        return []
+    result = []
+    for a in attrs:
+        if isinstance(a, str):
+            result.append((a, []))
+        elif isinstance(a, (tuple, list)) and len(a) >= 1:
+            name = a[0]
+            args = a[1] if len(a) > 1 else []
+            result.append((name, args))
+    return result

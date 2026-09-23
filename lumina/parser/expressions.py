@@ -5,7 +5,7 @@ from ..ast import (
     ArrayExpr, IndexExpr, SliceExpr, MemberExpr, AddressOfExpr, DerefExpr,
     UnaryExpr, PropagateExpr, ComptimeExpr, StructLiteralExpr, CastExpr,
     LambdaExpr, StructLiteralField, Param, InterpolatedStringExpr, NoneExpr,
-    NilExpr, TupleExpr,
+    NilExpr, TupleExpr, ChainedComparisonExpr,   # ← NOVO
 )
 from ..errors import LuminaError
 
@@ -107,20 +107,39 @@ class ExpressionParser(ParserBase):
         return node
 
     def parse_comparison(self):
+        """
+        Comparações. Suporta cadeia de qualquer tamanho:
+            a < b
+            a < b < c
+            a < b < c < d
+            a in b in c   (também encadeia)
+
+        Produz `BinaryExpr` para 2 operandos, `ChainedComparisonExpr`
+        para 3+. O codegen de `ChainedComparisonExpr` garante que cada
+        operando intermediário é avaliado UMA única vez (semântica
+        Python-like), evitando efeitos colaterais duplicados.
+        """
         node = self.parse_shift()
-        ops = [TokenType.EQ, TokenType.NEQ, TokenType.LT, TokenType.GT, TokenType.LTE, TokenType.GTE]
-        if any(self.check(op) for op in ops) or self.check(TokenType.IN):
-            op = self.consume().value
-            right = self.parse_shift()
-            if any(self.check(op) for op in ops):
-                next_op = self.consume().value
-                right2 = self.parse_shift()
-                left_node = BinaryExpr(op, node, right)
-                right_node = BinaryExpr(next_op, right, right2)
-                node = BinaryExpr('and', left_node, right_node)
-            else:
-                node = BinaryExpr(op, node, right)
-        return node
+        cmp_ops = [
+            TokenType.EQ, TokenType.NEQ, TokenType.LT,
+            TokenType.GT, TokenType.LTE, TokenType.GTE,
+        ]
+
+        if not (any(self.check(op) for op in cmp_ops)
+                or self.check(TokenType.IN)):
+            return node
+
+        operands = [node]
+        operators = []
+        while (any(self.check(op) for op in cmp_ops)
+               or self.check(TokenType.IN)):
+            operators.append(self.consume().value)
+            operands.append(self.parse_shift())
+
+        if len(operands) == 2:
+            return BinaryExpr(operators[0], operands[0], operands[1])
+
+        return ChainedComparisonExpr(operands, operators)
 
     def parse_shift(self):
         node = self.parse_range()

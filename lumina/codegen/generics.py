@@ -1,27 +1,44 @@
-"""Monomorphization e inferência de type_map para chamadas genéricas."""
+"""Materialização de funções genéricas (monomorphization).
+
+Para cada call site de uma `fn f<T>(...)`, cria uma cópia especializada
+`f__<tipo>` com o `type_map` aplicado aos tipos de params, retorno e
+corpo.
+
+Bug histórico (corrigido): `resolve_lumina` fazia substituição apenas
+quando o nome batia exatamente com uma chave do `type_map`. Para
+`Box<T>` com `T=float`, retornava `Box<T>` — criando `%Box_T_ = {i64}`
+e tratando o campo `data` como inteiro. `2.5` virava `2` e voltava
+como `2.0`. Idem `str` → ponteiro virava `0`. Agora usa
+`substitute_generic` (substituição recursiva).
+"""
 from llvmlite import ir
 
-from ..semantic.types import substitute_generic, unify_type
+from .context import push_context, normalize_attrs
+from ..semantic.types import substitute_generic
+from ..errors import LuminaError
 
 
 class GenericsMixin:
 
     def materialize_generic(self, gen_def, type_map):
-        """Gera cópia especializada de uma função genérica.
-
-        `type_map`: dict {type_param_name: tipo_concreto_lumina}.
-        Ex: materialize_generic(put_def, {"T": "int"}) gera `put__int`.
-        """
         type_params = getattr(gen_def, 'type_params', None) or []
 
         def _sanitize(s):
-            return s.replace("<", "_").replace(">", "").replace(",", "_").replace(" ", "")
-        suffix_parts = [_sanitize(type_map.get(tp, "unknown")) for tp in type_params]
+            return (s.replace("<", "_").replace(">", "_")
+                     .replace(",", "_").replace(" ", ""))
+
+        suffix_parts = [_sanitize(type_map.get(tp, "unknown"))
+                        for tp in type_params]
         mangled = f"{gen_def.name}__{'_'.join(suffix_parts)}"
 
+        # Reuso: já materializado nesta mesma compilação.
         if mangled in self.functions_table:
             return mangled
 
+        # ------------------------------------------------------------------
+        # Substituição de tipos — usa `substitute_generic` (recursivo).
+        # `substitute_generic("Box<T>", {"T": "float"})` → `"Box<float>"`
+        # ------------------------------------------------------------------
         def resolve_lumina(name):
             return substitute_generic(name, type_map)
 
@@ -35,112 +52,159 @@ class GenericsMixin:
 
         func_type = ir.FunctionType(ret_ty, param_tys)
         func = ir.Function(self.module, func_type, name=mangled)
+
+        # Aplica attrs na cópia especializada (`@inline`, `@cold`, `@safe`).
+        attrs_norm = normalize_attrs(getattr(gen_def, 'attrs', None))
+        self._apply_llvm_attrs(func, attrs_norm)
+        is_safe = any(name == 'safe' for name, _args in attrs_norm)
+
+        # Registra antes de emitir o corpo (recursão / referências circulares).
         self.functions_table[mangled] = (func, func_type)
         self.function_defs[mangled] = gen_def
 
-        # Sprint 10: aplica attrs também na cópia especializada
-        attrs = getattr(gen_def, 'attrs', None) or []
-        self._apply_llvm_attrs(func, attrs)
-
-        # Salva/restaura estado
-        old_builder = self.builder
-        old_symtab = self.symbol_table
-        old_var_types = self.var_types
-        old_current = getattr(self, 'current_func_name', None)
-        old_body_bb = getattr(self, 'current_body_bb', None)
-        old_defer_stack = getattr(self, 'defer_stack', None)
-        old_safe = getattr(self, '_safe_mode', False)
-        old_closure_vars = self.closure_vars
-        self.defer_stack = []
-        self._safe_mode = False   # genéricos não têm attrs
-        self.closure_vars = set()
-
         entry_bb = func.append_basic_block(name=f"{mangled}_entry")
         body_bb = func.append_basic_block(name=f"{mangled}_body")
-        self.builder = ir.IRBuilder(entry_bb)
-        self.symbol_table = {}
-        self.var_types = {}
-        self.current_func_name = mangled
+        fresh_builder = ir.IRBuilder(entry_bb)
 
-        for i, p in enumerate(gen_def.params):
-            p_name = p.name
-            param_lumina = resolve_lumina(p.type_ann)
-            p_ty = func_type.args[i]
-            ptr = self.builder.alloca(p_ty, name=p_name)
-            self.builder.store(func.args[i], ptr)
-            self.symbol_table[p_name] = ptr
-            self.var_types[p_name] = param_lumina
+        with push_context(
+            self,
+            builder=fresh_builder,
+            symbol_table={},
+            var_types={},
+            current_func_name=mangled,
+            current_body_bb=body_bb,
+            defer_stack=[],
+            closure_vars=set(),
+            _safe_mode=is_safe,
+            _current_scc_slots=None,
+            _current_scc_ids=None,
+            _current_scc_id_slot=None,
+            _current_scc_dispatch_bb=None,
+        ):
+            # Bind params: alloca + store, com tipo concreto.
+            for i, p in enumerate(gen_def.params):
+                p_name = p.name
+                p_ty = param_tys[i]
+                ptr = self.builder.alloca(p_ty, name=p_name)
+                self.builder.store(func.args[i], ptr)
+                self.symbol_table[p_name] = ptr
+                self.var_types[p_name] = resolve_lumina(p.type_ann)
 
-        self.builder.branch(body_bb)
-        self.builder.position_at_end(body_bb)
-        self.current_body_bb = body_bb
+            self.builder.branch(body_bb)
+            self.builder.position_at_end(body_bb)
 
-        for stmt in gen_def.body:
-            if self.builder.block.is_terminated:
-                break
-            self.visit(stmt)
+            for stmt in gen_def.body:
+                self.visit(stmt)
 
-        if not self.builder.block.is_terminated:
-            self._emit_all_defers()
-        if not self.builder.block.is_terminated:
-            if func_type.return_type == self.void_ty:
-                self.builder.ret_void()
-            elif isinstance(func_type.return_type, ir.PointerType):
-                self.builder.ret(ir.Constant(func_type.return_type, None))
-            else:
-                self.builder.ret(ir.Constant(func_type.return_type, 0))
-
-        self.builder = old_builder
-        self.defer_stack = old_defer_stack
-        self.symbol_table = old_symtab
-        self.var_types = old_var_types
-        self.current_func_name = old_current
-        self.current_body_bb = old_body_bb
-        self._safe_mode = old_safe
-        self.closure_vars = old_closure_vars
+            # Fallback de retorno.
+            if not self.builder.block.is_terminated:
+                if isinstance(ret_ty, ir.VoidType):
+                    self.builder.ret_void()
+                elif isinstance(ret_ty, ir.LiteralStructType):
+                    zero_fields = [ir.Constant(ft, 0) for ft in ret_ty.elements]
+                    self.builder.ret(ir.Constant(ret_ty, zero_fields))
+                else:
+                    self.builder.ret(self._zero_for_type(ret_ty))
 
         return mangled
 
+    # ==================================================================
+    # Inferência de tipos a partir de nós da AST
+    # ==================================================================
     def _infer_arg_type_lumina(self, arg_node):
-        """Best-effort: infere tipo Lumina de um argumento."""
+        """
+        Infere o tipo Lumina de um argumento (nome de tipo, ex: "int").
+
+        Usado por `_infer_type_map_lumina` para popular o `type_map`
+        antes de `materialize_generic`. Retorna `None` se não conseguir
+        inferir.
+
+        Cobre: NumberExpr, StringExpr, BoolExpr, NilExpr, VariableExpr,
+        CallExpr (variantes de enum ou função nomeada), MemberExpr,
+        StructLiteralExpr, LambdaExpr.
+        """
         from ..ast import (
-            VariableExpr, NumberExpr, StringExpr, BoolExpr,
-            CallExpr, StructLiteralExpr,
+            NumberExpr, StringExpr, BoolExpr, NilExpr, VariableExpr,
+            CallExpr, MemberExpr, StructLiteralExpr, LambdaExpr,
         )
-        if isinstance(arg_node, VariableExpr):
-            return self.var_types.get(arg_node.name)
+
         if isinstance(arg_node, NumberExpr):
             return "float" if arg_node.is_float else "int"
         if isinstance(arg_node, StringExpr):
             return "str"
         if isinstance(arg_node, BoolExpr):
             return "bool"
-        if isinstance(arg_node, StructLiteralExpr):
-            return arg_node.struct_name
+        if isinstance(arg_node, NilExpr):
+            return "nil"
+
+        if isinstance(arg_node, VariableExpr):
+            # Tenta var_types primeiro (params já vinculados).
+            vt = getattr(self, 'var_types', {}).get(arg_node.name)
+            if vt:
+                return vt
+            # Struct/enum nomeado usado como valor.
+            if arg_node.name in getattr(self, 'struct_defs', {}):
+                return arg_node.name
+
         if isinstance(arg_node, CallExpr):
+            callee = getattr(arg_node, 'callee', None)
             callee_name = None
-            if isinstance(arg_node.callee, VariableExpr):
-                callee_name = arg_node.callee.name
-            elif hasattr(arg_node.callee, 'member'):
-                callee_name = arg_node.callee.member
-            if callee_name and callee_name in self.function_defs:
-                return self.function_defs[callee_name].return_type
+            if callee is not None:
+                callee_name = getattr(callee, 'name', None) or \
+                              getattr(callee, 'member', None)
+
             if callee_name:
+                # Variante de enum: `Some(x)`, `Ok(v)`, `Err(e)`, etc.
                 lookup = self._find_enum_variant(callee_name)
                 if lookup is not None:
-                    return lookup[0]
+                    enum_name, _variant_idx = lookup
+                    return enum_name
+
+                # Função nomeada: usa return_type do def.
+                fn_def = getattr(self, 'function_defs', {}).get(callee_name)
+                if fn_def is not None and not getattr(fn_def, 'type_params', None):
+                    return fn_def.return_type
+
+        if isinstance(arg_node, MemberExpr):
+            obj_type = self.var_types.get(getattr(arg_node.obj, 'name', None))
+            if obj_type:
+                base = obj_type.split('<')[0]
+                sdef = self.struct_defs.get(base)
+                if sdef is not None:
+                    return sdef.fields.get(arg_node.member)
+
+        if isinstance(arg_node, StructLiteralExpr):
+            return arg_node.struct_name
+
+        if isinstance(arg_node, LambdaExpr):
+            params = ",".join(p.type_ann for p in arg_node.params)
+            return f"fn({params}) -> {arg_node.return_type}"
+
         return None
 
     def _infer_type_map_lumina(self, gen_def, node):
-        """Unifica (param.type_ann, arg_type_lumina) para inferir type_map.
-
-        Retorna dict ou {} se falhar (aí cai no caminho antigo).
         """
+        Constrói `type_map` unificando cada param com o tipo do arg
+        correspondente. Retorna `{}` se não conseguiu inferir nada.
+
+        Ex: `put<T>(b: Box<T>, val: T)` chamada `put(bx, 2.5)` com
+        `bx: Box<float>` produz `{"T": "float"}`.
+        """
+        from ..semantic.types import unify_type
+
         type_map = {}
-        for arg_node, param in zip(node.args, gen_def.params):
+        params = gen_def.params
+        args = node.args
+
+        # Ignora `self` se for método.
+        if len(args) == len(params) + 1 and params:
+            args = args[1:]
+
+        for p, arg_node in zip(params, args):
             arg_type = self._infer_arg_type_lumina(arg_node)
             if arg_type is None:
-                return {}
-            if not unify_type(param.type_ann, arg_type, type_map):
-                return {}
+                continue
+            # `unify_type("Box<T>", "Box<float>", {})` → {"T": "float"}
+            unify_type(p.type_ann, arg_type, type_map)
+
         return type_map

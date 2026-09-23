@@ -40,32 +40,78 @@ class LiteralsMixin:
         return self.codegen_fstring(node.parts)
 
     def codegen_fstring(self, elements):
-        """Cria um buffer no stack e concatena todas as partes de uma F-string."""
-        buf_size = 1024
-        buf_ty = ir.ArrayType(self.i8_ty, buf_size)
-        buf_ptr = self.builder.alloca(buf_ty, name="fstr_buf")
+        """
+        Compila `$"..."` como concatenação dinâmica, sem buffer fixo.
 
+        Estratégia:
+          1. Cada elemento vira uma string temporária:
+             - StringExpr → global string literal
+             - valor `i8*` (str) → usa direto
+             - valor `f64` → snprintf("%f")
+             - valor `i64` → snprintf("%ld")
+          2. Soma comprimentos com strlen.
+          3. Aloca buffer final (GC_malloc ou malloc).
+          4. strcpy do primeiro + strcat dos demais.
+
+        Bug histórico: valores `i8*` (str) caíam no ramo `%ld` e eram
+        formatados como inteiro, imprimindo o ponteiro em decimal
+        (`Nome: 101940821279152` em vez de `Nome: João`).
+        """
         i8_ptr = self.i8_ty.as_pointer()
-        buf_i8_ptr = self.builder.bitcast(buf_ptr, i8_ptr, name="fstr_buf_i8")
 
-        self.builder.store(ir.Constant(self.i8_ty, 0), buf_i8_ptr)
-
+        parts = []  # lista de (str_llvm_val, label)
         for i, el in enumerate(elements):
             if isinstance(el, StringExpr):
-                str_val = self.visit(el)
-                self.builder.call(self.strcat, [buf_i8_ptr, str_val], name=f"fstr_cat_{i}")
-            else:
-                val = self.visit(el)
-                if val.type == self.i64_ty:
-                    int_buf = self.builder.alloca(ir.ArrayType(self.i8_ty, 32), name=f"fstr_int_buf_{i}")
-                    int_buf_ptr = self.builder.bitcast(int_buf, i8_ptr, name=f"fstr_int_ptr_{i}")
-                    fmt_str = self.create_global_string("%ld")
-                    self.builder.call(self.snprintf, [int_buf_ptr, ir.Constant(self.i64_ty, 32), fmt_str, val], name=f"fstr_snprintf_{i}")
-                    self.builder.call(self.strcat, [buf_i8_ptr, int_buf_ptr], name=f"fstr_int_cat_{i}")
-                elif val.type == self.voidptr_ty:
-                    self.builder.call(self.strcat, [buf_i8_ptr, val], name=f"fstr_str_cat_{i}")
+                sv = self.create_global_string(el.value)
+                parts.append((sv, f"str_{i}"))
+                continue
 
-        return buf_i8_ptr
+            v = self.visit(el)
+
+            # Se já é string (ponteiro), usa direto — NÃO formata.
+            if isinstance(v.type, ir.PointerType):
+                sv = self.builder.bitcast(v, i8_ptr, name=f"fstr_str_cast_{i}")
+                parts.append((sv, f"var_{i}"))
+                continue
+
+            # Números: snprintf em buffer local.
+            num_buf = self.builder.alloca(
+                ir.ArrayType(self.i8_ty, 32),
+                name=f"fstr_num_buf_{i}",
+            )
+            num_buf_i8 = self.builder.bitcast(
+                num_buf, i8_ptr, name=f"fstr_num_i8_{i}"
+            )
+            if isinstance(v.type, ir.DoubleType):
+                fmt = self.create_global_string("%f")
+            else:
+                fmt = self.create_global_string("%ld")
+            self.builder.call(
+                self.snprintf,
+                [num_buf_i8, ir.Constant(self.i64_ty, 32), fmt, v],
+                name=f"fstr_snprintf_{i}",
+            )
+            parts.append((num_buf_i8, f"num_{i}"))
+
+        # Soma tamanhos (+1 para NUL)
+        total = ir.Constant(self.i64_ty, 1)
+        for sv, label in parts:
+            ln = self.builder.call(self.strlen, [sv], name=f"fstr_len_{label}")
+            total = self.builder.add(total, ln, name=f"fstr_total_{label}")
+
+        # Aloca buffer
+        buf_raw = self.builder.call(self.malloc, [total], name="fstr_buf")
+        buf = self.builder.bitcast(buf_raw, i8_ptr, name="fstr_buf_i8")
+
+        # Concatena
+        if not parts:
+            self.builder.store(ir.Constant(self.i8_ty, 0), buf)
+        else:
+            self.builder.call(self.strcpy, [buf, parts[0][0]], name="fstr_first")
+            for sv, label in parts[1:]:
+                self.builder.call(self.strcat, [buf, sv], name=f"fstr_cat_{label}")
+
+        return buf
 
     def visit_ComptimeExpr(self, node):
         # NOVO (B): se o semantic fez constant folding, usa o valor dobrado

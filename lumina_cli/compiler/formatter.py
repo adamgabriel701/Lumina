@@ -6,7 +6,7 @@ from lumina.ast import (
     TraitDecl, ImplBlock, ExternDecl, DestructureStmt, AddressOfExpr, DerefExpr,
     UnaryExpr, CastExpr, StructLiteralExpr, MatchExpr, LambdaExpr,
     DeferStmt, AssertStmt, BenchStmt, BreakStmt, ContinueStmt, NoneExpr,
-    NilExpr, TypeAlias,
+    NilExpr, TypeAlias, ChainedComparisonExpr,
 )
 from lumina.ast.expressions import ArrayExpr, BoolExpr, PropagateExpr
 from lumina.ast.statements import MatchStmt
@@ -378,5 +378,12 @@ def _format_node_impl(node, indent_level=0):
     elif isinstance(node, ArrayExpr):
         elements = ", ".join([format_node(el, 0) for el in node.elements])
         return f"[{elements}]"
+
+    if isinstance(node, ChainedComparisonExpr):
+        parts = [format_node(node.operands[0], 0)]
+        for op, operand in zip(node.ops, node.operands[1:]):
+            parts.append(op)
+            parts.append(format_node(operand, 0))
+        return " ".join(parts)
 
     return f"{indent}{str(node)}\n"

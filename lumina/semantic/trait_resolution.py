@@ -1,5 +1,18 @@
+"""Resolução de métodos default de traits.
+
+Passos:
+  1. Registra aliases `metodo` → `Struct_metodo` para chamadas de trait.
+  2. Copia métodos default do trait para cada `ImplBlock` que não os
+     sobrescreveu.
+  3. Detecta conflito: dois ImplBlocks produzindo o mesmo
+     `Struct_metodo` (ex: dois traits com o mesmo método default no
+     mesmo struct, ou um impl explícito + um trait default homônimos).
+     Sem este guard, o segundo silenciosamente sobrescreveria o
+     primeiro em `function_defs`.
+"""
 from ..ast import Function, Param, ImplBlock, TraitDecl
 from ..common.mangle import mangle_method, mangle_type
+from ..errors import LuminaError
 
 
 class TraitResolutionMixin:
@@ -53,3 +66,50 @@ class TraitResolutionMixin:
                     list(trait_method.body),
                 )
                 decl.methods.append(default_method)
+
+        # Passo 3: guard de duplicata.
+        #
+        # Depois do passo 2, dois ImplBlocks podem ter gerado métodos
+        # com o mesmo nome mangled (mesmo `Struct_metodo`). Exemplos:
+        #
+        #   trait A:
+        #       fn hello() -> int: return 1
+        #   trait B:
+        #       fn hello() -> int: return 2
+        #   struct S: x: int
+        #   impl A for S: pass
+        #   impl B for S: pass
+        #
+        # Sem o guard, `S_hello` seria definido duas vezes e o segundo
+        # silenciosamente sobrescreveria o primeiro — bug difícil de
+        # rastrear porque o compilador reporta sucesso.
+        seen_methods = {}  # mangled_name → (struct_name, trait_name_or_None)
+        for decl in declarations:
+            if not isinstance(decl, ImplBlock):
+                continue
+            trait_name = getattr(decl, 'trait_name', None)
+            for m in decl.methods:
+                key = m.name
+                if key in seen_methods:
+                    prev_struct, prev_trait = seen_methods[key]
+                    prev_desc = (
+                        f"impl {prev_trait} for {prev_struct}"
+                        if prev_trait else f"impl {prev_struct}"
+                    )
+                    curr_desc = (
+                        f"impl {trait_name} for {decl.struct_name}"
+                        if trait_name else f"impl {decl.struct_name}"
+                    )
+                    raise LuminaError(
+                        message=(
+                            f"Método duplicado '{key}': definido em "
+                            f"'{prev_desc}' e novamente em '{curr_desc}'. "
+                            f"Trait defaults não são mesclados implicitamente "
+                            f"— implemente o método explicitamente em cada impl."
+                        ),
+                        filename=getattr(decl, 'filename', '<semantic>'),
+                        line=getattr(m, 'line', 0) or 0,
+                        col=getattr(m, 'col', 0) or 0,
+                        source_code=getattr(self, 'source_code', '') or '',
+                    )
+                seen_methods[key] = (decl.struct_name, trait_name)

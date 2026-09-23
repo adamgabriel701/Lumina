@@ -428,3 +428,54 @@ class OperatorsMixin:
         payload_val = self.builder.load(payload_ptr, name="prop_payload")
 
         return payload_val
+
+    def visit_ChainedComparisonExpr(self, node):
+        """
+        `a < b < c < d` avalia cada operando UMA vez.
+
+        Estratégia:
+          1. Avalia cada operando, guarda em alloca temporário.
+          2. Registra temporários no symbol_table sob nomes únicos.
+          3. Sintetiza `BinaryExpr` para cada par consecutivo e delega
+             ao `visit_BinaryExpr` existente (reusa toda a lógica de
+             int/float/str/ptr, strcmp para strings, etc).
+          4. Combina os resultados com `and_` (bit-a-bit; comparações
+             não têm efeitos colaterais depois de avaliadas).
+        """
+        counter = getattr(self, '_chain_counter', 0)
+        self._chain_counter = counter + 1
+
+        slots = []
+        for i, operand in enumerate(node.operands):
+            v = self.visit(operand)
+            slot_name = f"__chain_{counter}_{i}"
+            slot = self.builder.alloca(v.type, name=slot_name)
+            self.builder.store(v, slot)
+            slots.append((slot_name, slot, v.type))
+
+        for slot_name, slot, ty in slots:
+            self.symbol_table[slot_name] = slot
+            self.var_types[slot_name] = self._llvm_ty_to_str(ty)
+
+        try:
+            result = None
+            for i, op in enumerate(node.ops):
+                left_var = VariableExpr(slots[i][0], 0, 0)
+                right_var = VariableExpr(slots[i + 1][0], 0, 0)
+                cmp_node = BinaryExpr(op, left_var, right_var)
+                cmp_val = self.visit_BinaryExpr(cmp_node)
+
+                if result is None:
+                    result = cmp_val
+                else:
+                    result = self.builder.and_(
+                        result, cmp_val, name=f"chain_and_{i}"
+                    )
+        finally:
+            for slot_name, _, _ in slots:
+                self.symbol_table.pop(slot_name, None)
+                self.var_types.pop(slot_name, None)
+
+        if result is None:
+            return ir.Constant(ir.IntType(1), 1)
+        return result

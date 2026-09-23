@@ -5,6 +5,7 @@ e o helper `_llvm_ty_to_str` usado por outros mixins.
 """
 from llvmlite import ir
 from ..common.mangle import mangle_type
+from ..errors import LuminaError
 
 
 class RegistrationMixin:
@@ -125,42 +126,50 @@ class RegistrationMixin:
         self._apply_llvm_attrs(func, attrs)
 
     def _apply_llvm_attrs(self, func, attrs):
-        """Aplica atributos LLVM a uma função (`@inline`, `@noinline`,
-        `@cold`, `@hot`).
-
-        Attrs devem ser uma lista de strings (Sprint 9a — `parse_function`
-        passa strings, não tuples). Aceita também tuple por robustez.
         """
-        # Normaliza: aceita ['inline'] ou [('inline', [])]
-        names = set()
-        for a in attrs:
-            if isinstance(a, tuple):
-                names.add(a[0])
-            else:
-                names.add(a)
+        Aplica atributos LLVM a `func`.
+
+        Aceita `attrs` em `List[str]` (`['safe', 'inline']`) ou
+        `List[Tuple[str, List]]` (`[('safe', []), ('inline', [])]`).
+        Chama `normalize_attrs` para padronizar antes de processar.
+
+        Mapeamento:
+          @inline    → alwaysinline
+          @noinline  → noinline
+          @cold      → cold
+          @hot       → inlinehint (aproximação — ver nota)
+
+        Conflito:
+          @inline + @noinline → erro em compile-time.
+        """
+        from .context import normalize_attrs
+
+        attrs_norm = normalize_attrs(attrs)
+        names = {name for name, _args in attrs_norm}
 
         if 'inline' in names and 'noinline' in names:
-            from ..errors import LuminaError
             raise LuminaError(
-                f"Função '{func.name}' tem @inline e @noinline — conflitante.",
-                filename="<codegen>",
-                line=0, col=0, source_code="",
+                message=(
+                    f"Atributos conflitantes em '{func.name}': "
+                    f"@inline e @noinline são mutuamente exclusivos "
+                    f"(conflitante)."
+                ),
+                filename=getattr(self, 'current_filename', '<compiler>'),
+                line=0, col=0,
+                source_code="",
             )
 
-        if 'inline' in names:
-            func.attributes.add('alwaysinline')
-        if 'noinline' in names:
-            func.attributes.add('noinline')
-        if 'cold' in names:
-            func.attributes.add('cold')
-        if 'hot' in names:
-            # NOTA: o LLVM tem `hot` como STRING attribute, não enum.
-            # O llvmlite não expõe API para string attributes em
-            # `Function.attributes`. Mapeamos `@hot` para `inlinehint`
-            # — mesma intenção semântica ("função quente, boa candidata
-            # a inline"). Se o llvmlite ganhar suporte futuro, trocar
-            # por string `"hot"`.
-            func.attributes.add('inlinehint')
+        _MAP = {
+            'inline':   'alwaysinline',
+            'noinline': 'noinline',
+            'cold':     'cold',
+            'hot':      'inlinehint',
+        }
+
+        for name, _args in attrs_norm:
+            llvm_attr = _MAP.get(name)
+            if llvm_attr:
+                func.attributes.add(llvm_attr)
 
     def _llvm_ty_to_str(self, t):
         if t == self.i64_ty:

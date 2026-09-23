@@ -267,7 +267,7 @@ para detalhes.
 
 | Métrica | Valor | Referência |
 |---|---|---|
-| Testes pytest | **428 passed** | [`docs/engineering/tests.md`](docs/engineering/tests.md) |
+| Testes pytest | **434 passed** | [`docs/engineering/tests.md`](docs/engineering/tests.md) |
 | Exemplos compilando | **54 PASS / 17 SKIP / 0 FAIL** (clang) | [`scripts/check_examples.sh`](scripts/check_examples.sh) |
 | Exemplos com linker próprio | **56 PASS / 15 SKIP / 0 FAIL** | [`linker/triagem.sh`](linker/triagem.sh) |
 | Suite standalone | **28/28** | [`run_tests.py`](run_tests.py) |
@@ -423,7 +423,7 @@ Material de engenharia (para quem mexe no compilador):
 Contribuições são bem-vindas. Antes de abrir um PR:
 
 ```bash
-pytest tests/ -q                                  # 428 passed
+pytest tests/ -q                                  # 434 passed
 python3 run_tests.py                              # 28/28
 ./scripts/check_examples.sh --run                 # 54 PASS / 17 SKIP / 0 FAIL
 ./linker/triagem.sh examples                      # 56 PASS / 15 SKIP / 0 FAIL

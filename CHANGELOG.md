@@ -214,7 +214,7 @@ que fazia `exit_group` no retorno de `main` e uma stack que crescia até 8 MB:
 - `tests/test_impl_box_generic.py` (3 testes, sessão de fechamento) — `impl Trait for Box<int>`, duas especializações distintas coexistindo (`impl Kind for Box<int>` e `impl Kind for Box<str>`), e `impl Box<T>:` como fallback.
 - `tests/test_generic_type_alias.py` (4 testes, sessão de fechamento) — `type BI = Box<int>` em assinatura de função, em param de struct, encadeado (`A → B → C`) e com params (`type IPair<B> = Pair<int, B>`).
 
-**Total: 428 passed** (antes 419; antes disso, 411).
+**Total: 434 passed** (antes 419; antes disso, 411).
 
 ### Mudado
 

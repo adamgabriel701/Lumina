@@ -116,6 +116,8 @@ class VarDeclMixin:
 
         elem_ty = self.i64_ty if callee == 'alloc' else self.i8_ty
         arr_ty = ir.ArrayType(elem_ty, n)
+        
+        # Usa o alloca normal
         arr_ptr = self.builder.alloca(arr_ty, name=node.name + "_stack")
 
         zero = ir.Constant(self.i32_ty, 0)
@@ -124,7 +126,9 @@ class VarDeclMixin:
         )
 
         slot_ty = elem_ty.as_pointer()
+        # Usa o alloca normal
         slot = self.builder.alloca(slot_ty, name=node.name)
+        
         self.builder.store(first_elem, slot)
         self.symbol_table[node.name] = slot
         self.var_types[node.name] = "ptr"
@@ -178,6 +182,7 @@ class VarDeclMixin:
         elif val is not None and isinstance(val.type, ir.IdentifiedStructType):
             llvm_ty = val.type
 
+        # Usa o alloca normal
         ptr = self.builder.alloca(llvm_ty, name=node.name)
         self.symbol_table[node.name] = ptr
         self.var_types[node.name] = var_type
@@ -192,6 +197,7 @@ class VarDeclMixin:
             elif val.type == ptr.type.pointee:
                 self.builder.store(val, ptr)
             elif isinstance(val.type, ir.IdentifiedStructType) and ptr.type.pointee == val.type.as_pointer():
+                # Usa o alloca normal
                 tmp = self.builder.alloca(val.type, name="struct_tmp")
                 self.builder.store(val, tmp)
                 self.builder.store(tmp, ptr)
@@ -199,6 +205,7 @@ class VarDeclMixin:
                 res = self.builder.call(self.atoi, [val], name="str_to_int_call")
                 self.builder.store(res, ptr)
             elif ptr.type.pointee == self.voidptr_ty and val.type == self.i64_ty:
+                # Usa o alloca normal
                 int_buf = self.builder.alloca(ir.ArrayType(self.i8_ty, 32), name="int_to_str_buf")
                 int_buf_ptr = self.builder.bitcast(int_buf, self.voidptr_ty, name="int_str_ptr")
                 fmt_str = self.create_global_string("%ld")

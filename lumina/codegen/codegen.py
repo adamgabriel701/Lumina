@@ -260,3 +260,63 @@ class LLVMCodegen(
 
     def codegen_expr(self, node):
         return self.visit(node)
+
+    # ==================================================================
+    # Hooks de Correção de Codegen
+    # ==================================================================
+    def _reset_function_codegen_state(self):
+        """Reseta o estado do codegen para uma nova função.
+        Deve ser chamado no início de `generate_function_body`.
+        """
+        self._fn_entry_block = None
+        self._fn_return_type = None
+
+    def _fn_emit_alloca(self, name, ty):
+        """Emite um alloca garantindo que fique no bloco de entrada da função.
+        Corrige o bug de Stack Overflow (gc_test) onde variáveis alocadas
+        dentro de loops tinham seu espaço alocado a cada iteração.
+        """
+        if self._fn_entry_block is None:
+            # Fallback: se não houver bloco de entrada, aloca aqui mesmo
+            return self.builder.alloca(ty, name=name)
+
+        # Salva a posição atual do builder
+        current_block = self.builder.block
+
+        # Move para o bloco de entrada
+        self.builder.position_at_end(self._fn_entry_block)
+        
+        # Emite o alloca
+        ptr = self.builder.alloca(ty, name=name)
+        
+        # Volta para o bloco onde estávamos
+        self.builder.position_at_end(current_block)
+        
+        return ptr
+
+    def _fn_ensure_terminator(self):
+        """Garante que o bloco atual termine com um terminador.
+        Corrige o bug do chip8 onde funções sem `return` explícito
+        não emitiam um `ret` no final do bloco.
+        """
+        # Se o bloco já está terminado, não faz nada
+        if self.builder.block.is_terminated:
+            return
+
+        ret_ty = self._fn_return_type
+
+        # Se a função retorna void, emite `ret void`
+        if ret_ty is None or isinstance(ret_ty, ir.VoidType):
+            self.builder.ret_void()
+            return
+
+        # Se a função retorna um struct vazio (padrão do Lumina para `fn()`)
+        if isinstance(ret_ty, ir.LiteralStructType) and len(ret_ty.elements) == 0:
+            self.builder.ret(ir.Constant(ret_ty, []))
+            return
+
+        # Fallback de segurança: emite um valor padrão (0) para evitar crash
+        try:
+            self.builder.ret(self._zero_for_type(ret_ty))
+        except Exception:
+            self.builder.ret_void()

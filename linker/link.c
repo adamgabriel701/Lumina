@@ -6,7 +6,8 @@
  *       resolução de símbolos globais → relocação → EXEC ELF.
  *
  * Escopo: x86_64, ET_REL → ET_EXEC, um único PT_LOAD RWX.
- * Sem libc, sem .so, sem PLT/GOT real, sem TLS, sem SHN_COMMON.
+ * Sem libc, sem .so, sem PLT/GOT real, sem TLS.
+ * Suporta SHN_COMMON.
  *
  * Compilar: clang -O2 -Wall -Wextra link.c -o lumina-ld
  */
@@ -252,11 +253,6 @@ static uint64_t sym_addr(Input *in, int idx) {
     const char *name = in->strtab + s->st_name;
 
     if (s->st_shndx == SHN_UNDEF) {
-        /* Símbolos sintéticos definidos pelo linker.
-           `_end` é o início do heap: endereço absoluto (vaddr) logo
-           após o .bss. NÃO alinhamos aqui — o runtime (rt.c) faz o
-           arredondamento que precisa. O segmento é estendido em
-           HEAP_FOLGA bytes em write_output para dar espaço ao heap. */
         if (!strcmp(name, "_end") || !strcmp(name, "end"))
             return BASE_ADDR + g_mem_end;
         if (!strcmp(name, "__bss_start"))
@@ -275,10 +271,17 @@ static uint64_t sym_addr(Input *in, int idx) {
         return sym_addr(&inputs[g->in_idx], g->sym_idx);
     }
     if (s->st_shndx == SHN_ABS) return s->st_value;
+    
+    /* Suporte a SHN_COMMON: variáveis globais não inicializadas */
     if (s->st_shndx == SHN_COMMON) {
-        fprintf(stderr, "lumina-ld: SHN_COMMON não suportado ('%s')\n", name);
-        exit(1);
+        OutSec *bss = &outsecs[OS_BSS];
+        uint64_t align = s->st_value ? s->st_value : 1;
+        bss->size = align_up(bss->size, align);
+        uint64_t addr = bss->vaddr + bss->size;
+        bss->size += s->st_size;
+        return addr;
     }
+    
     if (s->st_shndx >= in->ehdr->e_shnum) {
         fprintf(stderr, "lumina-ld: '%s' com shndx inválido\n", name);
         exit(1);
@@ -357,12 +360,6 @@ static void apply_relocations(void) {
                 case R_X86_64_GOTPCREL:
                 case R_X86_64_GOTPCRELX:
                 case R_X86_64_REX_GOTPCRELX: {
-                    /* Reloc GOT-relative emitida pelo LLVM em modo PIC.
-                       Padrão: [REX.W] 8B <ModRM> disp32, com ModRM
-                       mod=00, rm=101 (RIP-relativo). Relaxamos para
-                       [REX.W] 8D <ModRM> disp32 (mov → lea), carregando
-                       o ENDEREÇO do símbolo diretamente. Funciona para
-                       qualquer registrador destino (rax, rcx, rdi, ...). */
                     uint8_t *op = loc - 3;
                     if ((op[0] & 0xF8) == 0x48 && op[1] == 0x8b &&
                         (op[2] & 0xC7) == 0x05) {
@@ -408,12 +405,11 @@ static void write_output(const char *path, uint64_t entry) {
     eh->e_flags     = 0;
     eh->e_ehsize    = sizeof(Elf64_Ehdr);
     eh->e_phentsize = sizeof(Elf64_Phdr);
-    eh->e_phnum     = 1;
+    eh->e_phnum     = 1; /* Um único segmento PT_LOAD RWX */
     eh->e_shentsize = 0;
     eh->e_shnum     = 0;
     eh->e_shstrndx  = SHN_UNDEF;
 
-    /* Mapeia o arquivo + bss + HEAP_FOLGA (heap depois de _end). */
     uint64_t memsz = align_up(g_mem_end + HEAP_FOLGA, 0x1000);
 
     Elf64_Phdr *ph = (Elf64_Phdr *)(buf + sizeof(Elf64_Ehdr));

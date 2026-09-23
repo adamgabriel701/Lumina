@@ -18,6 +18,13 @@ class FunctionBodyMixin:
         entry_bb = func.append_basic_block(name=f"{node.name}_entry")
         body_bb = func.append_basic_block(name=f"{node.name}_body")
 
+        # NOVO: Inicializa o estado do codegen para esta função
+        self._reset_function_codegen_state()
+        self._fn_entry_block = entry_bb
+        self._fn_return_type = func_type.return_type
+
+        # O builder começa no bloco de entrada.
+        # Todos os allocas feitos aqui (parâmetros) ficam no topo da função.
         fresh_builder = ir.IRBuilder(entry_bb)
 
         with push_context(
@@ -48,6 +55,7 @@ class FunctionBodyMixin:
                 if argv_gv is not None:
                     self.builder.store(func.args[1], argv_gv)
 
+            # Aloca os parâmetros no bloco de entrada (entry_bb)
             for i, p in enumerate(node.params):
                 p_name = p.name
                 p_type = p.type_ann
@@ -57,18 +65,12 @@ class FunctionBodyMixin:
                 self.symbol_table[p_name] = ptr
                 self.var_types[p_name] = p_type
 
+            # Pula para o bloco do corpo
             self.builder.branch(body_bb)
             self.builder.position_at_end(body_bb)
 
             for stmt in node.body:
                 self.visit(stmt)
 
-            if not self.builder.block.is_terminated:
-                ret_ty = func_type.return_type
-                if isinstance(ret_ty, ir.VoidType):
-                    self.builder.ret_void()
-                elif isinstance(ret_ty, ir.LiteralStructType):
-                    zero_fields = [ir.Constant(ft, 0) for ft in ret_ty.elements]
-                    self.builder.ret(ir.Constant(ret_ty, zero_fields))
-                else:
-                    self.builder.ret(self._zero_for_type(ret_ty))
+            # NOVO: Usa o hook para garantir que o bloco termine com um terminador
+            self._fn_ensure_terminator()

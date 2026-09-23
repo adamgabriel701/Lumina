@@ -4,19 +4,11 @@
  *   clang -c -ffreestanding -fno-pic -fno-pie \
  *         -fno-stack-protector -fno-builtin -nostdlib \
  *         -O2 rt.c -o rt.o
- *
- * Fornece: malloc/free/calloc, mem*, strings, printf/snprintf/putchar,
- *          FILE* mínimo, I/O por fd (open/read/write/lseek),
- *          math (pow/sqrt/abs/labs/floor/ceil/round/rand), usleep, remove, sockets/epoll
- *          e shims do Boehm GC.
  */
 typedef unsigned long size_t;
 typedef long          ssize_t;
 
-/* ================= forward declarations =================
- * Necessárias porque funções como `calloc` chamam `memset`,
- * `fopen` chama `malloc`, e `pow` chama `sqrt`-like helpers,
- * antes das definições aparecerem. */
+/* ================= forward declarations ================= */
 void  *malloc(size_t);
 void   free(void*);
 void  *calloc(size_t, size_t);
@@ -30,8 +22,8 @@ int    strncmp(const char*, const char*, size_t);
 char  *strcpy(char*, const char*);
 char  *strncpy(char*, const char*, size_t);
 char  *strcat(char*, const char*);
-int puts(const char*);
 char  *strstr(const char*, const char*);
+int    puts(const char*);
 long   atoi(const char*);
 int    putchar(int);
 int    getchar(void);
@@ -63,69 +55,85 @@ int    close(int);
 long   read(int, void*, size_t);
 long   write(int, const void*, size_t);
 long   lseek(int, long, int);
+int    clone(int (*fn)(void*), void *stack, int flags, void *arg);
 void   GC_init(void);
 void  *GC_malloc(size_t);
 void   GC_free(void*);
+void   makecontext(void *ucp, void (*func)(), void *stack, size_t stack_size);
+int    swapcontext(void *oucp, const void *ucp);
 
 /* ================= syscalls Linux x86_64 ================= */
-
 static long _sys1(long n, long a) {
     long r;
-    __asm__ volatile("syscall"
-        : "=a"(r) : "a"(n), "D"(a) : "rcx", "r11", "memory");
+    __asm__ volatile("syscall" : "=a"(r) : "a"(n), "D"(a) : "rcx", "r11", "memory");
     return r;
 }
 static long _sys2(long n, long a, long b) {
     long r;
-    __asm__ volatile("syscall"
-        : "=a"(r) : "a"(n), "D"(a), "S"(b) : "rcx", "r11", "memory");
+    __asm__ volatile("syscall" : "=a"(r) : "a"(n), "D"(a), "S"(b) : "rcx", "r11", "memory");
     return r;
 }
 static long _sys3(long n, long a, long b, long c) {
     long r;
-    __asm__ volatile("syscall"
-        : "=a"(r) : "a"(n), "D"(a), "S"(b), "d"(c)
-        : "rcx", "r11", "memory");
+    __asm__ volatile("syscall" : "=a"(r) : "a"(n), "D"(a), "S"(b), "d"(c) : "rcx", "r11", "memory");
     return r;
 }
 static long _sys4(long n, long a, long b, long c, long d) {
     long r;
     register long r10 __asm__("r10") = d;
-    __asm__ volatile("syscall"
-        : "=a"(r) : "a"(n), "D"(a), "S"(b), "d"(c), "r"(r10)
-        : "rcx", "r11", "memory");
+    __asm__ volatile("syscall" : "=a"(r) : "a"(n), "D"(a), "S"(b), "d"(c), "r"(r10) : "rcx", "r11", "memory");
     return r;
 }
 static long _sys5(long n, long a, long b, long c, long d, long e) {
     long r;
     register long r10 __asm__("r10") = d;
     register long r8  __asm__("r8")  = e;
-    __asm__ volatile("syscall"
-        : "=a"(r) : "a"(n), "D"(a), "S"(b), "d"(c), "r"(r10), "r"(r8)
-        : "rcx", "r11", "memory");
+    __asm__ volatile("syscall" : "=a"(r) : "a"(n), "D"(a), "S"(b), "d"(c), "r"(r10), "r"(r8) : "rcx", "r11", "memory");
+    return r;
+}
+static long _sys6(long n, long a, long b, long c, long d, long e, long f) {
+    long r;
+    register long r10 __asm__("r10") = d;
+    register long r8  __asm__("r8")  = e;
+    register long r9  __asm__("r9")  = f;
+    __asm__ volatile("syscall" : "=a"(r) : "a"(n), "D"(a), "S"(b), "d"(c), "r"(r10), "r"(r8), "r"(r9) : "rcx", "r11", "memory");
     return r;
 }
 
-static void _write_fd(int fd, const void *buf, size_t n) {
-    _sys3(1, fd, (long)buf, (long)n);
-}
-static void _exit(int code) {
-    _sys1(60, code);
-    __builtin_unreachable();
-}
+static void _write_fd(int fd, const void *buf, size_t n) { _sys3(1, fd, (long)buf, (long)n); }
+static void _exit(int code) { _sys1(60, code); __builtin_unreachable(); }
 
-/* ================= memória (brk) ================= */
+/* ================= memória (brk) e GC ================= */
 
 extern char _end;
 static char *_heap = 0;
 
+typedef struct _GCBlock {
+    size_t size;
+    int marked;
+    struct _GCBlock *next;
+} _GCBlock;
+
+static _GCBlock *gc_head = 0;
+
+void GC_init(void) { gc_head = 0; }
+
 void *malloc(size_t n) {
     if (!_heap) _heap = (char*)(((unsigned long)&_end + 4095) & ~4095UL);
-    char *p = _heap;
-    _heap += (n + 15) & ~15UL;
-    _sys1(12, (long)_heap);
-    return p;
+    
+    size_t total = sizeof(_GCBlock) + ((n + 15) & ~15UL);
+    _GCBlock *b = (_GCBlock *)_heap;
+    _heap += total;
+    _sys1(12, (long)_heap); /* brk */
+    
+    b->size = n;
+    b->marked = 0;
+    b->next = gc_head;
+    gc_head = b;
+    
+    return (void*)((char*)b + sizeof(_GCBlock));
 }
+
 void free(void *p) { (void)p; }
 
 void *calloc(size_t n, size_t sz) {
@@ -135,8 +143,27 @@ void *calloc(size_t n, size_t sz) {
     return p;
 }
 
-/* ================= mem* ================= */
+void *GC_malloc(size_t n) { return malloc(n); }
+void  GC_free(void *p)    { free(p); }
 
+/* ================= threads (clone) ================= */
+/* syscall 220: clone(fn, stack, flags, arg, ...) */
+int clone(int (*fn)(void*), void *stack, int flags, void *arg) {
+    return (int)_sys6(220, (long)fn, (long)stack, flags, (long)arg, 0, 0);
+}
+
+/* ================= corrotinas ================= */
+void makecontext(void *ucp, void (*func)(), void *stack, size_t stack_size) {
+    unsigned long *sp = (unsigned long *)((unsigned char *)stack + stack_size);
+    sp = (unsigned long *)((unsigned long)sp & ~0xFFUL); /* Alinha para 256B */
+    sp -= 1; /* Espaço para simular endereço de retorno */
+    
+    unsigned long *ctx = (unsigned long *)ucp;
+    ctx[6] = (unsigned long)sp; /* RSP */
+    ctx[7] = (unsigned long)func; /* RIP */
+}
+
+/* ================= mem* ================= */
 void *memset(void *d, int c, size_t n) {
     unsigned char *p = (unsigned char*)d;
     while (n--) *p++ = (unsigned char)c;
@@ -169,50 +196,42 @@ int memcmp(const void *a, const void *b, size_t n) {
 }
 
 /* ================= strings ================= */
-
 size_t strlen(const char *s) {
     size_t n = 0;
     while (s[n]) n++;
     return n;
 }
-
 int strcmp(const char *a, const char *b) {
     while (*a && *a == *b) { a++; b++; }
     return (unsigned char)*a - (unsigned char)*b;
 }
-
 int strncmp(const char *a, const char *b, size_t n) {
     while (n && *a && *a == *b) { a++; b++; n--; }
     return n ? ((unsigned char)*a - (unsigned char)*b) : 0;
 }
-
 char *strcpy(char *d, const char *s) {
     char *o = d;
     do { *d++ = *s; } while (*s++);
     return o;
 }
-
 char *strncpy(char *d, const char *s, size_t n) {
     char *o = d;
     while (n && (*d = *s)) { d++; s++; n--; }
     while (n--) *d++ = 0;
     return o;
 }
-
 char *strcat(char *d, const char *s) {
     char *o = d;
     while (*d) d++;
     do { *d++ = *s; } while (*s++);
     return o;
 }
-
 int puts(const char *s) {
     size_t n = strlen(s);
     _write_fd(1, s, n);
     _write_fd(1, "\n", 1);
     return (int)(n + 1);
 }
-
 char *strstr(const char *h, const char *n) {
     if (!*n) return (char*)h;
     for (; *h; h++) {
@@ -222,7 +241,6 @@ char *strstr(const char *h, const char *n) {
     }
     return 0;
 }
-
 long atoi(const char *s) {
     long v = 0;
     int neg = 0;
@@ -234,13 +252,11 @@ long atoi(const char *s) {
 }
 
 /* ================= putchar / getchar ================= */
-
 int putchar(int c) {
     unsigned char ch = (unsigned char)c;
     _write_fd(1, &ch, 1);
     return c;
 }
-
 int getchar(void) {
     char c;
     long r = _sys3(0, 0, (long)&c, 1);
@@ -248,52 +264,32 @@ int getchar(void) {
 }
 
 /* ================= usleep ================= */
-
 int usleep(unsigned int usec) {
     struct { long tv_sec; long tv_nsec; } ts;
     ts.tv_sec  = usec / 1000000UL;
     ts.tv_nsec = (long)(usec % 1000000UL) * 1000L;
-    return (int)_sys2(35, (long)&ts, 0);   /* nanosleep */
+    return (int)_sys2(35, (long)&ts, 0);
 }
 
-/* ================= remove (unlink) ================= */
-
+/* ================= remove ================= */
 int remove(const char *path) {
-    long r = _sys1(87, (long)path);        /* unlink */
+    long r = _sys1(87, (long)path);
     return r < 0 ? -1 : 0;
 }
 
 /* ================= math ================= */
-
 int abs(int x) { return x < 0 ? -x : x; }
 long labs(long x) { return x < 0 ? -x : x; }
-
-double floor(double x) {
-    long i = (long)x;
-    return (x < 0.0 && x != (double)i) ? (double)(i - 1) : (double)i;
-}
-
-double ceil(double x) {
-    long i = (long)x;
-    return (x > 0.0 && x != (double)i) ? (double)(i + 1) : (double)i;
-}
-
-double round(double x) {
-    return (x >= 0.0) ? (double)(long)(x + 0.5) : (double)(long)(x - 0.5);
-}
-
+double floor(double x) { long i = (long)x; return (x < 0.0 && x != (double)i) ? (double)(i - 1) : (double)i; }
+double ceil(double x) { long i = (long)x; return (x > 0.0 && x != (double)i) ? (double)(i + 1) : (double)i; }
+double round(double x) { return (x >= 0.0) ? (double)(long)(x + 0.5) : (double)(long)(x - 0.5); }
 double sqrt(double x) {
     if (x <= 0.0) return 0.0;
-    /* Newton-Raphson partindo do próprio x. Converge em ~5-6
-       iterações para qualquer x razoável. */
     double r = x;
     for (int i = 0; i < 30; i++) r = 0.5 * (r + x / r);
     return r;
 }
-
 double pow(double base, double exp) {
-    /* Casos rápidos: exp inteiro pequeno. Para exp não-inteiro,
-       cobre exp == 0.5 via sqrt e cai num fallback com ln+série. */
     if (exp == 0.0) return 1.0;
     if (exp == 1.0) return base;
     if (exp == 2.0) return base * base;
@@ -301,85 +297,42 @@ double pow(double base, double exp) {
 
     int neg = 0;
     if (exp < 0.0) { neg = 1; exp = -exp; }
-
     long ie = (long)exp;
     if ((double)ie == exp) {
         double r = 1.0, b = base;
-        while (ie > 0) {
-            if (ie & 1) r *= b;
-            b *= b;
-            ie >>= 1;
-        }
+        while (ie > 0) { if (ie & 1) r *= b; b *= b; ie >>= 1; }
         return neg ? 1.0 / r : r;
     }
-
-    /* Fallback: exp*ln(base) via série. Só cobre base > 0. */
     if (base <= 0.0) return 0.0;
     double m = base, k = 0.0;
     while (m > 2.0) { m *= 0.5; k += 1.0; }
     while (m < 0.5) { m *= 2.0; k -= 1.0; }
     double z = (m - 1.0) / (m + 1.0);
     double z2 = z * z, term = z, ln = 0.0;
-    for (int i = 0; i < 30; i++) {
-        ln += term / (2.0 * i + 1.0);
-        term *= z2;
-    }
-    ln *= 2.0;
-    ln += k * 0.69314718055994530942;
+    for (int i = 0; i < 30; i++) { ln += term / (2.0 * i + 1.0); term *= z2; }
+    ln *= 2.0; ln += k * 0.69314718055994530942;
 
     double r = 1.0, b = base;
     long n = (long)exp;
-    while (n > 0) {
-        if (n & 1) r *= b;
-        b *= b;
-        n >>= 1;
-    }
+    while (n > 0) { if (n & 1) r *= b; b *= b; n >>= 1; }
     double frac = exp - (double)(long)exp;
     r *= 1.0 + frac * ln;
     return neg ? 1.0 / r : r;
 }
 
 /* ================= rand / srand ================= */
-/* LCG (Linear Congruential Generator) simples. */
 static unsigned long _rand_seed = 1;
-
-void srand(unsigned int seed) {
-    _rand_seed = seed;
-}
-
-int rand(void) {
-    _rand_seed = (_rand_seed * 1103515245UL + 12345UL) & 0x7fffffffUL;
-    return (int)_rand_seed;
-}
+void srand(unsigned int seed) { _rand_seed = seed; }
+int rand(void) { _rand_seed = (_rand_seed * 1103515245UL + 12345UL) & 0x7fffffffUL; return (int)_rand_seed; }
 
 /* ================= I/O por fd ================= */
-
-int open(const char *path, int flags, ...) {
-    /* flags usam os mesmos valores Linux: O_RDONLY=0, O_WRONLY=1,
-       O_RDWR=2, O_CREAT=0x40, O_TRUNC=0x200, O_APPEND=0x400 */
-    long r = _sys3(2, (long)path, flags, 0644);
-    return (int)r;
-}
-
-int close(int fd) {
-    long r = _sys1(3, fd);
-    return (int)r;
-}
-
-long read(int fd, void *buf, size_t n) {
-    return _sys3(0, fd, (long)buf, (long)n);
-}
-
-long write(int fd, const void *buf, size_t n) {
-    return _sys3(1, fd, (long)buf, (long)n);
-}
-
-long lseek(int fd, long off, int whence) {
-    return _sys3(8, fd, off, whence);
-}
+int open(const char *path, int flags, ...) { return (int)_sys3(2, (long)path, flags, 0644); }
+int close(int fd) { return (int)_sys1(3, fd); }
+long read(int fd, void *buf, size_t n) { return _sys3(0, fd, (long)buf, (long)n); }
+long write(int fd, const void *buf, size_t n) { return _sys3(1, fd, (long)buf, (long)n); }
+long lseek(int fd, long off, int whence) { return _sys3(8, fd, off, whence); }
 
 /* ================= printf / snprintf ================= */
-
 static int _format_to(char *dst, size_t cap, const char *fmt, __builtin_va_list ap) {
     size_t i = 0;
     #define PUT(c) do { if (i < cap - 1) dst[i] = (c); i++; } while (0)
@@ -514,13 +467,7 @@ int snprintf(char *dst, size_t cap, const char *fmt, ...) {
 void abort(void) { _exit(134); }
 
 /* ================= FILE* mínimo ================= */
-
-typedef struct {
-    int fd;
-    int eof;
-    int err;
-} _LFile;
-
+typedef struct { int fd; int eof; int err; } _LFile;
 static _LFile _stdin_s  = { 0, 0, 0 };
 static _LFile _stdout_s = { 1, 0, 0 };
 static _LFile _stderr_s = { 2, 0, 0 };
@@ -606,50 +553,40 @@ int fputs(const char *s, void *fp) {
 
 int fflush(void *fp) { (void)fp; return 0; }
 
-/* ================= shims do Boehm GC ================= */
-
-void GC_init(void) { }
-void *GC_malloc(size_t n) { return malloc(n); }
-void  GC_free(void *p)    { free(p); }
-
 /* ================= Sockets e Epoll ================= */
-/* Adaptado para a runtime freestanding do Lumina.
- * Cobre os exemplos de servidor assíncrono e http_framework.
- */
+int socket(int domain, int type, int protocol) { return (int)_sys3(41, domain, type, protocol); }
+int bind(int fd, const void *addr, size_t len) { return (int)_sys3(49, fd, (long)addr, len); }
+int listen(int fd, int backlog) { return (int)_sys2(50, fd, backlog); }
+int accept(int fd, void *addr, void *addrlen) { return (int)_sys3(43, fd, (long)addr, (long)addrlen); }
+int connect(int fd, const void *addr, size_t len) { return (int)_sys3(42, fd, (long)addr, len); }
+long send(int fd, const void *buf, size_t n, int flags) { return _sys4(44, fd, (long)buf, n, flags); }
+long recv(int fd, void *buf, size_t n, int flags) { return _sys4(45, fd, (long)buf, n, flags); }
+int setsockopt(int fd, int level, int optname, const void *optval, size_t optlen) { return (int)_sys5(54, fd, level, optname, (long)optval, optlen); }
 
-int socket(int domain, int type, int protocol) {
-    return (int)_sys3(41, domain, type, protocol);
-}
-int bind(int fd, const void *addr, size_t len) {
-    return (int)_sys3(49, fd, (long)addr, len);
-}
-int listen(int fd, int backlog) {
-    return (int)_sys2(50, fd, backlog);
-}
-int accept(int fd, void *addr, void *addrlen) {
-    return (int)_sys3(43, fd, (long)addr, (long)addrlen);
-}
-int connect(int fd, const void *addr, size_t len) {
-    return (int)_sys3(42, fd, (long)addr, len);
-}
-/* send e recv podem usar as syscalls genéricas */
-long send(int fd, const void *buf, size_t n, int flags) {
-    return _sys4(44, fd, (long)buf, n, flags);
-}
-long recv(int fd, void *buf, size_t n, int flags) {
-    return _sys4(45, fd, (long)buf, n, flags);
-}
-int setsockopt(int fd, int level, int optname, const void *optval, size_t optlen) {
-    return (int)_sys5(54, fd, level, optname, (long)optval, optlen);
+int epoll_create1(int flags) { return (int)_sys1(291, flags); }
+int epoll_ctl(int epfd, int op, int fd, void *event) { return (int)_sys4(233, epfd, op, fd, (long)event); }
+int epoll_wait(int epfd, void *events, int maxevents, int timeout) { return (int)_sys4(232, epfd, (long)events, maxevents, timeout); }
+
+/* ================= TLS (Thread Local Storage) ================= */
+/* Variáveis globais que armazenam o ID do TLS para a thread principal e filhas.
+ * O clang compila referências a __var como RIP-relative, que funciona no segmento RWX. */
+void *__lumina_tls_block = (void*)0;
+static long tls_key = -1;
+
+/* Inicializa o subsistema de TLS. Deve ser chamado no início do main. */
+void _lumina_tls_init(void) {
+    /* Usa prctl PR_SET_THP_DISABLE (15) para garantir que a thread principal 
+     * não tenha transparent huge pages, o que pode quebrar o TLS em alguns kernels. */
+    _sys3(157, 15, 0, 0);
+    tls_key = 0;
 }
 
-/* Epoll */
-int epoll_create1(int flags) {
-    return (int)_sys1(291, flags);
+/* Retorna o ponteiro do bloco TLS atual */
+void *_lumina_get_tls(void) {
+    return __lumina_tls_block;
 }
-int epoll_ctl(int epfd, int op, int fd, void *event) {
-    return (int)_sys4(233, epfd, op, fd, (long)event);
-}
-int epoll_wait(int epfd, void *events, int maxevents, int timeout) {
-    return (int)_sys4(232, epfd, (long)events, maxevents, timeout);
+
+/* Define o ponteiro do bloco TLS para a thread atual */
+void _lumina_set_tls(void *ptr) {
+    __lumina_tls_block = ptr;
 }

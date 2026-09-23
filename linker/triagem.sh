@@ -16,11 +16,12 @@ TMP="/tmp/triagem"
 mkdir -p "$TMP"
 
 # SKIP_LIST — arquivos pulados e o motivo:
-#   chip8, gc_test, util, threads — bugs codegen ou sem main
+#   util — módulo auxiliar, sem `fn main`
+#   threads — usa pthread_create; implementação exige clone()+TLS
 #   engine, ffi_test, wasm_js_interop — dependem de FFI/WASM/Raylib externos
 #   api, app, async_server, http_framework, serve, server, proxy — servidores de rede (loop infinito)
-#   coroutines — codegen: alinhamento de pilha ao inicializar o contexto
-SKIP_LIST="chip8 gc_test util threads engine ffi_test wasm_js_interop api app async_server http_framework serve server proxy coroutines"
+#   bootstrap_lexer, database, gc_test, json_parser — dependem de .tbss (TLS nativo)
+SKIP_LIST="util threads engine ffi_test wasm_js_interop api app async_server http_framework serve server proxy bootstrap_lexer database gc_test json_parser"
 
 PASS=()
 FAIL_COMPILE=()

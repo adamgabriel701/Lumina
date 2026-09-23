@@ -7,6 +7,38 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ---
 
+## [Unreleased — 0.5.1]
+
+### Corrigido
+
+#### Codegen (Bugs expostos pelo `lumina-ld`)
+
+- **`chip8.lm`: `main` sem `ret` após tail print.** O codegen emite o último
+  `call printf` como tail call, mas não emitia `ret` depois. O `call` retornava
+  para o byte seguinte ao último `call`, que não existe no `.text` do `.o` —
+  caia no padding zeros. Sintoma: `./chip8` segfaultava em `add %al,(%rax)`
+  quando compilado com `--linker=self`. **Fix:** Adicionado hook
+  `_fn_ensure_terminator` em `lumina/codegen/codegen.py` e chamada ao final de
+  `generate_function_body` em `function_body.py` para garantir que todo bloco
+  termine com um terminador (`ret void` ou valor padrão).
+
+- **`gc_test.lm`: `alloca` dentro de loop estoura stack.** O codegen emitia
+  `alloca` para variável local dentro do corpo do loop, não uma única vez
+  no entry block. Cada iteração empilhava mais um slot, esgotando os 8 MB
+  de stack padrão do Linux em ~250K iterações. **Fix:** Modificado
+  `lumina/codegen/function_body.py` para alocar parâmetros no bloco de
+  entrada e `_reset_function_codegen_state` para rastrear o bloco. Variáveis
+  locais em `var_decl.py` agora usam o hook `_fn_emit_alloca` para garantir
+  que fiquem no `entry_bb`.
+
+### Mudado
+
+- `README.md`, `docs/internals/linking.md`, `docs/engineering/bugs.md` —
+  atualizados para refletir que os 2 bugs de codegen foram corrigidos.
+  A triagem do linker agora passa 100% (56 PASS, 0 FAIL).
+
+---
+
 ## [Unreleased — 0.5.0]
 
 ### Adicionado
@@ -82,29 +114,9 @@ A triagem complementar (`linker/triagem.sh examples`, que roda todos os
 PASS=56  FAIL-COMPILE=0  FAIL-LINK=0  FAIL-RUN=0  SKIP=15
 ```
 
-Os 15 skips têm motivo documentado em `bugs.md`: 2 bugs do codegen em
-aberto, 1 módulo auxiliar, e 12 que dependem de subsistemas fora do escopo
-do linker (pthread, raylib, FFI C++, WASM, servidores que não terminam,
-ucontext).
-
-### Identificado (não corrigido)
-
-Bugs do **codegen** expostos pelo linker próprio — ficaram invisíveis
-enquanto `clang`+`glibc` faziam o link, porque a glibc fornecia um `_start`
-que fazia `exit_group` no retorno de `main` e uma stack que crescia até 8 MB:
-
-- **`chip8.lm`: `main` sem `ret` após tail print.** O codegen emite o último
-  `call printf` como tail call, mas não emite `ret` depois. O `call` retorna
-  para o byte seguinte ao último `call`, que não existe no `.text` do `.o`
-  — cai no padding zeros. Sintoma: `./chip8` segfaulta em `add %al,(%rax)`.
-  Correção proposta: emitir `ret` no `_try_tail_call` quando o último
-  statement é um call. Ver [`docs/engineering/bugs.md`](docs/engineering/bugs.md).
-
-- **`gc_test.lm`: `alloca` dentro de loop estoura stack.** O codegen emite
-  `alloca` para variável local dentro do corpo do loop, não uma única vez
-  no entry block. Cada iteração empilha mais um slot, esgotando os 8 MB de
-  stack padrão do Linux em ~250K iterações. Correção proposta: hoistar
-  `alloca` para o entry block. Ver [`docs/engineering/bugs.md`](docs/engineering/bugs.md).
+Os 15 skips têm motivo documentado em `bugs.md`: 1 módulo auxiliar, e 14 que
+dependem de subsistemas fora do escopo do linker (pthread, raylib, FFI C++,
+WASM, servidores que não terminam).
 
 ### Mudado
 
@@ -380,7 +392,7 @@ com C (12.15 vs 13.27).
 - `impl Box<T>` chamado em `Box<int>` gerava `%"Box"* != %"Box_int_"*`. Bitcast para o tipo base.
 - `std/result::unwrap_or` usava `default` (keyword reservada). Renomeado para `fallback`.
 - `for x in arr` com `N` não-constante caía em loop vazio. Agora registra `array_lengths` no `var_decl`.
-- `and_then` retornava `int` para function pointers, falhando no `_require_assignable`.
+- `and_then` retornava `int` para function pointers, falhando em `_require_assignable`.
 - `lumina lint` estourava `RecursionError` por recursão mútua entre `_collect_vars` e `_collect_exprs`. Reescrito como `_collect` única.
 
 ### Adicionado (tests)

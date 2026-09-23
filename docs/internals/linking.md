@@ -165,8 +165,6 @@ sem depender de libc.
 
 - **`pthread_create` e família** — implementar exige `clone()` + TLS +
   barreiras de sincronização. É projeto à parte.
-- **`swapcontext`/`getcontext`** — implementados em `start.S`, mas o layout
-  do `ucontext_t` precisa bater com o do Lumina; `coroutines.lm` ainda crasha.
 - **`InitWindow` (raylib)** — biblioteca gráfica externa.
 - **`js_alert` (WASM)** — target WASM não é ELF.
 - **`cpp_print_hello` (FFI C++)** — precisa linkar `ffi_helper.o`.
@@ -175,16 +173,14 @@ sem depender de libc.
 
 1. **Um único `PT_LOAD` RWX** — sem segregação W^X. Um dia isso vira dois
    segmentos (R+X para `.text`/`.rodata`, RW para `.data`/`.bss`).
-2. **Sem `SHN_COMMON`** — variáveis globais sem inicializador explícito com
-   linkage "common" abortam. Workaround: inicializar com `= 0`.
-3. **Sem `.eh_frame`** — não há unwinding de exceções C++. Não é problema
+2. **Sem `.eh_frame`** — não há unwinding de exceções C++. Não é problema
    porque Lumina não tem exceções C++.
-4. **Sem GOT/PLT real** — tudo resolvido em tempo de link, sem indireção.
+3. **Sem GOT/PLT real** — tudo resolvido em tempo de link, sem indireção.
    Isso quebra se um dia houver `.so`.
-5. **Sem TLS** — `thread_local` não funciona.
-6. **Sem section headers no output** — `readelf -S` mostra nada. `readelf -h`,
+4. **Sem TLS** — `thread_local` não funciona.
+5. **Sem section headers no output** — `readelf -S` mostra nada. `readelf -h`,
    `-l` e `-s` funcionam.
-7. **Só x86_64** — cross-compile exige um linker por arquitetura.
+6. **Só x86_64** — cross-compile exige um linker por arquitetura.
 
 ## Como debugar
 
@@ -277,9 +273,8 @@ PASS=56  FAIL-COMPILE=0  FAIL-LINK=0  FAIL-RUN=0  SKIP=15
 
 Os 15 SKIP da triagem têm motivo documentado em
 [`bugs.md`](../engineering/bugs.md#bugs-identificados-não-corrigidos):
-2 bugs do codegen em aberto, 1 módulo auxiliar, e 12 que dependem de
-subsistemas fora do escopo do linker (pthread, raylib, FFI C++, WASM,
-servidores que não terminam, ucontext).
+1 módulo auxiliar, e 14 que dependem de subsistemas fora do escopo do linker
+(pthread, raylib, FFI C++, WASM, servidores que não terminam).
 
 Para rodar a triagem:
 

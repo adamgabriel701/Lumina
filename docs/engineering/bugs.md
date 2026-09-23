@@ -43,6 +43,8 @@ Lista completa de bugs silenciosos corrigidos no compilador. Todos passavam pelo
 | `impl Box<T>` chamado em `Box<int>` | `%"Box"* != %"Box_int_"*` | `bitcast` para o tipo base quando cai no fallback | `test_generic_impl.py` |
 | `std/result::unwrap_or` usava `default` | keyword reservada | Renomeado para `fallback` | `test_std_result.py` |
 | `and_then` retornava `int` para function pointers | `_require_assignable` rejeitava `Result` | Retorna `None` (tipo desconhecido) | `test_std_result.py` |
+| `main` sem `ret` após tail print | `./chip8` segfaultava via `lumina-ld` | Hook `_fn_ensure_terminator` no `function_body.py` garante `ret` no fim do bloco | `examples/chip8.lm` |
+| `alloca` dentro de loop estoura stack | `./gc_test` segfaultava com ~250K iterações | Variáveis locais e parâmetros alocadas no bloco de entrada (`entry_bb`) da função | `examples/gc_test.lm` |
 
 ## Semantic
 
@@ -97,69 +99,4 @@ Lista completa de bugs silenciosos corrigidos no compilador. Todos passavam pelo
 
 ## Bugs identificados (não corrigidos)
 
-Bugs encontrados durante o desenvolvimento do linker próprio
-(`lumina-ld`). Nenhum é do linker — o linker produziu ELF válido em
-todos os casos. São bugs do **codegen** que ficaram invisíveis enquanto
-o `clang` + `glibc` faziam o link, porque forneciam um `_start` que
-fazia `exit_group` no retorno de `main` e uma stack que crescia até
-8 MB.
-
-| Bug | Sintoma | Causa | Onde | Impacto |
-|---|---|---|---|---|
-| `main` sem `ret` após tail print | `./chip8` segfaulta em `add %al,(%rax)` num endereço de padding | Codegen emite o último `call printf` como tail call, mas não emite `ret` depois. O `call` retorna para o byte seguinte ao último `call`, que não existe no `.text` do `.o` — cai no padding zeros entre `.text` e a próxima seção | `lumina/codegen/function_body.py` ou `statements/flow.py` (`_try_tail_call`, caso "último statement é call") | Todo exemplo que termina com `print()` na posição tail crasharia com `--linker=self`. Com clang+glibc funciona por sorte |
-| `alloca` dentro de loop estoura stack | `./gc_test` (1M iterações de `let lixo = "..."`) segfaulta com ~250K iterações; `ulimit -s unlimited` faz funcionar | Codegen emite `alloca` para `lixo` dentro do corpo do loop, não uma única vez no entry block. Cada iteração empilha mais um slot, esgotando os 8 MB de stack padrão | `lumina/codegen/statements/var_decl.py::visit_VarDecl` | Qualquer loop longo com variável local estoura stack. Não afeta programas curtos |
-
-### Correções propostas
-
-**Bug 1 (`main` sem `ret`)**: no `_try_tail_call`, quando o último statement
-da função é uma chamada de função, emitir `ret` no bloco `end` após o `call`.
-Verificar se o retorno da função não está sendo consumido. Teste de regressão
-mínimo:
-
-```lumina
-fn f() -> int:
-    print("oi")
-    return 0
-```
-
-com inspeção `objdump -d` para confirmar `ret` presente.
-
-**Bug 2 (`alloca` em loop)**: hoistar todos os `alloca` para o entry block
-da função. Alternativa: usar `phi` para reutilizar o slot entre iterações.
-A primeira abordagem é mais simples e cobre 100% dos casos.
-
-### Como foram descobertos
-
-Ambos só apareceram quando o `lumina-ld` passou a gerar o executável completo,
-sem o `_start` do glibc e sem a stack gerenciada pelo kernel. A lista
-completa de bugs do compilador (todos corrigidos) está nas seções anteriores
-deste documento — esses dois são os únicos em aberto até a data de hoje.
-
-### Testes de regressão (quando corrigidos)
-
-Adicionar em `tests/test_codegen_bugs.py`:
-
-```python
-def test_main_ends_with_ret():
-    """Regressão para chip8: main com print em tail position deve ter ret."""
-    src = '''
-fn main() -> int:
-    print("oi")
-    return 0
-'''
-    # compila, desmonta, confirma que .text termina com `c3` (ret)
-    ...
-
-def test_loop_locals_no_stack_growth():
-    """Regressão para gc_test: 1M iterações não podem estourar a stack."""
-    src = '''
-fn main() -> int:
-    mut i = 0
-    while i < 1000000:
-        let lixo = "Lixo " + i
-        i += 1
-    return 0
-'''
-    # compila e roda com ulimit -s 8192 (default); deve retornar 0
-    ...
-```
+Neste momento não há bugs de codegen conhecidos em aberto. Os dois únicos bugs que existiam (`main` sem `ret` e `alloca` em loop) foram corrigidos e movidos para a tabela de "Bugs corrigidos".

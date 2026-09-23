@@ -4,7 +4,7 @@
 [![LLVM](https://img.shields.io/badge/LLVM-14%2B-blue.svg)](https://llvm.org/)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![Status](https://img.shields.io/badge/Status-Alpha-green.svg)](#-status)
-[![Tests](https://img.shields.io/badge/tests-428%20passed-brightgreen.svg)](docs/engineering/tests.md)
+[![Tests](https://img.shields.io/badge/tests-434%20passed-brightgreen.svg)](docs/engineering/tests.md)
 [![Examples](https://img.shields.io/badge/examples-54%20ran-success.svg)](examples/)
 [![Benchmarks](https://img.shields.io/badge/benchmarks-5%20suites-blue.svg)](benchmarks/results/)
 [![Cross-compile](https://img.shields.io/badge/cross--compile-arm64%20%7C%20wasm-blueviolet.svg)](#-cross-compilation)
@@ -227,12 +227,7 @@ $ ./examples/main
 PASS=56  FAIL-COMPILE=0  FAIL-LINK=0  FAIL-RUN=0  SKIP=15
 ```
 
-Os 15 skips têm motivo documentado: 2 bugs do codegen em aberto, 1 módulo
-auxiliar, e 12 que dependem de subsistemas fora do escopo do linker
-(pthread, raylib, FFI C++, WASM, servidores que não terminam, ucontext).
-
-Detalhes de arquitetura, extensão e debug em
-**[`docs/internals/linking.md`](docs/internals/linking.md)**.
+Os 15 skips têm motivo documentado: 1 módulo auxiliar, e 14 que dependem de subsistemas fora do escopo do linker (pthread, raylib, FFI C++, WASM, servidores que não terminam). Detalhes de arquitetura, extensão e debug em **[`docs/internals/linking.md`](docs/internals/linking.md)**.
 
 ---
 
@@ -470,6 +465,8 @@ MIT. Veja [LICENSE](LICENSE).
 - [x] **`argv(i)` / `atoi`** — parametrização por linha de comando
 - [x] **Benchmarks comparáveis** em todas as 5 suites (`bench.sh` com clang, `-fwrapv`, `--no-gc`)
 - [x] **Linker próprio** (`lumina-ld`) — ELF estático x86_64, runtime freestanding, paridade com clang no `check_examples.sh`
+- [x] **Codegen `ret void` implícito** — funções sem `return` explícito não causam mais segfault no linker próprio
+- [x] **Hoisting de `alloca`** — variáveis locais em loops não estouram a pilha
 
 **Em aberto:**
 

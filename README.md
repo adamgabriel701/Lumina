@@ -8,6 +8,7 @@
 [![Examples](https://img.shields.io/badge/examples-54%20ran-success.svg)](examples/)
 [![Benchmarks](https://img.shields.io/badge/benchmarks-5%20suites-blue.svg)](benchmarks/results/)
 [![Cross-compile](https://img.shields.io/badge/cross--compile-arm64%20%7C%20wasm-blueviolet.svg)](#-cross-compilation)
+[![Linker](https://img.shields.io/badge/linker-self--hosted-orange.svg)](docs/internals/linking.md)
 
 **Lumina** é uma linguagem de programação de sistemas com sintaxe limpa baseada em indentação (estilo Python/Nim), backend **LLVM** e foco em ergonomia moderna, concorrência e segurança de memória.
 
@@ -35,7 +36,7 @@ fn main() -> int:
 
 **Metaprogramação real em compile-time.** `@macro` com duas formas (expressão e statement), `@derive(Eq, Debug, Clone, ...)`, `comptime` com constant folding, atributos LLVM (`@inline`, `@cold`).
 
-**Tooling de linguagem séria.** LSP completo com escopo qualificado (hover, go-to-def, references, rename), linter estático (5 warnings), REPL persistente, auto-formatter que preserva comentários e `@attrs`, build incremental, cross-compile.
+**Tooling de linguagem séria.** LSP completo com escopo qualificado (hover, go-to-def, references, rename), linter estático (5 warnings), REPL persistente, auto-formatter que preserva comentários e `@attrs`, build incremental, cross-compile, **linker próprio** (`--linker=self`).
 
 **Tipos que ajudam, não atrapalham.** Inferência em 90% dos casos, `Option<T>`, enums com multi-payload, pattern matching com guard e multi-pattern, generics com monomorphization, traits com métodos default, tipos de função com assinatura (`fn(int) -> int`).
 
@@ -177,6 +178,7 @@ Detalhes de implementação em **[`docs/internals.md`](docs/internals.md#gc)**.
 
 ### Tooling
 
+- **Linker próprio** (`lumina build --linker=self`): substitui `clang`/`ld` por `llc` + `lumina-ld` + runtime freestanding. ELF estático, sem libc, sem dynamic linker. Documentação em [`docs/internals/linking.md`](docs/internals/linking.md).
 - **LSP completo** com escopo qualificado: hover (`main::i` vs `helper::i`), go-to-def, references, rename, outline, semantic tokens.
 - **Linter** (`lumina lint`): W001..W005, exit code = nº de warnings, `--format=json` para CI.
 - **Formatter** que preserva comentários, `@attrs`, multi-pattern e wildcard.
@@ -197,9 +199,46 @@ Detalhes de implementação em **[`docs/internals.md`](docs/internals.md#gc)**.
 
 ---
 
+## 🔗 Linker próprio
+
+O Lumina tem um linker estático ELF x86_64 escrito em C, invocado via
+`lumina build --linker=self`. Ele substitui o `clang`/`ld` na etapa de link,
+produzindo um executável **totalmente estático**, sem libc, sem dynamic
+linker, sem Boehm GC — a runtime (`rt.c`) implementa as funções que o
+codegen emite direto sobre syscalls Linux.
+
+```bash
+# Baseline (clang + glibc)
+$ lumina build examples/main.lm
+$ file examples/main
+examples/main: ELF 64-bit LSB pie executable, dynamically linked, ...
+
+# Linker próprio
+$ lumina build examples/main.lm --linker=self
+$ file examples/main
+examples/main: ELF 64-bit LSB executable, statically linked
+
+$ ./examples/main
+```
+
+**Cobertura atual** (`linker/triagem.sh examples`):
+
+```
+PASS=56  FAIL-COMPILE=0  FAIL-LINK=0  FAIL-RUN=0  SKIP=15
+```
+
+Os 15 skips têm motivo documentado: 2 bugs do codegen em aberto, 1 módulo
+auxiliar, e 12 que dependem de subsistemas fora do escopo do linker
+(pthread, raylib, FFI C++, WASM, servidores que não terminam, ucontext).
+
+Detalhes de arquitetura, extensão e debug em
+**[`docs/internals/linking.md`](docs/internals/linking.md)**.
+
+---
+
 ## 📚 Exemplos
 
-**[`examples/`](examples/)** tem 69 arquivos cobrindo:
+**[`examples/`](examples/)** tem 71 arquivos cobrindo:
 
 | Categoria | Exemplos |
 |---|---|
@@ -215,7 +254,10 @@ Detalhes de implementação em **[`docs/internals.md`](docs/internals.md#gc)**.
 | **Projetos maiores** | `json_parser.lm`, `sql_engine.lm`, `vm.lm`, `search_engine.lm` |
 | **Bare-metal & WASM** | `wasm_math.lm`, `wasm_memory.lm`, `wasm_js_interop.lm` |
 
-Verificação automatizada: **[`scripts/check_examples.sh`](scripts/check_examples.sh)** compila e roda cada um (54 PASS / 17 SKIP / 0 FAIL — os 17 skipados são servidores que não terminam sozinhos).
+Verificação automatizada: **[`scripts/check_examples.sh`](scripts/check_examples.sh)**
+compila e roda cada um. Suporta `--linker=self` para usar o linker próprio
+na etapa de link. Ver [`docs/internals/linking.md`](docs/internals/linking.md)
+para detalhes.
 
 ---
 
@@ -226,7 +268,8 @@ Verificação automatizada: **[`scripts/check_examples.sh`](scripts/check_exampl
 | Métrica | Valor | Referência |
 |---|---|---|
 | Testes pytest | **428 passed** | [`docs/engineering/tests.md`](docs/engineering/tests.md) |
-| Exemplos compilando | **54 PASS / 17 SKIP / 0 FAIL** | [`scripts/check_examples.sh`](scripts/check_examples.sh) |
+| Exemplos compilando | **54 PASS / 17 SKIP / 0 FAIL** (clang) | [`scripts/check_examples.sh`](scripts/check_examples.sh) |
+| Exemplos com linker próprio | **56 PASS / 15 SKIP / 0 FAIL** | [`linker/triagem.sh`](linker/triagem.sh) |
 | Suite standalone | **28/28** | [`run_tests.py`](run_tests.py) |
 | LSP | **8 passed** | [`lumina-vscode/tests/`](lumina-vscode/tests/) |
 
@@ -290,6 +333,7 @@ lumina build app.lm --release       # -O3 + opt -O2 no IR
 lumina build app.lm --debug         # -O0 + DWARF
 lumina build app.lm --wasm          # WebAssembly (força --no-gc)
 lumina build app.lm --no-gc         # bare-metal
+lumina build app.lm --linker=self   # usa lumina-ld (ELF estático)
 lumina build app.lm --target=aarch64-linux-gnu
 
 # Qualidade
@@ -331,6 +375,9 @@ sudo apt install -y gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf \
 
 `libgc` precisa estar cross-compilada para o target, ou use `--no-gc`.
 
+**Nota:** `--linker=self` só suporta x86_64 nativo. Para cross-compile ou
+WASM, use `--linker=clang` (o padrão).
+
 ### WebAssembly
 
 ```lumina
@@ -360,11 +407,12 @@ WebAssembly.instantiateStreaming(fetch("math.wasm"))
 | [**Standard Library**](docs/stdlib.md) | `math`, `sort`, `io`, `result`, `map`, `json`... |
 | [**Ferramental**](docs/ferramental.md) | CLI, LSP, formatter, linter, REPL |
 | [**Internals**](docs/internals.md) | Pipeline, codegen LLVM, TCO, escape analysis, GC |
+| [**Linker**](docs/internals/linking.md) | `lumina-ld` — arquitetura, runtime, integração, extensão |
 | [**Contributing**](docs/contributing.md) | Setup de dev, estilo, checklist de PR |
 
 Material de engenharia (para quem mexe no compilador):
 
-- [`docs/engineering/bugs.md`](docs/engineering/bugs.md) — lista completa de bugs corrigidos com sintoma, causa e teste
+- [`docs/engineering/bugs.md`](docs/engineering/bugs.md) — lista completa de bugs corrigidos + identificados (sintoma, causa, teste)
 - [`docs/engineering/tests.md`](docs/engineering/tests.md) — os 428 testes por arquivo
 - [`docs/engineering/benchmarks.md`](docs/engineering/benchmarks.md) — metodologia completa dos benchmarks
 
@@ -375,11 +423,19 @@ Material de engenharia (para quem mexe no compilador):
 Contribuições são bem-vindas. Antes de abrir um PR:
 
 ```bash
-pytest tests/ -q                    # 428 passed
-python3 run_tests.py                # 28/28
-./scripts/check_examples.sh --run   # 54 PASS / 17 SKIP / 0 FAIL
-lumina fmt --check <arquivos>       # se mexeu em .lm
-lumina lint <arquivos>              # sem novos warnings
+pytest tests/ -q                                  # 428 passed
+python3 run_tests.py                              # 28/28
+./scripts/check_examples.sh --run                 # 54 PASS / 17 SKIP / 0 FAIL
+./linker/triagem.sh examples                      # 56 PASS / 15 SKIP / 0 FAIL
+lumina fmt --check <arquivos>                     # se mexeu em .lm
+lumina lint <arquivos>                            # sem novos warnings
+```
+
+Se você mexeu no linker, rode também:
+
+```bash
+( cd linker && make clean && make )
+./scripts/check_examples.sh --run --linker=self
 ```
 
 Checklist completo, estilo de código, como adicionar features e onde pedir ajuda em **[`docs/contributing.md`](docs/contributing.md)**.
@@ -413,6 +469,7 @@ MIT. Veja [LICENSE](LICENSE).
 - [x] **`black_box(x)`** — primitiva nativa anti-DCE
 - [x] **`argv(i)` / `atoi`** — parametrização por linha de comando
 - [x] **Benchmarks comparáveis** em todas as 5 suites (`bench.sh` com clang, `-fwrapv`, `--no-gc`)
+- [x] **Linker próprio** (`lumina-ld`) — ELF estático x86_64, runtime freestanding, paridade com clang no `check_examples.sh`
 
 **Em aberto:**
 
@@ -425,5 +482,8 @@ MIT. Veja [LICENSE](LICENSE).
 - [ ] **Escape analysis** para arrays com N dinâmico mas loop-bounded
 - [ ] **`std/alloc` arena** como primitiva de 1ª classe para churn controlado
 - [ ] **Aliasing hints** (`restrict`/`noalias`) expostos em Lumina
+- [ ] **Linker: pthreads** (`pthread_create` via `clone()` + TLS)
+- [ ] **Linker: cross-compile** (linkers separados para aarch64, riscv64)
+- [ ] **Linker: W^X** (dois segmentos `PT_LOAD` em vez de um RWX)
 
 Detalhes do que já foi feito em **[CHANGELOG.md](CHANGELOG.md)**.

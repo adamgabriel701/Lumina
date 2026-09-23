@@ -7,6 +7,126 @@ e o projeto adere [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ---
 
+## [Unreleased — 0.5.0]
+
+### Adicionado
+
+#### Linker próprio (`lumina-ld`)
+
+- **Linker estático ELF x86_64 escrito em C** (~600 linhas), que substitui o
+  `clang`/`ld` na etapa de link nativa. Implementa as 5 fases clássicas
+  (parsing, resolução de símbolos, layout, relocação, escrita de `ET_EXEC`)
+  descritas em *Linkers & Loaders* (Levine). Sem libc, sem `.so`, sem PLT/GOT
+  real, sem TLS, sem `SHN_COMMON`. Um único `PT_LOAD` RWX.
+
+  Tipos de relocação suportados: `R_X86_64_64`, `PC32`, `PLT32`, `32`, `32S`,
+  `PC64`, e relaxamento de `GOTPCREL`/`GOTPCRELX`/`REX_GOTPCRELX` para `lea`
+  PC-relativo (padrão emitido pelo LLVM em modo PIC).
+
+- **Runtime freestanding (`linker/runtime/rt.c`)**: implementa as funções
+  externas que o codegen do Lumina emite, direto sobre syscalls Linux. Cobre
+  memória (`malloc`/`free`/`calloc`/`mem*`), strings (`strlen`/`str*`/`atoi`),
+  I/O console (`printf`/`snprintf`/`putchar`/`getchar`/`puts`), I/O arquivo
+  (`fopen`/`fread`/`fwrite`/`fseek`/`ftell`/`fgets`/`fputs`/`fclose`/`fflush`),
+  I/O por fd (`open`/`close`/`read`/`write`/`lseek`/`remove`), math
+  (`pow`/`sqrt`/`abs`/`labs`/`floor`/`ceil`/`round`), random (`rand`/`srand`),
+  tempo (`usleep`), sinais (`abort`), sockets (`socket`/`bind`/`listen`/
+  `accept`/`connect`/`send`/`recv`/`setsockopt`), epoll (`epoll_create1`/
+  `epoll_ctl`/`epoll_wait`) e shims do Boehm GC (`GC_init`/`GC_malloc`/
+  `GC_free`). Tudo sem depender de libc.
+
+- **`linker/runtime/start.S`** — `_start` x86_64 que lê `argc`/`argv` da stack
+  do kernel, alinha `%rsp` à ABI, chama `main` e sai via `exit_group`.
+  Inclui `swapcontext`/`getcontext` com layout de `ucontext_t` compatível
+  com o glibc (para `std/coroutines`).
+
+- **Integração no CLI**: `lumina build --linker=self`. Quando ativa, o
+  pipeline vira `llc -filetype=obj` + `lumina-ld` + runtime, pulando `-lc
+  -lm -lpthread -lgc`. Força `--no-gc` implicitamente (a runtime implementa
+  `GC_malloc` como `malloc` sem coletor real). Erro claro se `linker/lumina-ld`
+  não existir: *"rode 'make' em linker/ antes de usar --linker=self"*.
+
+- **`linker/Makefile`** — build do linker + runtime com um `make`.
+
+- **`linker/test.sh`** — pipeline manual end-to-end para um único exemplo.
+
+- **`linker/triagem.sh`** — roda todos os `.lm` de um diretório pelo pipeline
+  do linker, acumulando os símbolos que faltam na runtime. Skip list com
+  motivo documentado por arquivo.
+
+- **`scripts/check_examples.sh --linker=self`** — passa `--linker=self` para
+  o CLI. Baseline (`--run` sem flag) continua usando `clang`.
+
+- **`docs/internals/linking.md`** — documentação completa: as 5 fases, como
+  funciona a resolução de símbolos sintéticos (`_end`, `__bss_start`), a
+  integração com o CLI, o que a runtime cobre, o que não cobre e por quê,
+  como debugar (`objdump -dr`, `readelf -r`, `gdb`), e como estender.
+
+#### Resultados
+
+**Paridade com `clang` no `check_examples.sh --run`:**
+
+| Modo | PASS | SKIP | FAIL |
+|---|---:|---:|---:|
+| `clang` (padrão) | 54 | 17 | 0 |
+| `lumina-ld` (self) | 54 | 17 | 0 |
+
+O binário gerado com `--linker=self` é **~20% menor** e `file` reporta
+`statically linked` (vs `dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2`
+para o `clang`). Sem dependência de glibc, libgc, `ld` ou `crt0` do sistema.
+
+A triagem complementar (`linker/triagem.sh examples`, que roda todos os
+`.lm` inclusive os que o `check_examples.sh` pula por padrão):
+
+```
+PASS=56  FAIL-COMPILE=0  FAIL-LINK=0  FAIL-RUN=0  SKIP=15
+```
+
+Os 15 skips têm motivo documentado em `bugs.md`: 2 bugs do codegen em
+aberto, 1 módulo auxiliar, e 12 que dependem de subsistemas fora do escopo
+do linker (pthread, raylib, FFI C++, WASM, servidores que não terminam,
+ucontext).
+
+### Identificado (não corrigido)
+
+Bugs do **codegen** expostos pelo linker próprio — ficaram invisíveis
+enquanto `clang`+`glibc` faziam o link, porque a glibc fornecia um `_start`
+que fazia `exit_group` no retorno de `main` e uma stack que crescia até 8 MB:
+
+- **`chip8.lm`: `main` sem `ret` após tail print.** O codegen emite o último
+  `call printf` como tail call, mas não emite `ret` depois. O `call` retorna
+  para o byte seguinte ao último `call`, que não existe no `.text` do `.o`
+  — cai no padding zeros. Sintoma: `./chip8` segfaulta em `add %al,(%rax)`.
+  Correção proposta: emitir `ret` no `_try_tail_call` quando o último
+  statement é um call. Ver [`docs/engineering/bugs.md`](docs/engineering/bugs.md).
+
+- **`gc_test.lm`: `alloca` dentro de loop estoura stack.** O codegen emite
+  `alloca` para variável local dentro do corpo do loop, não uma única vez
+  no entry block. Cada iteração empilha mais um slot, esgotando os 8 MB de
+  stack padrão do Linux em ~250K iterações. Correção proposta: hoistar
+  `alloca` para o entry block. Ver [`docs/engineering/bugs.md`](docs/engineering/bugs.md).
+
+### Mudado
+
+- `lumina_cli/commands/build.py` — detecta `--linker=self|clang`. Quando
+  `self`, faz `.ll → .o` com `clang -c -fno-pic -fno-pie` e `.o + runtime
+  → executável` com `lumina-ld`. Pula `-lc -lm -lpthread -lgc`. Cache
+  incremental inclui `linker_kind` no hash.
+
+- `lumina_cli/main.py` — `--linker=self|clang` na linha de ajuda de flags
+  de build.
+
+- `scripts/check_examples.sh` — aceita `--linker=self`; header visual
+  mostra modo e linker ativo.
+
+- `README.md` — badge do linker; nova seção "🔗 Linker próprio"; menção ao
+  linker na lista de tooling; atualização do status (54/17/0 em paridade
+  com clang); link para `docs/internals/linking.md` na tabela de docs;
+  roadmap com "Linker próprio" em concluído e 3 itens de linker em aberto
+  (pthreads, cross-compile, W^X).
+
+---
+
 ## [Unreleased — 0.4.0]
 
 ### Adicionado

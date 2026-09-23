@@ -101,3 +101,10 @@ lumina-vscode/*.vsix
 site/
 ctx/
 ctx/
+
+# Linker: binários e objetos gerados por `make` em linker/
+linker/lumina-ld
+linker/runtime/*.o
+
+# Dump de contexto do linker (ferramenta de desenvolvimento)
+lumina-linker-context.txt

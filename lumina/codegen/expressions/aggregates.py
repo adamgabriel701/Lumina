@@ -4,6 +4,7 @@ from ...ast import (
     StructLiteralField, LambdaExpr, TupleExpr,
 )
 from ..context import push_context
+from ..constants import I64_BYTES, CLOSURE_BLOCK_SIZE   # ← NOVO
 
 
 class AggregatesMixin:
@@ -153,7 +154,7 @@ class AggregatesMixin:
 
         # 2) Aloca env
         n = len(env_field_tys)
-        env_size = max(16, 8 * n)
+        env_size = max(CLOSURE_BLOCK_SIZE, I64_BYTES * n)
         env_raw = self.builder.call(
             self.malloc,
             [ir.Constant(self.i64_ty, env_size)],
@@ -200,7 +201,7 @@ class AggregatesMixin:
             symbol_table={},
             var_types={},
             current_func_name=func_name,
-            current_body_bb=None,          # closures não têm TCO
+            current_body_bb=None,
             defer_stack=[],
             closure_vars=set(),
             _safe_mode=inherit_safe,
@@ -208,6 +209,8 @@ class AggregatesMixin:
             _current_scc_ids=None,
             _current_scc_id_slot=None,
             _current_scc_dispatch_bb=None,
+            _fn_entry_block=block,              # PATCH
+            _fn_return_type=self.i64_ty,        # PATCH
         ):
             # 4a) Bind env → symbol_table
             env_i8p = func.args[0]
@@ -267,7 +270,7 @@ class AggregatesMixin:
         # 5) Bloco closure {fn, env} — emitido no ESCOPO EXTERNO
         closure_raw = self.builder.call(
             self.malloc,
-            [ir.Constant(self.i64_ty, 16)],
+            [ir.Constant(self.i64_ty, CLOSURE_BLOCK_SIZE)],
             name=f"closure_{func_name}",
         )
         closure_i8pp = self.builder.bitcast(

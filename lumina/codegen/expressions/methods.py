@@ -9,6 +9,11 @@ genérica monomorphizada (`Box_int_` → `Box`).
 """
 from llvmlite import ir
 
+# PATCH: importa o mangler canônico (antes havia um `_mangle_name`
+# duplicado dentro desta classe, idêntico a `mangle_type`).
+from ...common.mangle import mangle_type
+from ..constants import I64_BYTES, MIN_ENUM_SIZE   # ← NOVO
+
 
 class MethodCallsMixin:
 
@@ -193,13 +198,42 @@ class MethodCallsMixin:
         raise Exception(f"Método '{method_name}' não encontrado no Codegen.")
 
     def _find_enum_variant(self, variant_name):
-        for enum_name, enum_def in self.struct_defs.items():
-            if not hasattr(enum_def, 'variants'):
-                continue
-            for i, variant in enumerate(enum_def.variants):
-                if variant[0] == variant_name:
-                    return enum_name, i
-        return None
+        """Retorna `(enum_base_name, variant_idx)` para a variante, ou None.
+
+        PATCH: adiciona cache e normaliza para o nome **base**.
+
+        Antes, a função varria `self.struct_defs.items()` a cada chamada.
+        Como `get_or_create_monomorphized_enum` registra a mesma `base_decl`
+        sob 2 chaves extras (`Box<int>`, `Box_int_`), a iteração era:
+          - O(n_enums + n_monomorphizações) em vez de O(n_enums)
+          - Não-determinística quanto ao nome retornado. Se a chave
+            `"Custom<int>"` fosse encontrada antes de `"Custom"`, o
+            chamador (`codegen_user_call`) construía
+            `f"{enum_name}<{args}>"` = `"Custom<int><str>"` → quebra.
+
+        A iteração agora filtra `enum_name == enum_def.name`, garantindo
+        que só a **base** entra no cache. As especializações são derivadas
+        pelo chamador via `_infer_enum_type_args`.
+
+        Cache é populado na primeira chamada e nunca invalidado — todos
+        os enums são registrados em `generate_module` (passo 1) antes de
+        qualquer lookup acontecer em corpos de função (passo 3b).
+        """
+        cache = getattr(self, '_variant_cache', None)
+        if cache is None:
+            cache = {}
+            for enum_name, enum_def in self.struct_defs.items():
+                if not hasattr(enum_def, 'variants'):
+                    continue
+                # Só a chave canônica base: `enum_def.name` é o nome
+                # declarado (`"Box"`), não as especializações
+                # (`"Box<int>"`, `"Box_int_"`).
+                if enum_name != enum_def.name:
+                    continue
+                for i, variant in enumerate(enum_def.variants):
+                    cache[variant[0]] = (enum_name, i)
+            self._variant_cache = cache
+        return cache.get(variant_name)
 
     def _construct_enum(self, enum_name, variant_idx, arg_nodes):
         # Monomorphiza on-demand se for genérico.
@@ -213,17 +247,21 @@ class MethodCallsMixin:
         # Tipos concretos dos slots (elements[0] é o tag).
         payload_tys = list(struct_ty.elements[1:]) if struct_ty.elements else []
 
-        struct_size = 8 + max_p * 8
-        if struct_size < 16:
-            struct_size = 16
+        struct_size = I64_BYTES + max_p * I64_BYTES
+        if struct_size < MIN_ENUM_SIZE:
+            struct_size = MIN_ENUM_SIZE
+
+        # PATCH: usa o mangler canônico. Antes chamava `self._mangle_name`,
+        # que era uma cópia local de `mangle_type`.
+        mangled = mangle_type(enum_name)
 
         enum_ptr = self.builder.call(
             self.malloc, [ir.Constant(self.i64_ty, struct_size)],
-            name=f"{self._mangle_name(enum_name)}_lit",
+            name=f"{mangled}_lit",
         )
         enum_ptr = self.builder.bitcast(
             enum_ptr, struct_ty.as_pointer(),
-            name=f"{self._mangle_name(enum_name)}_cast",
+            name=f"{mangled}_cast",
         )
 
         tag_ptr = self.builder.gep(
@@ -247,6 +285,3 @@ class MethodCallsMixin:
                 self.builder.store(self._zero_for_type(target_ty), payload_ptr)
 
         return enum_ptr
-
-    def _mangle_name(self, name):
-        return name.replace("<", "_").replace(">", "_").replace(",", "_").replace(" ", "")

@@ -8,6 +8,7 @@ from lumina.lexer import Lexer
 from lumina.parser import Parser
 
 from ..utils import Color, paint, arrow, STD_DIR
+from .paths import resolve_import_path
 
 
 def parse_module(filename):
@@ -40,28 +41,20 @@ def parse_module(filename):
 
         for node in ast:
             if isinstance(node, ImportStmt):
-                if node.filename.startswith("std/"):
-                    clean_name = node.filename.replace("std/", "")
-                    if clean_name.endswith(".lm"):
-                        clean_name = clean_name[:-3]
-                    dep_path = os.path.join(STD_DIR, clean_name + ".lm")
-                elif os.path.exists(node.filename if node.filename.endswith(".lm")
-                                    else node.filename + ".lm"):
-                    dep_path = (node.filename if node.filename.endswith(".lm")
-                                else node.filename + ".lm")
-                else:
-                    mod_path = os.path.join("lumina_modules", node.filename)
-                    if not mod_path.endswith(".lm"):
-                        mod_path += ".lm"
-                    if not os.path.exists(mod_path):
-                        raise LuminaError(
-                            f"Módulo '{node.filename}' não encontrado.",
-                            current_file, 0, 0, code,
-                        )
-                    dep_path = mod_path
-
-                arrow(f"--> Importando módulo: {paint(node.filename, Color.BOLD)}")
-                queue.append(os.path.abspath(dep_path))
+                # PATCH: delega para `resolve_import_path`, que é a
+                # fonte única de verdade para resolução de imports.
+                # Antes, essa lógica era duplicada (e podia divergir)
+                # em `lumina_cli/utils.py::get_all_dependency_files`.
+                try:
+                    dep_path = resolve_import_path(node.filename)
+                except FileNotFoundError:
+                    raise LuminaError(
+                        f"Módulo '{node.filename}' não encontrado.",
+                        current_file, 0, 0, code,
+                    )
+                arrow(f"--> Importando módulo: "
+                      f"{paint(node.filename, Color.BOLD)}")
+                queue.append(dep_path)
             else:
                 resolved_ast.append(node)
 

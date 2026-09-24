@@ -56,6 +56,13 @@ class LiteralsMixin:
         Bug histórico: valores `i8*` (str) caíam no ramo `%ld` e eram
         formatados como inteiro, imprimindo o ponteiro em decimal
         (`Nome: 101940821279152` em vez de `Nome: João`).
+
+        PATCH: usa `_fn_emit_alloca` para o buffer numérico em vez de
+        `self.builder.alloca`. Sem isso, cada `$"..."` com interpolação
+        numérica dentro de um loop empilhava `alloca` a cada iteração,
+        crescendo o RSP. Em `gc_test` (1M iterações com `"Lixo " + i`),
+        o stack estourava em 8 MB. Com `_fn_emit_alloca`, o buffer é
+        reservado UMA vez no entry block da função.
         """
         i8_ptr = self.i8_ty.as_pointer()
 
@@ -75,9 +82,13 @@ class LiteralsMixin:
                 continue
 
             # Números: snprintf em buffer local.
-            num_buf = self.builder.alloca(
+            #
+            # PATCH: _fn_emit_alloca hoista para o entry block da função,
+            # evitando crescimento de stack quando este f-string aparece
+            # dentro de um loop.
+            num_buf = self._fn_emit_alloca(
+                f"fstr_num_buf_{i}",
                 ir.ArrayType(self.i8_ty, 32),
-                name=f"fstr_num_buf_{i}",
             )
             num_buf_i8 = self.builder.bitcast(
                 num_buf, i8_ptr, name=f"fstr_num_i8_{i}"

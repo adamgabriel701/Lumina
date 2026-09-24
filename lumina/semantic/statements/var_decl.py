@@ -8,7 +8,11 @@ from ...ast import (
 )
 from ...builtins import BUILTIN_RET
 from ...errors import LuminaError
-from ...semantic.types import parse_fn_type  # ou ajuste relativo
+
+# PATCH: o import anterior era `from ...semantic.types import parse_fn_type`,
+# que sobe 3 níveis (até `lumina/`) e refaz o caminho `semantic.types`.
+# Funciona por acaso. O correto é `..types` (2 níveis: até `lumina/semantic/`).
+from ..types import parse_fn_type
 
 
 class VarDeclMixin:

@@ -77,49 +77,106 @@ class SetupMixin:
     # Globais mutáveis (top-level `mut X = 0`)
     # ==================================================================
     def _emit_mutable_global(self, decl):
-        """Emite uma GlobalVariable LLVM para `mut X = <literal>` no topo.
+        """Emite GlobalVariable LLVM para `mut X = <expr>` no topo.
 
-        Suporta inicializadores constantes: NumberExpr, BoolExpr.
-        Inicializadores complexos (StringExpr, CallExpr, etc.) caem
-        para inline (comportamento antigo — não reatribuível).
+        Casos cobertos:
+          - Literal (NumberExpr / BoolExpr)       → initializer LLVM direto.
+          - `alloc(N)` / `alloc_bytes(N)`         → zero-init + runtime init.
+          - Chamada a função do usuário            → zero-init + runtime init.
+          - Anotação explícita de tipo (`mut x: T`) → zero-init + runtime init.
+          - Qualquer outro caso (BinaryExpr,
+            StructLiteralExpr, VariableExpr, ...)  → fallback inline (comportamento
+                                                      antigo: re-avalia a cada uso).
+
+        **Só `mut`**: `let X = ...` no topo continua inline-constante (é o
+        comportamento correto — `let` de topo é uma constante de compilação,
+        não uma variável global). Chamar esta função para `let` quebra
+        colisão de nomes entre arquivos importados.
+
+        **Dedup por nome**: se dois arquivos declaram `mut X`, o primeiro
+        vence. Evita `DuplicatedNameError` do llvmlite.
+
+        Runtime init é emitido no início de `main` (ver `function_body.py`),
+        na ordem de declaração do AST.
         """
-        from ..ast import NumberExpr, BoolExpr
+        from ..ast import NumberExpr, BoolExpr, CallExpr
 
         name = decl.name
 
-        var_type = decl.var_type
-        if var_type is None:
-            v = decl.value
-            if isinstance(v, NumberExpr):
-                var_type = "float" if v.is_float else "int"
-            elif isinstance(v, BoolExpr):
-                var_type = "bool"
-            else:
-                self.global_var_decls[name] = decl
-                return
+        # Dedup: se já foi emitido como global, ignora a segunda declaração.
+        if name in self.global_mut_vars:
+            return
 
-        llvm_ty = self.get_llvm_type(var_type)
-        if isinstance(llvm_ty, ir.VoidType) or isinstance(llvm_ty, ir.PointerType):
+        # ---- 1. Determinar o LLVM type do slot ----
+        llvm_ty = None
+
+        if decl.var_type is not None:
+            llvm_ty = self.get_llvm_type(decl.var_type)
+            if isinstance(llvm_ty, ir.VoidType):
+                llvm_ty = self.i64_ty
+
+        elif isinstance(decl.value, NumberExpr):
+            llvm_ty = self.f64_ty if decl.value.is_float else self.i64_ty
+
+        elif isinstance(decl.value, BoolExpr):
+            llvm_ty = ir.IntType(1)
+
+        elif isinstance(decl.value, CallExpr):
+            callee = getattr(decl.value, 'callee', None)
+            cname = getattr(callee, 'name', None) or getattr(callee, 'member', None)
+
+            if cname == "alloc":
+                llvm_ty = self.i64_ty.as_pointer()
+            elif cname == "alloc_bytes":
+                llvm_ty = self.voidptr_ty
+            else:
+                fn_def = self.function_defs.get(cname)
+                if fn_def is not None and fn_def.return_type != "void":
+                    # Para structs, `get_llvm_param_type` devolve ponteiro,
+                    # que é o que o codegen de chamada retorna.
+                    llvm_ty = self.get_llvm_param_type(fn_def.return_type)
+                else:
+                    # Não sabemos o tipo — fallback inline.
+                    self.global_var_decls[name] = decl
+                    return
+        else:
+            # Outro tipo de expressão — fallback inline.
             self.global_var_decls[name] = decl
             return
 
+        # ---- 2. Criar a GlobalVariable ----
         gv = ir.GlobalVariable(self.module, llvm_ty, name=f"g_{name}")
+        gv.linkage = "internal"
 
+        # ---- 3. Initializer ----
         initial = None
         if isinstance(decl.value, NumberExpr):
             if isinstance(llvm_ty, ir.DoubleType):
                 initial = ir.Constant(llvm_ty, float(decl.value.value))
-            else:
+            elif isinstance(llvm_ty, ir.IntType):
                 try:
                     initial = ir.Constant(llvm_ty, int(decl.value.value, 0))
                 except (ValueError, TypeError):
                     initial = ir.Constant(llvm_ty, 0)
         elif isinstance(decl.value, BoolExpr):
-            initial = ir.Constant(llvm_ty, 1 if decl.value.value else 0)
+            if isinstance(llvm_ty, ir.IntType):
+                initial = ir.Constant(llvm_ty, 1 if decl.value.value else 0)
 
-        if initial is None:
-            initial = ir.Constant(llvm_ty, 0)
+        if initial is not None:
+            gv.initializer = initial
+        else:
+            # Zero-init + agendar runtime init para o topo de `main`.
+            if isinstance(llvm_ty, ir.PointerType):
+                gv.initializer = ir.Constant(llvm_ty, None)
+            elif isinstance(llvm_ty, ir.DoubleType):
+                gv.initializer = ir.Constant(llvm_ty, 0.0)
+            elif isinstance(llvm_ty, ir.IntType):
+                gv.initializer = ir.Constant(llvm_ty, 0)
+            else:
+                gv.initializer = ir.Constant(llvm_ty, None)
 
-        gv.initializer = initial
-        gv.linkage = "internal"
+            if not hasattr(self, '_deferred_globals'):
+                self._deferred_globals = []
+            self._deferred_globals.append((gv, decl.value))
+
         self.global_mut_vars[name] = gv

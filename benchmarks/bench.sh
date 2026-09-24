@@ -5,7 +5,10 @@
 #   RUNS=20 WARMUP=3 CORE=1 ./bench.sh
 #   CC=gcc ./bench.sh          # comparação cross-compiler (não-alinhada)
 #
-# Mudanças desta versão (v3):
+# Mudanças desta versão (v4):
+#   - `bench_runtime` removido dos loops de build. Ele existe em
+#     benchmarks/ como smoke test, mas nunca foi medido pelo hyperfine
+#     (não está em CMDS) — compilar era trabalho desperdiçado.
 #   - C compilado com clang (mesmo backend do Lumina). Alinha a comparação:
 #     mede a linguagem + codegen, não "clang vs gcc". Override com CC=gcc.
 #   - Adiciona `matrix_i64_c` (índices i64 puros, sem cast size_t).
@@ -54,7 +57,7 @@ mkdir -p "$OUT"
 echo "==> compilando (C compiler: $CC)"
 
 CFLAGS="-O3 -march=native -fwrapv"   # -fwrapv força overflow assinado a wrapping
-for s in fib loop matrix primes bench_runtime alloc_churn; do
+for s in fib loop matrix primes alloc_churn; do
   $CC $CFLAGS "${s}.c" -o "${s}_c"
 done
 
@@ -77,7 +80,11 @@ for s in fib loop matrix primes; do
   go build -o "${s}_go" "${s}.go"
 done
 
-for s in fib loop matrix primes bench_runtime alloc_churn; do
+# PATCH (v4): `bench_runtime` removido do loop. Ele não é medido pelo
+# hyperfine (não está em CMDS) e não entra na verificação de corretude.
+# Compilar era trabalho desperdiçado. Ele continua disponível em
+# benchmarks/bench_runtime.{c,lm} para smoke test manual.
+for s in fib loop matrix primes alloc_churn; do
   lumina build "${s}.lm" --release
   mv -f "${s}" "${s}_lumina"
 done

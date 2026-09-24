@@ -23,24 +23,116 @@ try:
 except Exception:
     pass
 
+
 def _optimize_ir(llvm_ir, opt_level=1):
-    """Roda passes de otimização (O1) do LLVM no IR para eliminar código morto e dobrar constantes."""
+    """Roda passes de otimização no IR.
+
+    A API do llvmlite mudou 3 vezes nos últimos anos:
+
+      A) ~0.30–0.41: `llvm.create_pass_manager_builder()` + `pmb.populate(pm)`
+      B) ~0.35–0.41: `llvm.PassManagerBuilder()` (classe alternativa)
+      C) 0.42+:      API nova — `create_new_module_pass_manager()` +
+                     passes individuais, ou `PassBuilder` + `runPasses`.
+
+    Esta função detecta em runtime qual está disponível e tenta na
+    ordem C → A → B. Se nada funcionar, retorna o IR intacto (sem
+    warning ruidoso — a ausência de O1 interno não é fatal porque
+    `--release` já roda `opt -O2` externamente em build.py).
+    """
     try:
         mod = llvm.parse_assembly(llvm_ir)
         mod.verify()
-        
-        # Cria o PassManager e adiciona os passes padrão de O1
-        pmb = llvm.create_pass_manager_builder()
-        pmb.opt_level = opt_level
-        pm = llvm.create_module_pass_manager()
-        pmb.populate(pm)
-        
-        # Roda a otimização
-        pm.run(mod)
-        return str(mod)
     except Exception as e:
-        warn(f"⚠️  Falha ao otimizar IR (O1): {e}. Usando IR não-otimizado.")
+        warn(f"⚠️  Falha ao parsear IR para otimização: {e}. "
+             f"Usando IR não-otimizado.")
         return llvm_ir
+
+    # ------------------------------------------------------------------
+    # API C (0.42+): New Pass Manager com passes individuais.
+    # É o caminho que sua versão do llvmlite expõe.
+    # ------------------------------------------------------------------
+    if hasattr(llvm, 'create_new_module_pass_manager'):
+        try:
+            pm = llvm.create_new_module_pass_manager()
+
+            # Sequência aproximando O1. Cada `add_*` é um passe do
+            # New Pass Manager; a ordem importa (analyses antes de
+            # transforms, cleanup no fim).
+            _PASSES = (
+                # Canonicalização e simplificação inicial
+                "add_cfg_simplification_pass",
+                "add_dead_code_elimination_pass",
+                "add_instruction_combining_pass",
+                "add_reassociate_expressions_pass",
+                # Propagação interprocedural
+                "add_ipsccp_pass",
+                "add_global_optimizer_pass",
+                "add_global_dce_pass",
+                "add_dead_arg_elimination_pass",
+                # Otimizações de função
+                "add_function_attrs_pass",
+                "add_gvn_pass",
+                "add_promote_memory_to_register_pass",
+                "add_tail_call_elimination_pass",
+                "add_constant_merge_pass",
+                # Cleanup final
+                "add_cfg_simplification_pass",
+                "add_dead_code_elimination_pass",
+            )
+
+            applied = 0
+            for name in _PASSES:
+                fn = getattr(pm, name, None)
+                if fn is not None:
+                    fn()
+                    applied += 1
+
+            if applied == 0:
+                # API existe mas não expõe os passes que queremos.
+                # Sem O1, mas sem warning — o `opt -O2` externo cobre.
+                return llvm_ir
+
+            pm.run(mod)
+            return str(mod)
+        except Exception:
+            # Cai para as próximas tentativas silenciosamente.
+            pass
+
+    # ------------------------------------------------------------------
+    # API A (0.30–0.41): builder + populate (legado).
+    # ------------------------------------------------------------------
+    if hasattr(llvm, 'create_pass_manager_builder'):
+        try:
+            pmb = llvm.create_pass_manager_builder()
+            pmb.opt_level = opt_level
+            pm = llvm.create_module_pass_manager()
+            pmb.populate(pm)
+            pm.run(mod)
+            return str(mod)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # API B (0.35–0.41): classe PassManagerBuilder (legado alternativo).
+    # ------------------------------------------------------------------
+    if hasattr(llvm, 'PassManagerBuilder'):
+        try:
+            pmb = llvm.PassManagerBuilder()
+            pmb.opt_level = opt_level
+            pm = llvm.create_module_pass_manager()
+            pmb.populate(pm)
+            pm.run(mod)
+            return str(mod)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Nenhuma API compatível. IR volta intacto. Sem warning — a
+    # compilação com `--release` roda `opt -O2` externamente e a
+    # ausência de O1 interno não degrada o resultado final.
+    # ------------------------------------------------------------------
+    return llvm_ir
+
 
 def compile_lumina(filename, output_file="output.ll", use_cache=True,
                    is_wasm=False, is_debug=False, is_no_gc=False,

@@ -130,6 +130,11 @@ class LLVMCodegen(
 
         self.macros = {}
 
+        # PATCH: globais com init runtime (não-constante).
+        # Preenchido em `generate_module`; consumido em `generate_function_body`
+        # (só na função `main`).
+        self._deferred_globals = []
+
     # ==================================================================
     # Geração do módulo
     # ==================================================================
@@ -137,6 +142,7 @@ class LLVMCodegen(
         # 0. Coleta VarDecls de topo.
         self.global_var_decls = {}
         self.global_mut_vars = {}
+        self._deferred_globals = []        # ← PATCH: reset por chamada
         for decl in ast:
             if type(decl).__name__ == 'VarDecl' and getattr(decl, 'value', None) is not None:
                 if getattr(decl, 'is_mutable', False):
@@ -272,28 +278,44 @@ class LLVMCodegen(
         self._fn_return_type = None
 
     def _fn_emit_alloca(self, name, ty):
-        """Emite um alloca garantindo que fique no bloco de entrada da função.
-        Corrige o bug de Stack Overflow (gc_test) onde variáveis alocadas
-        dentro de loops tinham seu espaço alocado a cada iteração.
+        """Emite um `alloca` no **fim do entry block**, antes do terminador.
+
+        PATCH v3: usa `opname` (API estável do llvmlite) em vez de
+        `is_terminator` (que não existe como propriedade pública).
+
+        Motivo de inserir no fim do entry block (não no início):
+        `_deferred_globals` são inicializadas no entry_bb, e precisam
+        ficar ANTES de qualquer alloca de temporário. Colocando alloca
+        no começo via `position_at_start`, os malloc inits de globais
+        ficavam após os allocas, criando janelas de reordenação com
+        `-O2`.
         """
         if self._fn_entry_block is None:
-            # Fallback: se não houver bloco de entrada, aloca aqui mesmo
             return self.builder.alloca(ty, name=name)
 
-        # Salva a posição atual do builder
         current_block = self.builder.block
+        entry = self._fn_entry_block
 
-        # Move para o bloco de entrada
-        self.builder.position_at_end(self._fn_entry_block)
-        
-        # Emite o alloca
+        # Terminadores LLVM: opnames canônicos.
+        _TERMINATORS = {
+            'br', 'ret', 'unreachable', 'switch', 'invoke',
+            'resume', 'indirectbr', 'callbr', 'catchswitch',
+            'cleanupret', 'catchret',
+        }
+
+        if len(entry.instructions) > 0:
+            last = entry.instructions[-1]
+            if getattr(last, 'opname', None) in _TERMINATORS:
+                self.builder.position_before(last)
+            else:
+                self.builder.position_at_end(entry)
+        else:
+            self.builder.position_at_end(entry)
+
         ptr = self.builder.alloca(ty, name=name)
-        
-        # Volta para o bloco onde estávamos
         self.builder.position_at_end(current_block)
-        
         return ptr
-
+    
     def _fn_ensure_terminator(self):
         """Garante que o bloco atual termine com um terminador.
         Corrige o bug do chip8 onde funções sem `return` explícito

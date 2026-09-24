@@ -180,7 +180,7 @@ class OperatorsMixin:
                 fmt = self.create_global_string("%f")
             else:
                 fmt = self.create_global_string("%ld")
-            buf = self.builder.alloca(ir.ArrayType(self.i8_ty, 64), name="num_to_str")
+            buf = self._fn_emit_alloca("num_to_str", ir.ArrayType(self.i8_ty, 64))
             buf_ptr = self.builder.bitcast(buf, self.voidptr_ty, name="num_to_str_ptr")
             self.builder.call(self.snprintf, [buf_ptr, ir.Constant(self.i64_ty, 64), fmt, right], name="num_to_str_call")
             right = buf_ptr
@@ -189,7 +189,7 @@ class OperatorsMixin:
                 fmt = self.create_global_string("%f")
             else:
                 fmt = self.create_global_string("%ld")
-            buf = self.builder.alloca(ir.ArrayType(self.i8_ty, 64), name="num_to_str")
+            buf = self._fn_emit_alloca("num_to_str", ir.ArrayType(self.i8_ty, 64))
             buf_ptr = self.builder.bitcast(buf, self.voidptr_ty, name="num_to_str_ptr")
             self.builder.call(self.snprintf, [buf_ptr, ir.Constant(self.i64_ty, 64), fmt, left], name="num_to_str_call")
             left = buf_ptr

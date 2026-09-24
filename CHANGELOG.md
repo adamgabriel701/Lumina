@@ -1,3 +1,5 @@
+# CHANGELOG.md
+
 # Changelog
 
 Todas as mudanças relevantes do **Lumina** são documentadas neste arquivo.
@@ -13,27 +15,23 @@ O formato segue, de forma geral, as convenções do [Keep a Changelog](https://k
 ### ✨ Adicionado
 
 #### Otimizador O1 integrado
-
 * Integração do otimizador **O1** diretamente no pipeline de compilação.
 * Otimização aplicada de forma integrada ao fluxo de geração de código.
 * Preservação do comportamento semântico dos programas durante a otimização.
 
 #### Pattern Matching de Structs
-
 * Suporte a **desestruturação de structs** em padrões.
 * Pattern matching de campos de structs.
 * Integração dos padrões de structs ao sistema existente de `match`.
 * Novos testes cobrindo os casos de pattern matching adicionados.
 
 #### Sugestões automáticas
-
 * Sistema de sugestões automáticas para identificadores desconhecidos.
 * Implementação baseada em **distância de Levenshtein**.
 * Mensagens de erro mais úteis para nomes digitados incorretamente.
 * Sugestões integradas ao diagnóstico semântico.
 
 #### Tipos de função
-
 * Suporte a tipos de função no formato:
 
 ```text
@@ -46,34 +44,28 @@ fn(T1, T2) -> R
 * Integração com closures e callbacks.
 
 #### Closures como callbacks
-
 * Closures podem ser utilizadas como callbacks.
 * Unificação da representação de funções e closures por meio de ponteiros `fn`.
 * Suporte a funções de primeira classe em APIs que recebem callbacks.
 
 #### Escape sequences
-
 * Suporte a sequências de escape em strings.
 * Integração das novas sequências com lexer, parser e codegen.
 
 #### Macros com múltiplas instruções
-
 * Macros podem conter múltiplas instruções.
 * Melhor integração das macros com o parser e o restante do pipeline.
 
 #### Tail Call Optimization
-
 * Suporte a **TCO (Tail Call Optimization)** para chamadas recursivas diretas.
 * Redução do crescimento da stack em casos de recursão em posição de cauda.
 
 #### LSP
-
 * Novos **inlay hints**.
 * Novas **code actions**.
 * Melhor integração dos recursos de análise do compilador com o Language Server.
 
 #### Cross-compilation
-
 * Suporte ao parâmetro:
 
 ```text
@@ -84,16 +76,61 @@ fn(T1, T2) -> R
 * Validação de execução de binários cross-compilados utilizando QEMU.
 
 #### CLI
-
 * Propagação correta dos códigos de saída dos programas executados.
 * Melhor integração das novas opções do compilador com o pipeline de build.
 
----
+#### Linker próprio — W^X estrito
+* O linker `lumina-ld` agora emite **dois segmentos `PT_LOAD`** em vez de um único segmento RWX:
+  * **RX** — cabeçalhos ELF, `.text`, `.rodata`
+  * **RW** — `.data`, `.bss`, heap folga
+* Page-align entre `.rodata` e `.data` garante que nenhuma página é simultaneamente executável e gravável.
+* Compatível com kernels hardened modernos (`CONFIG_STRICT_KERNEL_RWX`).
+* Modo legado (segmento único RWX) disponível com `-DLEGACY_RWX` — **não recomendado**.
+
+#### Preferência de símbolo do usuário em colisões
+* Símbolos `main` vindos de objetos de runtime (`start.o` / `rt.o`) são **filtrados em `build_gsyms`**.
+* Comportamento determinístico, independente da ordem dos inputs na linha de comando.
+* Resolve colisões residuais sem exigir que o usuário saiba da ordem correta de link.
+
+#### Alloca hoisting real
+* Novo helper `_fn_emit_alloca` em `codegen.py` insere `alloca` no **fim do entry block** (antes do terminador), via `position_before(terminator)`.
+* Aplicado em `codegen_fstring` (`literals.py`), `num_to_str` (`operators.py`) e `str_buf` (`builtins.py`).
+* Elimina crescimento de stack em loops que usam buffers temporários.
+* Detecção de terminador via `opname` (compatível com llvmlite >= 0.42).
+
+#### Init runtime de globais `mut X = <não-literal>`
+* `_emit_mutable_global` agora aceita inicializadores não-constantes: `alloc(N)`, `alloc_bytes(N)`, chamada a função do usuário, ou anotação explícita de tipo.
+* Zero-init no `LLVMGlobalVariable` + init runtime emitida no início de `main_body` (via `_deferred_globals`).
+* Cobre `chip8`, `coroutines` e qualquer programa com buffers globais.
+* `let X = ...` no topo continua inline-constante (não vira global).
+* Dedup por nome — `mut X` em dois arquivos importados não dispara `DuplicatedNameError`.
+
+#### Constantes de codegen centralizadas
+* Novo módulo `lumina/codegen/constants.py` — fonte única para magic numbers do codegen.
+* `I64_BYTES`, `MIN_ENUM_SIZE`, `CLOSURE_BLOCK_SIZE`, `STACK_ALLOC_LIMIT`.
+
+#### Resolução de imports consolidada
+* Novo módulo `lumina_cli/compiler/paths.py::resolve_import_path`.
+* Antes duplicada em `parse.py` e `utils.py::get_all_dependency_files`.
+* Uma única fonte de verdade para `std/X`, `./X`, `lumina_modules/X`.
+
+#### Cache de variantes de enum
+* `_find_enum_variant` agora constrói um cache `variant_name → (enum_base, idx)` na primeira chamada.
+* Corrige bug latente onde enum genérico podia ser retornado com nome monomorphizado (`Custom<int>` em vez de `Custom`).
+
+#### Playground — bind em loopback
+* O servidor HTTP do `lumina playground` escuta em `127.0.0.1` por padrão, em vez de `0.0.0.0`.
+* Flag opcional `host` na API `run_server` para expor intencionalmente.
+* Mitiga vetor crítico: qualquer máquina na rede podia executar JIT arbitrário via port-forward público.
+
+#### Infra de diagnóstico
+* Novo `linker/test_skipped.sh` — classifica cada exemplo skipado em todos os estágios (compile, asm, link, run).
+* Novo `linker/investigate_segfaults.sh` — gdb backtrace automático de segfaults.
+* Novo `linker/skip.txt` — skip list externalizada (antes hardcoded em `triagem.sh`).
 
 ### 🔧 Alterado
 
 #### Pipeline de compilação
-
 * Refatoração de componentes internos do parser.
 * Refatoração da análise semântica.
 * Refatoração do codegen em componentes mais especializados.
@@ -101,64 +138,77 @@ fn(T1, T2) -> R
 * Integração mais consistente entre otimização, codegen e linking.
 
 #### Sistema de tipos
-
 * Expansão da cobertura de tipos.
 * Melhor validação de tipos.
 * Melhor integração entre tipos de função, closures e callbacks.
 * Ampliação dos testes end-to-end relacionados ao sistema de tipos.
 
 #### `match`
-
 * Melhorias no parser e na análise semântica de expressões `match`.
 * Expansão para padrões envolvendo structs.
 
 #### Codegen
-
 * Correções em diferentes caminhos de geração de código LLVM.
 * Melhor tratamento de funções que terminam após determinadas operações de retorno.
 * Correções relacionadas ao gerenciamento de stack em determinados padrões de código.
 * Melhor integração com o runtime freestanding.
 
 #### Runtime
-
 * Expansão e correção de componentes do runtime.
 * Melhor integração entre o runtime e o linker próprio.
-* Correções em operações utilizadas pelos exemplos e testes do projeto.
-
----
+* Documentação interna sobre o alocador linear em `rt.c`: `free()` é no-op por design; churn de alocação vaza memória sob `--linker=self`.
 
 ### 🐛 Corrigido
 
 #### `chip8`
-
 * Corrigido um caminho de geração de código no qual `main` poderia terminar sem uma instrução `ret` adequada após determinadas operações.
 * O problema tornou-se observável durante a utilização do linker próprio e do runtime freestanding.
+* **Reescrita de `draw_screen`**: passa a reusar um buffer de 65 bytes por linha em vez de concatenar strings (2048 alocações por chamada → 32). Elimina SIGSEGV no `--linker=self` por esgotamento do heap.
+* **Máscara `0xFF` em opcodes**: `memory[pc]` retorna `i8` sign-extended; sem máscara, `0xE0` vira `-32` e quebra o dispatch. Fix só no `.lm`.
+
+#### `coroutines`
+* Corrigido problema em que `main_ctx` e `scheduler_ctx` (globais com `alloc_bytes`) eram re-avaliados a cada referência. Agora inicializados uma vez via `_deferred_globals`.
 
 #### `gc_test`
-
-* Corrigido um problema relacionado à utilização de `alloca` dentro de loops.
-* A implementação anterior poderia provocar crescimento contínuo da stack.
-* O problema foi identificado durante os testes com o pipeline utilizando o linker próprio.
+* Corrigido problema relacionado à utilização de `alloca` dentro de loops.
+* A implementação anterior podia provocar crescimento contínuo da stack (RSP até ~2 GB em 100k iterações).
+* Novo helper `_fn_emit_alloca` resolve o sintoma em todos os sítios que alocavam buffer temporário em loop.
 
 #### Codegen
-
 * Correções em casos específicos de geração de código.
 * Melhor tratamento de retornos em funções.
 * Correções expostas pelos testes end-to-end utilizando o linker próprio.
 
 #### Linker
-
 * Correções no tratamento de símbolos `SHN_COMMON`.
 * Adição/tratamento de símbolos sintéticos necessários durante o linking.
 * Correções no layout dos segmentos `PT_LOAD`.
 * Correções relacionadas à integração com o runtime freestanding.
+* **`main` sintético em `rt.o`**: um `int main` residual no runtime colidia com o `main` do usuário, fazendo todo link com `--linker=self` abortar com "multiple definition of 'main'".
+* **Filtro defensivo em `build_gsyms`**: símbolos `main` vindos de runtime são descartados preventivamente — não dependem mais da ordem dos inputs.
+
+#### Otimizador O1
+* `_optimize_ir` usava `llvm.create_pass_manager_builder()`, removido do llvmlite >= 0.42.
+* Nova implementação detecta em runtime qual API está disponível:
+  * `create_new_module_pass_manager()` (0.42+)
+  * `create_pass_manager_builder()` (legado)
+  * `PassManagerBuilder` (legado alternativo)
+* Fallback: passes individuais do New Pass Manager.
+* Sem warning ruidoso quando nenhuma API compatível está disponível.
+
+#### TCO — `var_types` como set
+* `_materialize_scc_dispatcher` inicializava `var_types` como set (`{p.type_ann}`) em vez de dict (`{p.name: p.type_ann}`).
+* Bug latente: crashava com `AttributeError: 'set' object has no attribute 'get'` quando um membro do SCC chamava função genérica.
+* Novo teste de regressão em `test_tco_mutual.py::test_scc_member_calls_generic`.
+
+#### `_fn_emit_alloca` — detecção de terminador
+* Primeira versão usava `is_terminator` como propriedade; llvmlite não expõe essa API.
+* Corrigido para detectar terminador via `opname` (`br`, `ret`, `unreachable`, `switch`, ...).
 
 #### Exemplos
-
 * Correções necessárias para que os exemplos possam ser compilados e executados pelos diferentes pipelines disponíveis.
 * Melhorias na triagem automática dos exemplos.
-
----
+* `bootstrap_lexer`, `database`, `json_parser` resgatados da skip list do linker.
 
 ### 🧪 Testes
 
@@ -168,7 +218,7 @@ Estado atual informado pelo projeto:
 
 ```text
 pytest tests/ -q
-440 passed
+441 passed
 ```
 
 Verificações adicionais:
@@ -189,12 +239,18 @@ Triagem do linker próprio:
 
 ```text
 ./linker/triagem.sh examples
-PASS=53 FAIL-COMPILE=0 FAIL-LINK=0 FAIL-RUN=0 SKIP=18
+PASS=59 FAIL-COMPILE=0 FAIL-LINK=0 FAIL-RUN=0 SKIP=12
 ```
 
-Os números de exemplos ignorados diferem entre os scripts porque as duas verificações possuem escopos diferentes.
+**Paridade completa**: o modo `--linker=self` produz o mesmo resultado que o clang
+nos 54 exemplos (PASS/SKIP/FAIL idênticos).
 
----
+Os números de exemplos ignorados diferem entre os scripts porque as duas verificações
+possuem escopos diferentes.
+
+#### Testes adicionados neste ciclo
+* `test_gc.py::test_default_build_uses_gc_malloc` — **deduplicado** (aparecia 2x).
+* `test_tco_mutual.py::test_scc_member_calls_generic` — regressão do bug `var_types`.
 
 ### 📚 Documentação
 
@@ -205,27 +261,16 @@ docs/internals/linking.md
 ```
 
 * Documentada a arquitetura interna do `lumina-ld`.
-
 * Documentadas as fases do processo de linking.
-
 * Documentado o processo de resolução de símbolos.
-
 * Documentado o layout do executável.
-
 * Documentado o processo de relocação.
-
 * Documentada a geração do ELF final.
-
 * Documentados símbolos sintéticos.
-
 * Documentada a integração do linker com a CLI.
-
 * Documentado o runtime freestanding.
-
 * Documentados pontos de extensão e debugging do linker.
-
 * README atualizado com:
-
   * status do compilador;
   * linker próprio;
   * runtime freestanding;

@@ -1,10 +1,12 @@
+# README.md
+
 # 🌟 Lumina
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![LLVM](https://img.shields.io/badge/LLVM-14%2B-blue.svg)](https://llvm.org/)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg?logo=python\&logoColor=white)](https://www.python.org/)
 [![Status](https://img.shields.io/badge/Status-Active-success.svg)](#-status)
-[![Tests](https://img.shields.io/badge/tests-440%20passed-brightgreen.svg)](docs/engineering/tests.md)
+[![Tests](https://img.shields.io/badge/tests-441%20passed-brightgreen.svg)](docs/engineering/tests.md)
 [![Examples](https://img.shields.io/badge/examples-54%20pass%20%2F%2017%20skip-success.svg)](examples/)
 [![Benchmarks](https://img.shields.io/badge/benchmarks-5%20suites-blue.svg)](benchmarks/results/)
 [![Cross-compile](https://img.shields.io/badge/cross--compile-arm64%20%7C%20armv7%20%7C%20risc--v%20%7C%20wasm-blueviolet.svg)](#-cross-compilation)
@@ -260,6 +262,13 @@ Lumina possui diferentes estratégias de gerenciamento dependendo do contexto:
 O Boehm GC é inicializado antes das alocações que dependem dele.
 
 Com `--no-gc`, Lumina pode ser utilizada em ambientes nos quais o runtime de GC não está disponível ou não é desejado.
+
+> **Nota sobre `--linker=self`:** o linker próprio usa uma runtime
+> freestanding com alocador linear sobre `brk()`. `free()` é no-op
+> (sem bookkeeping para rastrear blocos vivos). Programas com alto
+> churn de alocação vão consumir RAM proporcional ao **total** de
+> alocações, não ao número de alocações vivas. Use `std/alloc.lm`
+> (arena) para churn controlado sob `--linker=self`.
 
 Mais detalhes em [`docs/internals.md`](docs/internals.md).
 
@@ -555,14 +564,18 @@ Static ELF x86_64
 A triagem atual do linker apresenta:
 
 ```text
-PASS=53
+PASS=59
 FAIL-COMPILE=0
 FAIL-LINK=0
 FAIL-RUN=0
-SKIP=18
+SKIP=12
 ```
 
-Os skips correspondem principalmente a exemplos que dependem de subsistemas fora do escopo atual do linker, como pthread, raylib, FFI C++, WASM ou servidores que não terminam automaticamente.
+Os skips correspondem a exemplos que dependem de subsistemas fora do
+escopo atual do linker: pthread, raylib, FFI C++, WASM, servidores que
+não terminam automaticamente e `util.lm` (módulo auxiliar sem `main`).
+
+A lista de skip está em [`linker/skip.txt`](linker/skip.txt).
 
 Veja [`docs/internals/linking.md`](docs/internals/linking.md) para detalhes de arquitetura, runtime, símbolos, debugging e extensão.
 
@@ -612,10 +625,10 @@ O compilador possui pipeline end-to-end funcional, uma suíte extensa de testes 
 
 | Métrica           |                      Resultado |
 | ----------------- | -----------------------------: |
-| Testes `pytest`   |                 **440 passed** |
+| Testes `pytest`   |                 **441 passed** |
 | Suite standalone  |                      **28/28** |
 | Exemplos          | **54 PASS / 17 SKIP / 0 FAIL** |
-| Triagem do linker | **53 PASS / 18 SKIP / 0 FAIL** |
+| Triagem do linker | **59 PASS / 12 SKIP / 0 FAIL** |
 
 ### Pytest
 
@@ -626,7 +639,7 @@ pytest tests/ -q
 Resultado:
 
 ```text
-440 passed in 139.78s (0:02:19)
+441 passed in 129.89s (0:02:09)
 ```
 
 ### Suite standalone
@@ -662,30 +675,30 @@ Resultado:
 Resultado:
 
 ```text
-PASS=53
+PASS=59
 FAIL-COMPILE=0
 FAIL-LINK=0
 FAIL-RUN=0
-SKIP=18
+SKIP=12
 ```
+
+O modo `--linker=self` produz o mesmo conjunto PASS/SKIP/FAIL que o
+clang nos 54 exemplos. Os 12 SKIP da triagem são: servidores que não
+terminam sozinhos, dependências externas (raylib, C++, WASM), pthreads
+(fora do escopo do runtime freestanding) e `util.lm` (módulo auxiliar
+sem `main`).
 
 ## Exemplos atualmente ignorados
 
-Os exemplos que aparecem como `SKIP` na verificação atual incluem:
+Os exemplos que aparecem como `SKIP` na triagem do linker incluem:
 
 ```text
 api
 app
 async_server
-bootstrap_lexer
-chip8
-coroutines
-database
 engine
 ffi_test
-gc_test
 http_framework
-json_parser
 proxy
 serve
 server
@@ -726,6 +739,10 @@ Toolchain:
 | Lumina    | HEAD, `--release` |
 
 ## Resultados
+
+> **Nota:** os números abaixo são do run de 2026-09-18. Re-rodar com
+> `RUNS=20 WARMUP=3` numa VM calma antes de tirar conclusões — o
+> ambiente Codespace tem IQR/mediana até 59% em alguns testes.
 
 | Teste                      |   C -O3 | Rust -O3 | **Lumina --release** |      Go | **Lumina / C** |
 | -------------------------- | ------: | -------: | -------------------: | ------: | -------------: |
@@ -943,7 +960,7 @@ pytest tests/ -q
 Resultado atual:
 
 ```text
-440 passed in 139.78s
+441 passed in 129.89s
 ```
 
 Suite adicional:
@@ -979,7 +996,7 @@ Triagem do linker:
 Resultado:
 
 ```text
-PASS=53 FAIL-COMPILE=0 FAIL-LINK=0 FAIL-RUN=0 SKIP=18
+PASS=59 FAIL-COMPILE=0 FAIL-LINK=0 FAIL-RUN=0 SKIP=12
 ```
 
 ---
@@ -1013,7 +1030,8 @@ Entre as correções recentes estão problemas envolvendo:
 * closures;
 * codegen de `ret void`;
 * parâmetros via `argv`;
-* proteção contra dead-code elimination em benchmarks.
+* proteção contra dead-code elimination em benchmarks;
+* init runtime de globais `mut X = <não-literal>`.
 
 ---
 
@@ -1154,6 +1172,8 @@ Lumina/
 * [x] ELF estático x86_64
 * [x] Codegen de `ret void`
 * [x] Hoisting de `alloca`
+* [x] W^X estrito no linker próprio
+* [x] Init runtime de globais `mut X = <não-literal>`
 
 ## Em aberto
 
@@ -1169,7 +1189,6 @@ Lumina/
 * [ ] Suporte a pthreads no linker próprio
 * [ ] Linker próprio para AArch64
 * [ ] Linker próprio para RISC-V
-* [ ] Suporte W^X no linker próprio
 
 O roadmap é evolutivo; itens marcados como concluídos representam funcionalidades presentes no estado atual do projeto, enquanto itens em aberto não fazem parte do contrato de estabilidade atual.
 
@@ -1222,7 +1241,7 @@ Package registry     ███░░░░░░░░░░░░░░░░�
 A suíte atual fornece uma base de regressão significativa:
 
 ```text
-440 pytest tests
+441 pytest tests
 28/28 standalone verifications
 54 example PASS
 0 example FAIL

@@ -5,11 +5,25 @@
  * Faz:  parse ELF .o → merge de .text/.rodata/.data/.bss →
  *       resolução de símbolos globais → relocação → EXEC ELF.
  *
- * Escopo: x86_64, ET_REL → ET_EXEC, um único PT_LOAD RWX.
+ * Escopo: x86_64, ET_REL → ET_EXEC, W^X estrito (2 PT_LOAD).
  * Sem libc, sem .so, sem PLT/GOT real, sem TLS.
  * Suporta SHN_COMMON.
  *
  * Compilar: clang -O2 -Wall -Wextra link.c -o lumina-ld
+ *
+ * ----------------------------------------------------------------------
+ * Histórico de decisões:
+ *
+ * v0.5.0 — versão inicial: 1 PT_LOAD RWX.
+ *
+ * v0.5.1 — W^X: 2 PT_LOAD (RX + RW), page-align entre .rodata e .data.
+ *
+ * v0.5.2 — Preferência de `main` do usuário:
+ *          símbolos `main` vindos de runtime (start.o / rt.o) são
+ *          filtrados em `build_gsyms`. Garante que o `main` do usuário
+ *          sempre vence, mesmo se o runtime emitir um `main` sintético
+ *          (bug de assembler, resíduo de build, ou edição acidental).
+ * ----------------------------------------------------------------------
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -37,6 +51,7 @@
 #define TEXT_OFF       0x1000UL
 #define HEAP_FOLGA     0x10000UL   /* 64 KB de folga após _end */
 #define N_OUT_SECS     4
+#define PAGE_SIZE      0x1000UL
 
 enum { OS_TEXT = 0, OS_RODATA, OS_DATA, OS_BSS };
 
@@ -79,6 +94,7 @@ static OutSec   outsecs[N_OUT_SECS];
 static GSymbol *gsyms;
 static int      ngsyms, cgsyms;
 static uint64_t g_file_end, g_mem_end;
+static uint64_t g_rx_end;
 static const char *entry_sym = "_start";
 
 /* ================= helpers ================= */
@@ -100,6 +116,31 @@ static int out_sec_for(const char *name) {
     if (!strcmp(name, ".data")   || !strncmp(name, ".data.",   6)) return OS_DATA;
     if (!strcmp(name, ".bss")    || !strncmp(name, ".bss.",    5)) return OS_BSS;
     return -1;
+}
+
+/* ------------------------------------------------------------------
+ * Detecta se um objeto é runtime (start.o / rt.o).
+ * Compara só o basename — tolera paths relativos, absolutos, symlinks.
+ * ------------------------------------------------------------------ */
+static int is_runtime_obj(const char *path) {
+    const char *base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    return (!strcmp(base, "start.o") || !strcmp(base, "rt.o"));
+}
+
+/* ------------------------------------------------------------------
+ * Símbolos que NUNCA são aceitos vindos de um objeto de runtime.
+ *
+ * Hoje, só `main`. Motivo: o runtime NÃO deve definir `main` — quem
+ * define é o `.lm` do usuário. Um `main` no runtime é resíduo (bug
+ * de assembler, edição acidental, build sujo).
+ *
+ * Filtrar em `build_gsyms` (em vez de resolver em `add_gsym`) torna
+ * o comportamento determinístico e independente da ordem dos inputs
+ * na linha de comando.
+ * ------------------------------------------------------------------ */
+static int is_runtime_sym(const char *name) {
+    return !strcmp(name, "main");
 }
 
 /* ================= Fase 1: load ================= */
@@ -190,14 +231,28 @@ static void merge_sections(void) {
     }
 
     uint64_t off = TEXT_OFF, file_end = off;
+    g_rx_end = 0;
+
     for (int i = 0; i < N_OUT_SECS; i++) {
         OutSec *o = &outsecs[i];
+
+        if (i == OS_DATA) {
+            off = align_up(off, PAGE_SIZE);
+            g_rx_end = off;
+        }
+
         uint64_t a = o->align > 16 ? o->align : 16;
         off = align_up(off, a);
         o->vaddr = BASE_ADDR + off;
         off += o->size;
+
         if (i != OS_BSS) file_end = off;
     }
+
+    if (g_rx_end == 0) {
+        g_rx_end = align_up(file_end, PAGE_SIZE);
+    }
+
     g_file_end = file_end;
     g_mem_end  = off;
 }
@@ -236,6 +291,8 @@ static void add_gsym(const char *name, int in_idx, int sym_idx, uint8_t bind) {
 static void build_gsyms(void) {
     for (int f = 0; f < ninputs; f++) {
         Input *in = &inputs[f];
+        int from_runtime = is_runtime_obj(in->path);
+
         for (size_t i = 1; i < in->nsyms; i++) {
             Elf64_Sym *s = &in->symtab[i];
             if (s->st_shndx == SHN_UNDEF) continue;
@@ -243,6 +300,12 @@ static void build_gsyms(void) {
             if (b != STB_GLOBAL && b != STB_WEAK) continue;
             const char *n = in->strtab + s->st_name;
             if (!n[0]) continue;
+
+            /* Filtro: `main` vindo de runtime é descartado. */
+            if (from_runtime && is_runtime_sym(n)) {
+                continue;
+            }
+
             add_gsym(n, f, (int)i, b);
         }
     }
@@ -271,8 +334,7 @@ static uint64_t sym_addr(Input *in, int idx) {
         return sym_addr(&inputs[g->in_idx], g->sym_idx);
     }
     if (s->st_shndx == SHN_ABS) return s->st_value;
-    
-    /* Suporte a SHN_COMMON: variáveis globais não inicializadas */
+
     if (s->st_shndx == SHN_COMMON) {
         OutSec *bss = &outsecs[OS_BSS];
         uint64_t align = s->st_value ? s->st_value : 1;
@@ -281,7 +343,7 @@ static uint64_t sym_addr(Input *in, int idx) {
         bss->size += s->st_size;
         return addr;
     }
-    
+
     if (s->st_shndx >= in->ehdr->e_shnum) {
         fprintf(stderr, "lumina-ld: '%s' com shndx inválido\n", name);
         exit(1);
@@ -386,6 +448,7 @@ static void apply_relocations(void) {
 
 /* ================= Fase 5: escreve EXEC ELF ================= */
 
+#ifdef LEGACY_RWX
 static void write_output(const char *path, uint64_t entry) {
     uint8_t *buf = calloc(1, g_file_end);
     if (!buf) die("calloc");
@@ -405,12 +468,12 @@ static void write_output(const char *path, uint64_t entry) {
     eh->e_flags     = 0;
     eh->e_ehsize    = sizeof(Elf64_Ehdr);
     eh->e_phentsize = sizeof(Elf64_Phdr);
-    eh->e_phnum     = 1; /* Um único segmento PT_LOAD RWX */
+    eh->e_phnum     = 1;
     eh->e_shentsize = 0;
     eh->e_shnum     = 0;
     eh->e_shstrndx  = SHN_UNDEF;
 
-    uint64_t memsz = align_up(g_mem_end + HEAP_FOLGA, 0x1000);
+    uint64_t memsz = align_up(g_mem_end + HEAP_FOLGA, PAGE_SIZE);
 
     Elf64_Phdr *ph = (Elf64_Phdr *)(buf + sizeof(Elf64_Ehdr));
     ph->p_type   = PT_LOAD;
@@ -420,7 +483,7 @@ static void write_output(const char *path, uint64_t entry) {
     ph->p_paddr  = BASE_ADDR;
     ph->p_filesz = g_file_end;
     ph->p_memsz  = memsz;
-    ph->p_align  = 0x1000;
+    ph->p_align  = PAGE_SIZE;
 
     for (int i = 0; i < N_OUT_SECS; i++) {
         if (outsecs[i].nobits || !outsecs[i].size) continue;
@@ -435,12 +498,98 @@ static void write_output(const char *path, uint64_t entry) {
     free(buf);
 
     fprintf(stderr,
-            "[lumina-ld] %s ok (entry=0x%lx, %lu bytes, filesz=%lu memsz=%lu)\n",
-            path, (unsigned long)entry,
-            (unsigned long)g_file_end,
-            (unsigned long)g_file_end,
-            (unsigned long)memsz);
+            "[lumina-ld] %s ok (entry=0x%lx, %lu bytes, RWX legacy)\n",
+            path, (unsigned long)entry, (unsigned long)g_file_end);
 }
+#else
+static void write_output(const char *path, uint64_t entry) {
+    uint8_t *buf = calloc(1, g_file_end);
+    if (!buf) die("calloc");
+
+    Elf64_Ehdr *eh = (Elf64_Ehdr *)buf;
+    memcpy(eh->e_ident, ELFMAG, SELFMAG);
+    eh->e_ident[EI_CLASS]   = ELFCLASS64;
+    eh->e_ident[EI_DATA]    = ELFDATA2LSB;
+    eh->e_ident[EI_VERSION] = EV_CURRENT;
+    eh->e_ident[EI_OSABI]   = ELFOSABI_SYSV;
+    eh->e_type      = ET_EXEC;
+    eh->e_machine   = EM_X86_64;
+    eh->e_version   = EV_CURRENT;
+    eh->e_entry     = entry;
+    eh->e_phoff     = sizeof(Elf64_Ehdr);
+    eh->e_shoff     = 0;
+    eh->e_flags     = 0;
+    eh->e_ehsize    = sizeof(Elf64_Ehdr);
+    eh->e_phentsize = sizeof(Elf64_Phdr);
+    eh->e_phnum     = 2;
+    eh->e_shentsize = 0;
+    eh->e_shnum     = 0;
+    eh->e_shstrndx  = SHN_UNDEF;
+
+    uint64_t rx_filesz = g_rx_end;
+    uint64_t rw_offset = g_rx_end;
+    uint64_t rw_vaddr  = BASE_ADDR + rw_offset;
+    uint64_t rw_filesz = g_file_end - rw_offset;
+    uint64_t rw_memsz  = align_up(g_mem_end + HEAP_FOLGA, PAGE_SIZE) - rw_offset;
+
+    if (rw_filesz == 0 && rw_memsz == 0) {
+        rw_memsz = align_up(HEAP_FOLGA, PAGE_SIZE);
+    }
+
+    Elf64_Phdr *ph = (Elf64_Phdr *)(buf + sizeof(Elf64_Ehdr));
+
+    ph[0].p_type   = PT_LOAD;
+    ph[0].p_flags  = PF_R | PF_X;
+    ph[0].p_offset = 0;
+    ph[0].p_vaddr  = BASE_ADDR;
+    ph[0].p_paddr  = BASE_ADDR;
+    ph[0].p_filesz = rx_filesz;
+    ph[0].p_memsz  = rx_filesz;
+    ph[0].p_align  = PAGE_SIZE;
+
+    ph[1].p_type   = PT_LOAD;
+    ph[1].p_flags  = PF_R | PF_W;
+    ph[1].p_offset = rw_offset;
+    ph[1].p_vaddr  = rw_vaddr;
+    ph[1].p_paddr  = rw_vaddr;
+    ph[1].p_filesz = rw_filesz;
+    ph[1].p_memsz  = rw_memsz;
+    ph[1].p_align  = PAGE_SIZE;
+
+    if (rw_vaddr < BASE_ADDR + rx_filesz) {
+        fprintf(stderr,
+            "lumina-ld: BUG — segmentos RX/RW sobrepostos "
+            "(rx_end=0x%lx, rw_start=0x%lx)\n",
+            (unsigned long)(BASE_ADDR + rx_filesz),
+            (unsigned long)rw_vaddr);
+        exit(1);
+    }
+
+    for (int i = 0; i < N_OUT_SECS; i++) {
+        if (outsecs[i].nobits || !outsecs[i].size) continue;
+        uint64_t off = outsecs[i].vaddr - BASE_ADDR;
+        memcpy(buf + off, outsecs[i].data, outsecs[i].size);
+    }
+
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0755);
+    if (fd < 0) die(path);
+    if (write(fd, buf, g_file_end) != (ssize_t)g_file_end) die("write");
+    close(fd);
+    free(buf);
+
+    fprintf(stderr,
+            "[lumina-ld] %s ok (entry=0x%lx, file=%lu B, "
+            "RX=[0x%lx..0x%lx) sz=%lu, RW=[0x%lx..0x%lx) filesz=%lu memsz=%lu)\n",
+            path, (unsigned long)entry, (unsigned long)g_file_end,
+            (unsigned long)BASE_ADDR,
+            (unsigned long)(BASE_ADDR + rx_filesz),
+            (unsigned long)rx_filesz,
+            (unsigned long)rw_vaddr,
+            (unsigned long)(rw_vaddr + rw_memsz),
+            (unsigned long)rw_filesz,
+            (unsigned long)rw_memsz);
+}
+#endif /* LEGACY_RWX */
 
 /* ================= main ================= */
 

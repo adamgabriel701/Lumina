@@ -1,86 +1,38 @@
-# ============================================
-# Python
-# ============================================
+# --- Python ---
 __pycache__/
 *.py[cod]
 *.egg-info/
+.venv/
+venv/
 .pytest_cache/
-.mypy_cache/
 .coverage
 htmlcov/
-.tox/
 
-# ============================================
-# Lumina: artefatos de build
-# ============================================
-*.ll
-*.wasm
-*.o
+# --- Lumina: cache e artefatos de build ---
 .lumina_cache/
+*.ll
+*.o
+*.obj
+*.a
+*.so
+*.wasm
+*.vsix
+*.wal
 *.profraw
 *.profdata
 lumina_test_bin
-lumina_test_runner.ll
-
-# ============================================
-# Logs e dados temporários
-# ============================================
-log.txt
-baseline.txt
-pytest_baseline.txt
+lumina_jit_temp.ll
+output.ll
 lumina_db.txt
 teste_async.txt
-lumina.wal
+log.txt
 
-# ============================================
-# Dependências externas
-# ============================================
-lumina_modules/
+# --- Linker próprio (binários) ---
+linker/lumina-ld
+linker/runtime/*.o
+linker/runtime/*.ll
 
-# ============================================
-# VS Code extension
-# ============================================
-lumina-vscode/node_modules/
-lumina-vscode/*.vsix
-
-# ============================================
-# IDE / OS
-# ============================================
+# --- IDE ---
 .vscode/
 .idea/
 *.swp
-*~
-.DS_Store
-
-# ============================================
-# Coverage de C/C++
-# ============================================
-*.gcda
-*.gcno
-
-# ============================================
-# Binários compilados (sem extensão)
-# ============================================
-/tests/features/uncertain_features
-/tests/features/*_binctx/
-site/
-ctx/
-
-# ============================================
-# Linker: binários e objetos gerados por `make` em linker/
-# ============================================
-linker/lumina-ld
-linker/runtime/*.o
-
-# Dump de contexto do linker (ferramenta de desenvolvimento)
-lumina-linker-context.txt
-
-# ============================================
-# Garante que pastas essenciais sempre subam
-# ============================================
-!std/
-!std/**
-!examples/
-!examples/**
-!benchmarks/
-!benchmarks/**

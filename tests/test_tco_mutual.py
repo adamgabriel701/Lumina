@@ -192,12 +192,48 @@ def test_mutual_recursion_emits_defers():
         '    return 0\n'
     )
     out, rc = _run(src)
-    # a(2) → b(1) → a(0). Defers: A, B, A → 3 A's? Não.
-    # a(2): defer A. chama b(1).
-    #   b(1): defer B. chama a(0).
-    #     a(0): defer A. return 0 (n==0).
-    #   b(1) retorna 0? Não — b(1) → a(0) → 0. b(1) retorna 0.
-    # a(2) retorna 0.
-    # Defers emitidos: A (em a0), B (em b1), A (em a2). Total: 2 A, 1 B.
+    # a(2) → b(1) → a(0). Defers: A (em a0), B (em b1), A (em a2).
+    # Total: 2 A, 1 B.
     assert out.count("A") == 2, f"A count, out={out!r}"
     assert out.count("B") == 1, f"B count, out={out!r}"
+
+
+# ============================================================
+# PATCH #8 — Regressão: SCC que chama função genérica
+#
+# Antes do fix em `lumina/codegen/tco.py`:
+#   `_materialize_scc_dispatcher` inicializava
+#       self.var_types = {p.type_ann for p in f.params}
+#   — um **set** de tipos, não um **dict** {nome: tipo}.
+#
+#   Quando um membro do SCC chamava uma função genérica, o
+#   `_infer_arg_type_lumina` fazia `self.var_types.get(arg_node.name)`
+#   e crashava com `AttributeError: 'set' object has no attribute 'get'`.
+#
+# O bug era silencioso porque nenhum teste de SCC tocava em genéricos.
+# Este teste fecha a lacuna.
+# ============================================================
+def test_scc_member_calls_generic():
+    src = (
+        'fn ident<T>(x: T) -> T:\n'
+        '    return x\n'
+        '\n'
+        'fn is_even(n: int) -> int:\n'
+        '    if n == 0:\n'
+        '        return 1\n'
+        '    let v = ident(n)\n'
+        '    return is_odd(v - 1)\n'
+        '\n'
+        'fn is_odd(n: int) -> int:\n'
+        '    if n == 0:\n'
+        '        return 0\n'
+        '    return is_even(n - 1)\n'
+        '\n'
+        'fn main() -> int:\n'
+        '    print(is_even(10))\n'
+        '    return 0\n'
+    )
+    out, rc = _run(src)
+    # is_even(10) → is_odd(9) → ... → is_even(0) → 1
+    assert rc == 0, f"exit={rc}, out={out!r}"
+    assert "1" in out, f"out={out!r}"

@@ -1,3 +1,5 @@
+# docs/engineering/bugs.md
+
 # 🐛 Bugs corrigidos
 
 Lista completa de bugs silenciosos corrigidos no compilador. Todos passavam pelo CI original porque os testes só exercitavam parser/semantic — não runtime. Cada um tem teste de regressão.
@@ -45,6 +47,11 @@ Lista completa de bugs silenciosos corrigidos no compilador. Todos passavam pelo
 | `and_then` retornava `int` para function pointers | `_require_assignable` rejeitava `Result` | Retorna `None` (tipo desconhecido) | `test_std_result.py` |
 | `main` sem `ret` após tail print | `./chip8` segfaultava via `lumina-ld` | Hook `_fn_ensure_terminator` no `function_body.py` garante `ret` no fim do bloco | `examples/chip8.lm` |
 | `alloca` dentro de loop estoura stack | `./gc_test` segfaultava com ~250K iterações | Variáveis locais e parâmetros alocadas no bloco de entrada (`entry_bb`) da função | `examples/gc_test.lm` |
+| `var_types` como set em SCC | `AttributeError: 'set' object has no attribute 'get'` quando membro de SCC chamava função genérica | `_materialize_scc_dispatcher` inicializa `var_types` como `{name: type}` (dict), não `{type}` (set) | `test_tco_mutual.py::test_scc_member_calls_generic` |
+| `alloca` de buffer temporário dentro de loop | `gc_test --linker=self` segfaultava; RSP crescia ~2 GB em 100k iterações | Novo helper `_fn_emit_alloca` insere no **fim do entry block** (via `position_before(terminator)`); aplicado em `codegen_fstring` (`literals.py`), `num_to_str` (`operators.py`) e `str_buf` (`builtins.py`) | `test_gc.py::test_gc_handles_many_allocations` |
+| `_fn_emit_alloca` usava `is_terminator` | `AttributeError: 'Branch' object has no attribute 'is_terminator'` em todo build | Detecção via `opname` (`br`, `ret`, `unreachable`, `switch`, ...) | build de qualquer `.lm` |
+| Global `mut X = <não-literal>` re-avaliado | `chip8` e `coroutines` liam buffers null (cada referência re-executava `alloc_bytes`) | `_emit_mutable_global` agora faz zero-init + agenda init runtime via `_deferred_globals`; init é emitida no início de `main_body` (não `entry_bb`) | `test_codegen_bugs.py`, `examples/chip8.lm`, `examples/coroutines.lm` |
+| Dedup de globais `mut` entre arquivos | `DuplicatedNameError: g_CTX_SIZE` quando `std/async.lm` e `coroutines.lm` declaravam `let/mut` com mesmo nome | `_emit_mutable_global` ignora segundo registro com mesmo nome; `let` no topo continua inline-constante (não vira global) | build de `examples/coroutines.lm` |
 
 ## Semantic
 
@@ -95,8 +102,21 @@ Lista completa de bugs silenciosos corrigidos no compilador. Todos passavam pelo
 | `--help` caía em "comando desconhecido" | — | `main()` trata `-h`/`--help`/`help`/sem args | `cli/test_exit_codes.py` |
 | `_compile_extra_objects` ignorava `extra_flags` | `.cpp` sem `-DFOO=42` | Passa `linker_extra_flags` para clang/clang++ | `cli/test_build.py` |
 
+## Linker
+
+| Bug | Sintoma | Correção | Teste |
+|---|---|---|---|
+| `main` sintético em runtime | Todo link com `--linker=self` abortava com `multiple definition of 'main'` | Remoção de `int main` residual do `rt.c` + filtro em `build_gsyms` para nunca aceitar `main` de runtime | `linker/triagem.sh` |
+| `main` duplicado tinha ordem dependente | O resultado do link dependia da ordem dos `.o` na linha de comando | Filtro em `build_gsyms` (não em `add_gsym`) — comportamento determinístico | `linker/triagem.sh` |
+| Otimizador O1 usava API removida | `module 'llvmlite.binding' has no attribute 'create_pass_manager_builder'` (llvmlite >= 0.42) | `_optimize_ir` detecta em runtime qual API existe: `create_new_module_pass_manager()`, `create_pass_manager_builder()` ou `PassManagerBuilder`; fallback via passes individuais | build com O1 ativo |
+| W^X ausente | Um único `PT_LOAD` RWX violava W^X em kernels hardened | Dois `PT_LOAD`: RX (headers + `.text` + `.rodata`) e RW (`.data` + `.bss` + heap folga); page-align entre as regiões | `readelf -l` |
+
 ---
 
 ## Bugs identificados (não corrigidos)
 
-Neste momento não há bugs de codegen conhecidos em aberto. Os dois únicos bugs que existiam (`main` sem `ret` e `alloca` em loop) foram corrigidos e movidos para a tabela de "Bugs corrigidos".
+Neste momento não há bugs de codegen conhecidos em aberto. Os bugs que existiam
+(`main` sem `ret`, `alloca` em loop, `var_types` como set, `main` duplicado no
+runtime, `alloca` de buffer temporário em loop, init runtime de globais
+`mut X = <não-literal>`) foram todos corrigidos e movidos para as tabelas
+acima.

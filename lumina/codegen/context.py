@@ -26,6 +26,8 @@ _CONTEXT_FIELDS = (
     "_current_scc_ids",
     "_current_scc_id_slot",
     "_current_scc_dispatch_bb",
+    "_fn_entry_block",    # PATCH: para hoisting de alloca
+    "_fn_return_type",    # PATCH: para _fn_ensure_terminator
 )
 
 

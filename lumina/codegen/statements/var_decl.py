@@ -1,6 +1,7 @@
 from llvmlite import ir
 from ...ast import CallExpr, ArrayExpr, LambdaExpr, VariableExpr, NumberExpr
 from ...errors import LuminaError
+from ..constants import I64_BYTES, STACK_ALLOC_LIMIT   # ← NOVO
 
 class VarDeclMixin:
 
@@ -32,7 +33,7 @@ class VarDeclMixin:
             n_fields = len(struct_ty.elements)
         except Exception:
             n_fields = 4
-        size = 8 * n_fields if n_fields > 0 else 8
+        size = I64_BYTES * n_fields if n_fields > 0 else I64_BYTES
         raw = self.builder.call(
             self.malloc,
             [ir.Constant(self.i64_ty, size)],
@@ -110,8 +111,7 @@ class VarDeclMixin:
                 source_code=getattr(self, 'source_code', '') or '',
             )
 
-        LIMIT = 4096
-        if n > LIMIT:
+        if n > STACK_ALLOC_LIMIT:
             return None
 
         elem_ty = self.i64_ty if callee == 'alloc' else self.i8_ty

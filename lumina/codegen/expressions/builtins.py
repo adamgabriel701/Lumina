@@ -150,7 +150,7 @@ class BuiltinsMixin:
                 fmt = self.create_global_string("%ld")
             else:
                 return v
-            buf = self.builder.alloca(ir.ArrayType(self.i8_ty, 32), name="str_buf")
+            buf = self._fn_emit_alloca("str_buf", ir.ArrayType(self.i8_ty, 32))
             buf_ptr = self.builder.bitcast(buf, self.voidptr_ty, name="str_buf_ptr")
             self.builder.call(
                 self.snprintf,

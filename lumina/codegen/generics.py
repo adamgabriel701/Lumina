@@ -80,6 +80,8 @@ class GenericsMixin:
             _current_scc_ids=None,
             _current_scc_id_slot=None,
             _current_scc_dispatch_bb=None,
+            _fn_entry_block=entry_bb,           # PATCH
+            _fn_return_type=ret_ty,             # PATCH
         ):
             # Bind params: alloca + store, com tipo concreto.
             for i, p in enumerate(gen_def.params):

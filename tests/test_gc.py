@@ -188,16 +188,6 @@ def test_gc_handles_many_allocations():
             if os.path.exists(p):
                 os.remove(p)
 
-def test_default_build_uses_gc_malloc():
-    src = (
-        'fn get_size() -> int:\n'
-        '    return 10\n'
-        '\n'
-        'fn main() -> int:\n'
-        '    let n = get_size()\n'
-        '    let buf = alloc(n)\n'
-        '    return 0\n'
-    )
-    ir = _build(src)
-    assert "GC_malloc" in ir
-    assert "declare i8* @malloc" not in _norm(ir)
+# PATCH: removida a duplicata de `test_default_build_uses_gc_malloc`
+# que existia no final do arquivo. O pytest rodava o mesmo teste 2x,
+# inflando a contagem total. Esta versão tem 5 testes (não 6).

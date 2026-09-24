@@ -1,4 +1,5 @@
 from llvmlite import ir
+from .constants import CLOSURE_BLOCK_SIZE   # ← NOVO
 
 
 class HelpersCodegen:
@@ -91,7 +92,7 @@ class HelpersCodegen:
 
         block = self.builder.call(
             self.malloc,
-            [ir.Constant(self.i64_ty, 16)],
+            [ir.Constant(self.i64_ty, CLOSURE_BLOCK_SIZE)],
             name=f"{name_hint}_closure",
         )
         block_i8pp = self.builder.bitcast(

@@ -38,6 +38,20 @@ def arrow(msg):   cprint(msg, color=Color.ARROW)
 
 
 def get_all_dependency_files(filename):
+    """Coleta recursivamente todos os `.lm` dependentes (via imports).
+
+    Usado para calcular o hash de cache — se qualquer dependência
+    mudar, o cache é invalidado.
+
+    PATCH: agora usa `resolve_import_path` (a mesma função que o
+    compilador usa em `parse.py`), garantindo consistência entre
+    "o que o compilador importa" e "o que o cache considera".
+
+    A importação é feita dentro da função para evitar ciclo de import
+    (`utils` → `compiler.paths` → `utils`).
+    """
+    from .compiler.paths import resolve_import_path
+
     files = set()
 
     def resolve(f):
@@ -53,14 +67,13 @@ def get_all_dependency_files(filename):
 
         for match in re.finditer(r'import\s+"([^"]+)"', code):
             dep = match.group(1)
-            if dep.startswith("std/"):
-                dep_path = os.path.join(STD_DIR, dep.replace("std/", "") + ".lm")
-            elif os.path.exists(dep + ".lm" if not dep.endswith(".lm") else dep):
-                dep_path = dep if dep.endswith(".lm") else dep + ".lm"
-            else:
-                dep_path = os.path.join("lumina_modules", dep)
-                if not dep_path.endswith(".lm"):
-                    dep_path += ".lm"
+            try:
+                dep_path = resolve_import_path(dep)
+            except FileNotFoundError:
+                # Ignora imports não resolvíveis — o objetivo aqui é
+                # calcular hash, não validar. Se o arquivo não existe,
+                # o `parse_module` vai reportar depois.
+                continue
             resolve(dep_path)
 
     resolve(filename)

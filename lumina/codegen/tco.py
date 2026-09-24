@@ -1,5 +1,19 @@
-"""Tail Call Optimization: SCCs de mutual recursion + dispatcher."""
+"""Tail Call Optimization: SCCs de mutual recursion + dispatcher.
+
+O dispatcher `__scc_N` recebe `(id, params_comuns)` e faz `switch` sobre
+`id` para o bloco de cada membro do SCC. Cada membro reescreve seus
+próprios slots de parâmetro e salta de volta para `dispatch_bb` — sem
+novo frame.
+
+PATCH: `_materialize_scc_dispatcher` agora usa `push_context` em vez de
+salvar/restaurar campos manualmente. Além disso, corrige um bug latente:
+`var_types` era inicializado como **set** em vez de **dict**, quebrando
+`_infer_arg_type_lumina` (que chama `.get()`) quando um membro do SCC
+chamava função genérica.
+"""
 from llvmlite import ir
+
+from .context import push_context
 
 
 class TCOMixin:
@@ -107,7 +121,17 @@ class TCOMixin:
         return True
 
     def _materialize_scc_dispatcher(self, scc_id, funcs):
-        """Gera dispatcher + wrappers para um SCC de mutual recursion."""
+        """Gera dispatcher + wrappers para um SCC de mutual recursion.
+
+        Estrutura:
+          - `__scc_N(i32 id, <params>)` — dispatcher com switch sobre `id`.
+          - Para cada `f` do SCC:
+              - bloco `__scc_N_<f>` com o corpo, usando `push_context`.
+              - wrapper `f_wrap` que chama `__scc_N(idx_f, ...)`.
+
+        PATCH: refatorado para usar `push_context`, e `var_types` agora é
+        um **dict** (`{name: type}`) em vez de um **set** (`{type}`).
+        """
         sample = funcs[0]
         param_tys = [self.get_llvm_param_type(p.type_ann) for p in sample.params]
         ret_ty = self.get_llvm_param_type(sample.return_type)
@@ -116,11 +140,14 @@ class TCOMixin:
         disp_fn_ty = ir.FunctionType(ret_ty, [self.i32_ty] + param_tys)
         disp_fn = ir.Function(self.module, disp_fn_ty, name=disp_name)
 
+        # Salva builder externo — restaurado no final.
         old_builder = self.builder
-        old_defer_stack_outer = getattr(self, 'defer_stack', None)
-        self.defer_stack = []
 
-        # entry: aloca slots e current_id
+        # ------------------------------------------------------------------
+        # Setup do dispatcher (entry + slots + dispatch bb).
+        # Feito com um builder próprio, fora do push_context — não é
+        # "corpo de função" no sentido do codegen, é boilerplate.
+        # ------------------------------------------------------------------
         entry_bb = disp_fn.append_basic_block(name=f"{disp_name}_entry")
         self.builder = ir.IRBuilder(entry_bb)
 
@@ -136,7 +163,6 @@ class TCOMixin:
         dispatch_bb = disp_fn.append_basic_block(name=f"{disp_name}_dispatch")
         self.builder.branch(dispatch_bb)
 
-        # dispatch: switch
         self.builder.position_at_end(dispatch_bb)
         id_val = self.builder.load(id_slot, name=f"{disp_name}_id_load")
 
@@ -152,56 +178,57 @@ class TCOMixin:
         self.builder.position_at_end(bad_bb)
         self.builder.unreachable()
 
-        old_scc_slots = getattr(self, '_current_scc_slots', None)
-        old_scc_ids = getattr(self, '_current_scc_ids', None)
-        old_scc_id_slot = getattr(self, '_current_scc_id_slot', None)
-        old_scc_dispatch = getattr(self, '_current_scc_dispatch_bb', None)
+        scc_slots = {f.name: slots for f in funcs}
+        scc_ids = {f.name: idx for idx, f in enumerate(funcs)}
 
-        self._current_scc_slots = {f.name: slots for f in funcs}
-        self._current_scc_ids = {f.name: idx for idx, f in enumerate(funcs)}
-        self._current_scc_id_slot = id_slot
-        self._current_scc_dispatch_bb = dispatch_bb
-
-        # Corpos de cada membro
+        # ------------------------------------------------------------------
+        # Corpos de cada membro — cada um em um `push_context` próprio.
+        #
+        # PATCH: `var_types` agora é `{param_name: type_ann}` (dict) em
+        # vez de `{type_ann}` (set). O bug era silencioso até um membro
+        # do SCC chamar função genérica, o que dispara
+        # `_infer_arg_type_lumina` → `var_types.get(name)` → crash.
+        # ------------------------------------------------------------------
         for idx, f in enumerate(funcs):
-            self.builder.position_at_end(member_bb[f.name])
+            member_builder = ir.IRBuilder(member_bb[f.name])
 
-            old_sym = self.symbol_table
-            old_vt = self.var_types
-            old_current = getattr(self, 'current_func_name', None)
+            with push_context(
+                self,
+                builder=member_builder,
+                symbol_table={p.name: slots[i] for i, p in enumerate(f.params)},
+                var_types={p.name: p.type_ann for p in f.params},
+                current_func_name=f.name,
+                current_body_bb=None,
+                defer_stack=[],
+                closure_vars=set(),
+                _safe_mode=False,
+                _current_scc_slots=scc_slots,
+                _current_scc_ids=scc_ids,
+                _current_scc_id_slot=id_slot,
+                _current_scc_dispatch_bb=dispatch_bb,
+                _fn_entry_block=member_bb[f.name],  # PATCH
+                _fn_return_type=ret_ty,             # PATCH
+            ):
+                for stmt in f.body:
+                    if self.builder.block.is_terminated:
+                        break
+                    self.visit(stmt)
 
-            # Reset per-membro
-            self.defer_stack = []
+                if not self.builder.block.is_terminated:
+                    self._emit_all_defers()
+                if not self.builder.block.is_terminated:
+                    if ret_ty == self.void_ty:
+                        self.builder.ret_void()
+                    elif isinstance(ret_ty, ir.PointerType):
+                        self.builder.ret(ir.Constant(ret_ty, None))
+                    else:
+                        self.builder.ret(ir.Constant(ret_ty, 0))
 
-            self.symbol_table = {p.name: slots[i] for i, p in enumerate(f.params)}
-            self.var_types = {p.name: p.type_ann for p in f.params}
-            self.current_func_name = f.name
-
-            for stmt in f.body:
-                if self.builder.block.is_terminated:
-                    break
-                self.visit(stmt)
-
-            if not self.builder.block.is_terminated:
-                self._emit_all_defers()
-            if not self.builder.block.is_terminated:
-                if ret_ty == self.void_ty:
-                    self.builder.ret_void()
-                elif isinstance(ret_ty, ir.PointerType):
-                    self.builder.ret(ir.Constant(ret_ty, None))
-                else:
-                    self.builder.ret(ir.Constant(ret_ty, 0))
-
-            self.symbol_table = old_sym
-            self.var_types = old_vt
-            self.current_func_name = old_current
-
-        self._current_scc_slots = old_scc_slots
-        self._current_scc_ids = old_scc_ids
-        self._current_scc_id_slot = old_scc_id_slot
-        self._current_scc_dispatch_bb = old_scc_dispatch
-
-        # Wrappers
+        # ------------------------------------------------------------------
+        # Wrappers: cada `f` original vira um stub que chama o dispatcher
+        # com o `id` do membro. Emitidos fora do push_context — é
+        # boilerplate de 3 instruções, não corpo de função.
+        # ------------------------------------------------------------------
         for idx, f in enumerate(funcs):
             func, func_type = self.functions_table[f.name]
             wbb = func.append_basic_block(name=f"{f.name}_wrap")
@@ -213,5 +240,5 @@ class TCOMixin:
             else:
                 self.builder.ret(result)
 
-        self.defer_stack = old_defer_stack_outer
+        # Restaura builder externo.
         self.builder = old_builder

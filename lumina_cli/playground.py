@@ -130,10 +130,25 @@ class PlaygroundHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(response).encode('utf-8'))
 
 
-def run_server(port=8080):
-    step(f"🚀 Lumina Playground rodando em {paint(f'http://localhost:{port}', Color.INFO + Color.UNDERLINE)}")
+def run_server(port=8080, host="127.0.0.1"):
+    """Inicia o servidor HTTP do playground.
+
+    PATCH: o host default é `127.0.0.1` (loopback) em vez de `""`
+    (todas as interfaces). `""` fazia o servidor escutar em `0.0.0.0`,
+    permitindo que qualquer máquina na rede — ou qualquer usuário com
+    acesso ao port-forwarding do Codespace — executasse código nativo
+    arbitrário via JIT.
+
+    Para expor intencionalmente, use `host="0.0.0.0"` explicitamente.
+    """
+    display_host = host if host != "0.0.0.0" else "localhost"
+    step(f"🚀 Lumina Playground rodando em "
+         f"{paint(f'http://{display_host}:{port}', Color.INFO + Color.UNDERLINE)}")
+    if host == "0.0.0.0":
+        warn("⚠️  Servidor escutando em TODAS as interfaces (0.0.0.0). "
+             "Qualquer host da rede pode executar código via JIT.")
     info(f"Pressione {paint('Ctrl+C', Color.BOLD)} para parar o servidor.")
-    with socketserver.TCPServer(("", port), PlaygroundHandler) as httpd:
+    with socketserver.TCPServer((host, port), PlaygroundHandler) as httpd:
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:

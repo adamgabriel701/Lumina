@@ -4,6 +4,11 @@
  *   clang -c -ffreestanding -fno-pic -fno-pie \
  *         -fno-stack-protector -fno-builtin -nostdlib \
  *         -O2 rt.c -o rt.o
+ *
+ * IMPORTANTE: este arquivo NÃO define `main`. O `main` é sempre
+ * definido pelo `.o` do usuário (compilado do `.lm`). `_start` (em
+ * start.S) referencia `main` como UNDEF e resolve contra o objeto
+ * do usuário.
  */
 typedef unsigned long size_t;
 typedef long          ssize_t;
@@ -116,24 +121,47 @@ typedef struct _GCBlock {
 
 static _GCBlock *gc_head = 0;
 
+/* --------------------------------------------------------------------
+ * Alocador linear sobre brk().
+ *
+ * IMPORTANTE — `free()` é NO-OP:
+ *   Esta runtime é usada com --linker=self. Programas compilados com
+ *   esta runtime rodam com --no-gc implícito (ver build.py). Sem um
+ *   coletor real, `free()` não pode devolver memória ao heap sem
+ *   risco de double-free/use-after-free — não há bookkeeping para
+ *   rastrear o que está vivo.
+ *
+ *   Consequência prática: `malloc` + `free` em loop **vaza** memória.
+ *   O heap cresce monotonicamente via `brk`. Programas com churn de
+ *   alocação (ex: `alloc_churn.lm`) vão consumir RAM proporcional ao
+ *   número total de alocações, não ao número de alocações vivas.
+ *
+ *   Para churn controlado sob --linker=self, use `std/alloc.lm`
+ *   (arena) — um único `malloc` grande + bump pointer dentro da arena.
+ *
+ *   Sob clang (linker padrão), `free()` resolve para a libc/glibc e
+ *   se comporta normalmente.
+ * ------------------------------------------------------------------ */
+
 void GC_init(void) { gc_head = 0; }
 
 void *malloc(size_t n) {
     if (!_heap) _heap = (char*)(((unsigned long)&_end + 4095) & ~4095UL);
-    
+
     size_t total = sizeof(_GCBlock) + ((n + 15) & ~15UL);
     _GCBlock *b = (_GCBlock *)_heap;
     _heap += total;
     _sys1(12, (long)_heap); /* brk */
-    
+
     b->size = n;
     b->marked = 0;
     b->next = gc_head;
     gc_head = b;
-    
+
     return (void*)((char*)b + sizeof(_GCBlock));
 }
 
+/* NO-OP por design — ver comentário acima do `malloc`. */
 void free(void *p) { (void)p; }
 
 void *calloc(size_t n, size_t sz) {
@@ -157,9 +185,9 @@ void makecontext(void *ucp, void (*func)(), void *stack, size_t stack_size) {
     unsigned long *sp = (unsigned long *)((unsigned char *)stack + stack_size);
     sp = (unsigned long *)((unsigned long)sp & ~0xFFUL); /* Alinha para 256B */
     sp -= 1; /* Espaço para simular endereço de retorno */
-    
+
     unsigned long *ctx = (unsigned long *)ucp;
-    ctx[6] = (unsigned long)sp; /* RSP */
+    ctx[6] = (unsigned long)sp;   /* RSP */
     ctx[7] = (unsigned long)func; /* RIP */
 }
 
@@ -590,3 +618,11 @@ void *_lumina_get_tls(void) {
 void _lumina_set_tls(void *ptr) {
     __lumina_tls_block = ptr;
 }
+
+/* ============================================================
+ * FIM do arquivo.
+ *
+ * NÃO adicione `main` aqui. O `main` é definido pelo `.o` do
+ * usuário (compilado do `.lm`). `_start` referencia `main` como
+ * UNDEF; o linker resolve contra o objeto do usuário.
+ * ============================================================ */

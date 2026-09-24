@@ -1,6 +1,8 @@
+# docs/engineering/tests.md
+
 # 🧪 Testes
 
-428 testes em 45 arquivos, organizados por camada do compilador. Todos rodam em ~2 min no CI.
+441 testes em 45 arquivos, organizados por camada do compilador. Todos rodam em ~2 min no CI.
 
 ---
 
@@ -23,6 +25,13 @@ Fixtures comuns em [`tests/conftest.py`](../../tests/conftest.py):
 
 ## Distribuição
 
+> **Nota:** a tabela abaixo reflete a contagem no momento em que este
+> documento foi escrito. O total real é reportado pelo CI
+> (`pytest tests/ -q`) e está sincronizado com o badge do `README.md`.
+> Contagens por arquivo podem estar defasadas após adições recentes — trate
+> este documento como **referência estrutural**, não como fonte de verdade
+> numérica.
+
 | Arquivo | Testes | Cobre |
 |---|---|---|
 | `test_lexer.py` | 30 | Tokens, strings, indentação, comentários |
@@ -37,13 +46,13 @@ Fixtures comuns em [`tests/conftest.py`](../../tests/conftest.py):
 | `test_enum_bare_variant.py` | 4 | Variantes bare |
 | `test_escape_analysis.py` | 4 | Escape analysis (alloca vs GC) |
 | `test_forin.py` | 9 | `for x in arr` |
-| `test_gc.py` | 6 | Boehm GC ativa |
+| `test_gc.py` | 6 | Boehm GC ativa + many allocations |
 | `test_generic_impl.py` | 6 | `impl Box<T>:` |
 | `test_lint.py` | 14 | `lumina lint` (W001..W005) |
 | `test_macro_stmts.py` | 8 | `nome!(args)` + substituição em statements |
 | `test_macros.py` | 6 | `@macro` (expressão) |
 | `test_tco.py` | 7 | TCO self-recursion |
-| `test_tco_mutual.py` | 6 | TCO mutual recursion |
+| `test_tco_mutual.py` | 7 | TCO mutual recursion + regressão `var_types` |
 | `test_match_guard_enum.py` | 4 | Guard em enum |
 | `test_match_guard_str.py` | 4 | Guard em str |
 | `test_match_no_guard.py` | 6 | Regressão pós-refactor |
@@ -77,7 +86,7 @@ Fixtures comuns em [`tests/conftest.py`](../../tests/conftest.py):
 | `features/test_examples_smoke.py` | 1 | Compila exemplos não-skipados |
 | `features/test_language_features.py` | 1 | Output exato de `uncertain_features.lm` |
 
-**Total: 428 passed.**
+**Total: 441 passed.**
 
 ---
 
@@ -106,6 +115,17 @@ python3 run_tests.py
 
 Os 17 skipados são servidores/sockets/threads que não terminam sozinhos — estão listados em [`tests/features/skip.txt`](../../tests/features/skip.txt).
 
+### Triagem do linker próprio
+
+```bash
+./linker/triagem.sh examples
+# PASS=59  FAIL-COMPILE=0  FAIL-LINK=0  FAIL-RUN=0  SKIP=12
+```
+
+Os 12 skipados dependem de subsistemas fora do escopo do linker próprio:
+pthreads, raylib, FFI C++, WASM, servidores que não terminam. Lista
+completa e motivos em [`linker/skip.txt`](../../linker/skip.txt).
+
 ---
 
 ## Filosofia de testes
@@ -131,4 +151,3 @@ Os 17 skipados são servidores/sockets/threads que não terminam sozinhos — es
   otimizador não atravesse. Em Lumina: `black_box(x)`. Em C: `__asm__
   __volatile__("" : : "r"(p) : "memory")`. Sem isso, clang -O3 elimina o
   loop inteiro e o teste mede zero.
-

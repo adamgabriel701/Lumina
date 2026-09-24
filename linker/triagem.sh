@@ -4,9 +4,8 @@
 #
 # Uso: ./linker/triagem.sh [dir]   (padrão: examples)
 #
-# Skip list: arquivos conhecidos como fora de escopo ou com bugs
-# conhecidos do compilador (não do linker). Ajuste conforme for
-# resolvendo.
+# A skip list fica em `linker/skip.txt`. Edite lá, não aqui.
+# Rode `./linker/test_skipped.sh` periodicamente para podar a lista.
 
 set -u
 cd "$(dirname "$0")/.."
@@ -15,14 +14,19 @@ DIR="${1:-examples}"
 TMP="/tmp/triagem"
 mkdir -p "$TMP"
 
-# SKIP_LIST — arquivos pulados e o motivo:
-#   util — módulo auxiliar, sem `fn main`
-#   threads — usa pthread_create; implementação exige clone()+TLS
-#   engine, ffi_test, wasm_js_interop — dependem de FFI/WASM/Raylib externos
-#   api, app, async_server, http_framework, serve, server, proxy — servidores de rede (loop infinito)
-#   bootstrap_lexer, database, gc_test, json_parser — dependem de .tbss (TLS nativo)
-#   chip8, coroutines — alinhamento de pilha da runtime freestanding nativa
-SKIP_LIST="util threads engine ffi_test wasm_js_interop api app async_server http_framework serve server proxy bootstrap_lexer database gc_test json_parser chip8 coroutines"
+SKIP_FILE="linker/skip.txt"
+
+# Lê a skip list para um array associativo.
+declare -A SKIP_MAP
+if [ -f "$SKIP_FILE" ]; then
+    while IFS= read -r line; do
+        [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+        name=$(echo "$line" | awk '{print $1}')
+        SKIP_MAP["$name"]=1
+    done < "$SKIP_FILE"
+else
+    echo "aviso: $SKIP_FILE não encontrado — rodando sem skip list" >&2
+fi
 
 PASS=()
 FAIL_COMPILE=()
@@ -35,13 +39,11 @@ for f in "$DIR"/*.lm; do
     [ -f "$f" ] || continue
     base=$(basename "$f" .lm)
 
-    case " $SKIP_LIST " in
-        *" $base "*)
-            echo "==> $base                            SKIP"
-            SKIP+=("$base")
-            continue
-            ;;
-    esac
+    if [ -n "${SKIP_MAP[$base]:-}" ]; then
+        echo "==> $base                            SKIP"
+        SKIP+=("$base")
+        continue
+    fi
 
     ll="$TMP/$base.ll"
     o="$TMP/$base.o"

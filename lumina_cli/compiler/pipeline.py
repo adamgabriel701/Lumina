@@ -1,4 +1,4 @@
-"""Pipeline principal: lexer → parser → semantic → codegen → IR."""
+"""Pipeline principal: lexer → parser → semantic → codegen → IR → Otimização (O1)."""
 import ctypes
 import ctypes.util
 import os
@@ -15,6 +15,32 @@ from ..utils import (
 )
 from .parse import parse_module
 
+# Inicializa o LLVM uma vez para habilitar os passes de otimização nativos
+try:
+    llvm.initialize()
+    llvm.initialize_native_target()
+    llvm.initialize_native_asmprinter()
+except Exception:
+    pass
+
+def _optimize_ir(llvm_ir, opt_level=1):
+    """Roda passes de otimização (O1) do LLVM no IR para eliminar código morto e dobrar constantes."""
+    try:
+        mod = llvm.parse_assembly(llvm_ir)
+        mod.verify()
+        
+        # Cria o PassManager e adiciona os passes padrão de O1
+        pmb = llvm.create_pass_manager_builder()
+        pmb.opt_level = opt_level
+        pm = llvm.create_module_pass_manager()
+        pmb.populate(pm)
+        
+        # Roda a otimização
+        pm.run(mod)
+        return str(mod)
+    except Exception as e:
+        warn(f"⚠️  Falha ao otimizar IR (O1): {e}. Usando IR não-otimizado.")
+        return llvm_ir
 
 def compile_lumina(filename, output_file="output.ll", use_cache=True,
                    is_wasm=False, is_debug=False, is_no_gc=False,
@@ -69,6 +95,12 @@ def compile_lumina(filename, output_file="output.ll", use_cache=True,
     codegen.is_wasm = is_wasm
     codegen.is_debug = is_debug
     llvm_ir = codegen.generate_module(ast)
+
+    if not is_debug:
+        header("3b. Otimização LLVM (O1)")
+        # Otimiza o IR antes de salvar. Para --release, o build.py ainda
+        # roda o `opt -O2` externo posteriormente para máxima performance.
+        llvm_ir = _optimize_ir(llvm_ir, opt_level=1)
 
     with open(output_file, "w") as f:
         f.write(llvm_ir)

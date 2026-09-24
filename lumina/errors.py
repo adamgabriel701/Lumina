@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
 from typing import List, Optional
-
-from .common.colors import Color as Colors  # reaproveita a paleta única
+from .common.colors import Color as Colors
 
 
 @dataclass
@@ -20,11 +19,9 @@ class LuminaError(Exception):
 
     def add_note(self, note_msg: str):
         self.notes.append(note_msg)
-        # Re-formata para refletir notas adicionadas depois
         Exception.__init__(self, self.format_error())
 
     def to_dict(self) -> dict:
-        """Retorna o erro como dict estruturado (para JSON, LSP, etc)."""
         return {
             "type": "error",
             "message": self.message,
@@ -36,7 +33,6 @@ class LuminaError(Exception):
         }
 
     def to_json(self) -> str:
-        """Retorna o erro como JSON de uma linha (ideal para CLI)."""
         import json
         return json.dumps(self.to_dict(), ensure_ascii=False)
 
@@ -57,7 +53,6 @@ class LuminaError(Exception):
         if line_idx < 0 or line_idx >= len(lines):
             return f"\n{C.BOLD}erro:{C.RESET} {self.message} (Linha fora do alcance)\n"
 
-        # expandtabs(4) alinha com o lexer
         line_str = lines[line_idx].expandtabs(4)
 
         start_col = max(1, self.col)
@@ -87,3 +82,43 @@ class LuminaError(Exception):
             s += f"  {padding} {C.YELLOW}={C.RESET} {C.BLUE}nota:{C.RESET} {note}\n"
 
         return s
+
+
+def levenshtein(s1: str, s2: str) -> int:
+    """Calcula a distância de edição entre duas strings."""
+    if len(s1) < len(s2):
+        return levenshtein(s2, s1)
+
+    if len(s2) == 0:
+        return len(s1)
+
+    previous_row = range(len(s2) + 1)
+    for i, c1 in enumerate(s1):
+        current_row = [i + 1]
+        for j, c2 in enumerate(s2):
+            insertions = previous_row[j + 1] + 1
+            deletions = current_row[j] + 1
+            substitutions = previous_row[j] + (c1 != c2)
+            current_row.append(min(insertions, deletions, substitutions))
+        previous_row = current_row
+    
+    return previous_row[-1]
+
+
+def suggest(word: str, candidates: List[str], threshold: int = 2) -> Optional[str]:
+    """Retorna a palavra mais parecida da lista, ou None se nenhuma se aproximar o suficiente."""
+    best_match = None
+    best_dist = float('inf')
+    
+    for candidate in candidates:
+        # Ignora vazios ou muito diferentes em tamanho
+        if not candidate or abs(len(word) - len(candidate)) > 3:
+            continue
+        dist = levenshtein(word.lower(), candidate.lower())
+        if dist < best_dist:
+            best_dist = dist
+            best_match = candidate
+            
+    if best_match and best_dist <= threshold:
+        return best_match
+    return None

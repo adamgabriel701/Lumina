@@ -23,41 +23,6 @@ lumina_test_bin
 lumina_test_runner.ll
 
 # ============================================
-# examples/ — rastreia só fontes e config
-# ============================================
-/examples/*
-!/examples/*.lm
-!/examples/*.md
-!/examples/*.toml
-!/examples/*.cpp
-!/examples/*.h
-!/examples/*.expected
-!/examples/MeuBanco/
-
-# ============================================
-# benchmarks/ — rastreia só fontes, scripts, e resultados
-# ============================================
-/benchmarks/*
-!/benchmarks/*.lm
-!/benchmarks/*.c
-!/benchmarks/*.cpp
-!/benchmarks/*.rs
-!/benchmarks/*.go
-!/benchmarks/*.js
-!/benchmarks/*.py
-!/benchmarks/*.md
-!/benchmarks/*.sh
-!/benchmarks/*.toml
-!/benchmarks/results/
-!/benchmarks/results/**
-
-# ============================================
-# lumina_core/ — só .lm
-# ============================================
-/lumina_core/*
-!/lumina_core/*.lm
-
-# ============================================
 # Logs e dados temporários
 # ============================================
 log.txt
@@ -100,11 +65,22 @@ lumina-vscode/*.vsix
 /tests/features/*_binctx/
 site/
 ctx/
-ctx/
 
+# ============================================
 # Linker: binários e objetos gerados por `make` em linker/
+# ============================================
 linker/lumina-ld
 linker/runtime/*.o
 
 # Dump de contexto do linker (ferramenta de desenvolvimento)
 lumina-linker-context.txt
+
+# ============================================
+# Garante que pastas essenciais sempre subam
+# ============================================
+!std/
+!std/**
+!examples/
+!examples/**
+!benchmarks/
+!benchmarks/**

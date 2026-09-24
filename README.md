@@ -2,17 +2,41 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![LLVM](https://img.shields.io/badge/LLVM-14%2B-blue.svg)](https://llvm.org/)
-[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
-[![Status](https://img.shields.io/badge/Status-Alpha-green.svg)](#-status)
-[![Tests](https://img.shields.io/badge/tests-434%20passed-brightgreen.svg)](docs/engineering/tests.md)
-[![Examples](https://img.shields.io/badge/examples-54%20ran-success.svg)](examples/)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg?logo=python\&logoColor=white)](https://www.python.org/)
+[![Status](https://img.shields.io/badge/Status-Active-success.svg)](#-status)
+[![Tests](https://img.shields.io/badge/tests-440%20passed-brightgreen.svg)](docs/engineering/tests.md)
+[![Examples](https://img.shields.io/badge/examples-54%20pass%20%2F%2017%20skip-success.svg)](examples/)
 [![Benchmarks](https://img.shields.io/badge/benchmarks-5%20suites-blue.svg)](benchmarks/results/)
-[![Cross-compile](https://img.shields.io/badge/cross--compile-arm64%20%7C%20wasm-blueviolet.svg)](#-cross-compilation)
-[![Linker](https://img.shields.io/badge/linker-self--hosted-orange.svg)](docs/internals/linking.md)
+[![Cross-compile](https://img.shields.io/badge/cross--compile-arm64%20%7C%20armv7%20%7C%20risc--v%20%7C%20wasm-blueviolet.svg)](#-cross-compilation)
+[![Linker](https://img.shields.io/badge/linker-lumina--ld-orange.svg)](docs/internals/linking.md)
 
-**Lumina** é uma linguagem de programação de sistemas com sintaxe limpa baseada em indentação (estilo Python/Nim), backend **LLVM** e foco em ergonomia moderna, concorrência e segurança de memória.
+**Lumina** é uma linguagem de programação de sistemas com sintaxe limpa baseada em indentação, backend **LLVM** e foco em ergonomia moderna, controle de memória, performance e tooling.
 
-Estática, compilada, sem `;` e sem `{}`. Roda em Linux (x86_64, ARM, RISC-V), WebAssembly e bare-metal.
+É uma linguagem **estaticamente tipada e compilada**, sem `;` e sem `{}` como delimitadores estruturais.
+
+A linguagem possui:
+
+* sintaxe baseada em indentação significativa;
+* inferência de tipos;
+* generics e monomorphization;
+* traits com métodos default;
+* enums algébricos com múltiplos payloads;
+* pattern matching;
+* closures;
+* macros e `comptime`;
+* TCO;
+* Boehm GC + `--no-gc`;
+* escape analysis;
+* FFI;
+* concorrência e I/O assíncrono;
+* backend LLVM;
+* JIT e REPL;
+* LSP;
+* formatter e linter;
+* compilação incremental;
+* cross-compilation;
+* WebAssembly;
+* linker ELF próprio para **x86_64 Linux**.
 
 📖 **Documentação completa em [`docs/`](docs/README.md).**
 
@@ -20,65 +44,151 @@ Estática, compilada, sem `;` e sem `{}`. Roda em Linux (x86_64, ARM, RISC-V), W
 
 ## ✨ Por que Lumina?
 
-**Sintaxe que você lê em voz alta.** Indentação significativa, `|>` para encadear, `?.` para navegação segura, `defer` com escopo de bloco, F-strings.
+### Sintaxe que você lê em voz alta
+
+Lumina usa indentação significativa e combina recursos modernos sem depender de blocos delimitados por `{}`.
 
 ```lumina
 fn main() -> int:
     let usuario = buscar_usuario(42)?
+
     defer log("fim")
+
     usuario?.nome |> imprimir
+
     return 0
 ```
 
-**Performance de C, ergonomia de linguagem moderna.** Lumina **empata com C** em `fib`, `loop` e `matrix` (mediana de 20 runs, clang -O3 em ambos). `--no-gc` fecha o gap restante em `primes` e `alloc_churn`. Detalhes em [benchmarks](docs/engineering/benchmarks.md).
+O objetivo é manter o código compacto sem sacrificar recursos normalmente encontrados em linguagens de sistemas.
 
-**Memória sob controle, com rede de segurança.** Boehm GC por padrão (`GC_malloc`), escape analysis coloca arrays locais no stack, `--no-gc` para bare-metal, `@safe` para null check opt-in, `nil` é null pointer real (não um wrapper).
+### Performance próxima de C
 
-**Metaprogramação real em compile-time.** `@macro` com duas formas (expressão e statement), `@derive(Eq, Debug, Clone, ...)`, `comptime` com constant folding, atributos LLVM (`@inline`, `@cold`).
+O backend LLVM permite que Lumina gere código nativo competitivo em workloads computacionais.
 
-**Tooling de linguagem séria.** LSP completo com escopo qualificado (hover, go-to-def, references, rename), linter estático (5 warnings), REPL persistente, auto-formatter que preserva comentários e `@attrs`, build incremental, cross-compile, **linker próprio** (`--linker=self`).
+Nos benchmarks atuais, Lumina fica próxima de C em vários testes compute-bound:
 
-**Tipos que ajudam, não atrapalham.** Inferência em 90% dos casos, `Option<T>`, enums com multi-payload, pattern matching com guard e multi-pattern, generics com monomorphization, traits com métodos default, tipos de função com assinatura (`fn(int) -> int`).
+* `fib`: 0.97× de C;
+* `loop`: 1.01×;
+* `matrix`: 0.97×.
+
+O benchmark de alocação mostra explicitamente o custo do Boehm GC, enquanto `--no-gc` reduz significativamente esse overhead.
+
+A metodologia completa está em [`docs/engineering/benchmarks.md`](docs/engineering/benchmarks.md).
+
+### Memória com GC ou controle manual
+
+O runtime usa **Boehm GC** por padrão, mas Lumina também oferece:
+
+* escape analysis;
+* stack allocation para determinados `alloc(N)`;
+* `--no-gc`;
+* `malloc`/`free` sem GC;
+* `nil` como null pointer real;
+* `@safe` para null checks automáticos;
+* `?.` para navegação segura explícita.
+
+### Metaprogramação em compile-time
+
+Lumina possui:
+
+* `@macro`;
+* macros de expressão e statement;
+* `@derive`;
+* `comptime`;
+* constant folding;
+* atributos LLVM como `@inline`, `@noinline`, `@cold` e `@hot`.
+
+### Tooling completo
+
+O ecossistema inclui:
+
+* compilador LLVM;
+* JIT;
+* REPL persistente;
+* LSP;
+* formatter;
+* linter;
+* documentação automática;
+* FFI binding generator;
+* build incremental;
+* cross-compilation;
+* Web Playground;
+* linker próprio.
 
 ---
 
-## 🚀 Quickstart
+# 🚀 Quickstart
 
-### 1. Pré-requisitos
+## 1. Pré-requisitos
+
+### Ubuntu/Debian
 
 ```bash
-# Ubuntu/Debian
 sudo apt install -y llvm-14 clang libgc-dev python3.11 python3-pip
+```
 
-# Fedora
+### Fedora
+
+```bash
 sudo dnf install -y llvm-devel clang gc-devel python3.11
 ```
 
-### 2. Instale
+Para desenvolvimento completo, incluindo testes de cross-compilation:
+
+```bash
+sudo apt install -y qemu-user
+```
+
+---
+
+## 2. Clone o projeto
 
 ```bash
 git clone https://github.com/adamgabriel701/Lumina.git
 cd Lumina
-pip install -e .
-```
-
-### 3. Rode seu primeiro programa
-
-```bash
-lumina new ola
-cd ola
-lumina run main.lm
-# Hello from ola!
 ```
 
 ---
 
-## 👀 A linguagem em 60 segundos
+## 3. Instale
 
-Um programa que exercita ADTs, pattern matching, closures, `defer` e `?` de uma vez:
+Para uso:
+
+```bash
+pip install -e .
+```
+
+Para desenvolvimento:
+
+```bash
+pip install -e ".[dev]"
+```
+
+---
+
+## 4. Crie seu primeiro projeto
+
+```bash
+lumina new ola
+
+cd ola
+
+lumina run main.lm
+```
+
+Saída:
+
+```text
+Hello from ola!
+```
+
+---
+
+# 👀 A linguagem em 60 segundos
+
+Um programa combinando enums, pattern matching, guards, `for`, F-strings e I/O:
 
 ```lumina
-import "std/result"
 import "std/io"
 
 enum Resposta:
@@ -90,397 +200,1062 @@ fn interpretar(r: Resposta) -> str:
     match r:
         case Texto(s) if s.starts_with("olá"):
             return "saudação"
-        case Texto(s):  return s
-        case Numero(n): return $"número: {n}"
-        case Vazia:     return "—"
+
+        case Texto(s):
+            return s
+
+        case Numero(n):
+            return $"número: {n}"
+
+        case Vazia:
+            return "—"
+
     return "?"
 
 fn main() -> int:
-    let respostas = [Texto("olá, mundo"), Numero(42), Vazia]
+    let respostas = [
+        Texto("olá, mundo"),
+        Numero(42),
+        Vazia
+    ]
+
     for i, r in respostas:
         let categoria = interpretar(r)
         write_line($"{i}: {categoria}")
+
     return 0
 ```
 
 Saída:
 
-```
+```text
 0: saudação
 1: número: 42
 2: —
 ```
 
-Mais 20 exemplos canônicos em **[`examples/`](examples/)** — closures como callback, macros multi-statement, TCO mutual, `impl Trait for Box<int>`, enums genéricos.
+Mais exemplos estão disponíveis em [`examples/`](examples/).
 
 ---
 
-## 🧠 Modelo de memória
+# 🧠 Modelo de memória
 
-Uma pergunta que merece resposta direta em linguagem de sistemas:
+Lumina possui diferentes estratégias de gerenciamento dependendo do contexto:
 
-| Situação | O que acontece |
-|---|---|
-| `alloc(N)` com `N` variável | **Boehm GC** (`GC_malloc`) |
-| `alloc(N)` com `N` literal e sem escape | **stack** (`alloca`), via escape analysis |
-| `free(x)` explícito | **Boehm GC** (`GC_free`), sem stack alloc |
-| `--no-gc` | Usa `malloc`/`free` da libc |
-| `--target=wasm` | Força `--no-gc` (WASM sem libgc) |
-| `ptr` | ponteiro bruto (`i64*`) |
-| `str` | `i8*` null-terminated |
-| `nil` | null pointer C-style |
-| `none` | `Option::None` (enum) |
-| `u.id` sem `@safe` | acesso C-style — SIGSEGV se `u == nil` |
-| `u.id` com `@safe` | null check automático → retorna `0` |
-| `u?.id` (safe nav explícito) | null check mesmo sem `@safe` |
+| Situação                      | Comportamento                                           |
+| ----------------------------- | ------------------------------------------------------- |
+| `alloc(N)` com `N` variável   | Boehm GC (`GC_malloc`)                                  |
+| `alloc(N)` literal sem escape | Stack (`alloca`), quando permitido pela escape analysis |
+| `free(x)` explícito           | `GC_free` quando o objeto usa GC                        |
+| `--no-gc`                     | `malloc` / `free` da libc                               |
+| `--target=wasm`               | `--no-gc`                                               |
+| `ptr`                         | ponteiro bruto                                          |
+| `str`                         | `i8*` null-terminated                                   |
+| `nil`                         | null pointer C-style                                    |
+| `none`                        | `Option::None`                                          |
+| `u.id` sem `@safe`            | acesso direto                                           |
+| `u.id` com `@safe`            | null check automático                                   |
+| `u?.id`                       | navegação segura explícita                              |
 
-O **Boehm GC** é inicializado uma vez em `main` (`GC_init()`), antes de qualquer alocação. `--no-gc` remove essa chamada e usa `malloc` — útil para kernels, embarcados e WASM.
+O Boehm GC é inicializado antes das alocações que dependem dele.
 
-Detalhes de implementação em **[`docs/internals.md`](docs/internals.md#gc)**.
+Com `--no-gc`, Lumina pode ser utilizada em ambientes nos quais o runtime de GC não está disponível ou não é desejado.
 
----
-
-## 🔥 Features por tema
-
-### Sistema de tipos
-
-- **Inferência estática** em retornos, lambdas, binárias, generics, `Option<T>`, tuplas e `comptime`.
-- **Enums multi-payload** com variantes bare (`let c = Red`), match exaustivo e destructuring.
-- **Pattern matching** com guard (`case Circle(r) if r > 10`), multi-pattern (`case 1 | 2 | 3`), wildcard (`case _`) e self-binding (`case s if s.contains("x")`).
-- **Generics com monomorphization**, incluindo **aninhados** (`fn put<T>(b: Box<T>, val: T)`).
-- **Traits com métodos default** e **especialização em tipo concreto** (`impl Getter for Box<int>`).
-- **Type aliases**, inclusive genéricos (`type IPair<B> = Pair<int, B>`).
-- **Tipos de função com assinatura** (`fn(int) -> int`), checados em compile-time.
-- **Tuplas** com destructuring heterogêneo (`let (a, b) = (1, "x")`).
-- **`nil` (null pointer) e `none` (`Option::None`)** como conceitos distintos.
-
-### Memória e segurança
-
-- **Boehm GC** por padrão; **escape analysis** promove `alloc(N)` constantes ao stack.
-- **`--no-gc`** para bare-metal e WASM.
-- **`@safe`** opt-in para null check em `MemberExpr`/`IndexExpr`.
-- **`nil`** como null real (não wrapper), compatível com FFI.
-- **`free(x)`** explícito desativa stack alloc (correção de segurança).
-
-### Concorrência
-
-- **Canais CSP** (`std/channel`) com `pthread_mutex` + `pthread_cond`.
-- **Green threads** e corrotinas via `ucontext` (experimental).
-- **I/O assíncrono** com `epoll` (`std/epoll`) e `O_NONBLOCK` (`std/async_fs`).
-- **Servidor HTTP** de exemplo em `std/http` com ~5.8k req/s (epoll).
-
-### Metaprogramação
-
-- **`@macro` com duas formas**: expressão (`nome(args)`) e statement (`nome!(args)`).
-- **`@derive(Eq, PartialEq, Debug, Display, Clone, Default)`**.
-- **`comptime` real** com constant folding de literais e aritmética.
-- **Atributos LLVM** (`@inline`, `@noinline`, `@cold`, `@hot`).
-
-### Tooling
-
-- **Linker próprio** (`lumina build --linker=self`): substitui `clang`/`ld` por `llc` + `lumina-ld` + runtime freestanding. ELF estático, sem libc, sem dynamic linker. Documentação em [`docs/internals/linking.md`](docs/internals/linking.md).
-- **LSP completo** com escopo qualificado: hover (`main::i` vs `helper::i`), go-to-def, references, rename, outline, semantic tokens.
-- **Linter** (`lumina lint`): W001..W005, exit code = nº de warnings, `--format=json` para CI.
-- **Formatter** que preserva comentários, `@attrs`, multi-pattern e wildcard.
-- **REPL persistente** com `:history`, `:decls`, `:clear`.
-- **Auto-docs** (`lumina doc`) a partir de comentários `##`.
-- **Bind FFI** (`lumina bind header.h`) gera `extern fn` de headers C.
-- **Web Playground** (JIT ao vivo).
-- **Cross-compile** para ARM64, ARMv7, RISC-V, i386, WASM.
-- **Compilação incremental** com cache invalidation por hash (inclui fontes do compilador).
-
-### Otimizações
-
-- **Tail Call Optimization** para self-recursion **e mutual recursion** (SCC dispatcher).
-- **Defers emitidos em tail calls** (correção silenciosa).
-- **Escape analysis** (`alloc(N)` const sem escape → `alloca`).
-- **`opt -O2`** no IR antes do clang, apenas em `--release`.
-- **`-O0` / `-O2` / `-O3`** + DWARF debug info.
+Mais detalhes em [`docs/internals.md`](docs/internals.md).
 
 ---
 
-## 🔗 Linker próprio
+# 🔥 Features por tema
 
-O Lumina tem um linker estático ELF x86_64 escrito em C, invocado via
-`lumina build --linker=self`. Ele substitui o `clang`/`ld` na etapa de link,
-produzindo um executável **totalmente estático**, sem libc, sem dynamic
-linker, sem Boehm GC — a runtime (`rt.c`) implementa as funções que o
-codegen emite direto sobre syscalls Linux.
+## Sistema de tipos
+
+* **Inferência estática** em retornos, lambdas, expressões binárias, generics, `Option<T>`, tuplas e `comptime`.
+* **Enums multi-payload** com variantes bare.
+* **Pattern matching** com:
+
+  * guards;
+  * multi-pattern;
+  * wildcard;
+  * destructuring;
+  * self-binding.
+* **Generics com monomorphization**.
+* Generics aninhados.
+* **Traits com métodos default**.
+* Especialização para tipos concretos.
+* **Type aliases**, inclusive genéricos.
+* **Tipos de função** como `fn(int) -> int`.
+* **Tuplas** com destructuring heterogêneo.
+* Distinção entre `nil` e `none`.
+
+Exemplo:
+
+```lumina
+type Pair<T>:
+    first: T
+    second: T
+
+fn swap<T>(p: Pair<T>) -> Pair<T>:
+    return Pair(
+        first = p.second,
+        second = p.first
+    )
+```
+
+---
+
+## Memória e segurança
+
+* Boehm GC por padrão.
+* Escape analysis.
+* Stack allocation para determinadas alocações.
+* `--no-gc`.
+* `@safe`.
+* `nil` como ponteiro nulo real.
+* `free`.
+* Compatibilidade com FFI.
+
+---
+
+## Concorrência
+
+Lumina possui suporte para:
+
+* canais CSP;
+* `pthread_mutex`;
+* `pthread_cond`;
+* green threads;
+* corrotinas via `ucontext`;
+* I/O assíncrono;
+* `epoll`;
+* `O_NONBLOCK`.
+
+Alguns desses componentes continuam sendo **experimentais** e possuem exemplos marcados como `SKIP` na suíte de exemplos.
+
+---
+
+## Metaprogramação
+
+### Macros
+
+```lumina
+@macro
+fn hello():
+    println("Hello!")
+```
+
+Lumina suporta macros de expressão e macros multi-statement utilizando a sintaxe:
+
+```text
+nome!(args)
+```
+
+### Derive
+
+```lumina
+@derive(Eq, PartialEq, Debug, Display, Clone, Default)
+struct User:
+    id: int
+    name: str
+```
+
+### Compile-time
+
+```lumina
+comptime:
+    ...
+```
+
+Constant folding é realizado durante a compilação quando aplicável.
+
+---
+
+# 🛠️ Tooling
+
+## Linker próprio
+
+Lumina possui um linker ELF estático próprio:
 
 ```bash
-# Baseline (clang + glibc)
-$ lumina build examples/main.lm
-$ file examples/main
-examples/main: ELF 64-bit LSB pie executable, dynamically linked, ...
-
-# Linker próprio
-$ lumina build examples/main.lm --linker=self
-$ file examples/main
-examples/main: ELF 64-bit LSB executable, statically linked
-
-$ ./examples/main
+lumina build app.lm --linker=self
 ```
 
-**Cobertura atual** (`linker/triagem.sh examples`):
+O `lumina-ld` substitui a etapa de link convencional para o alvo **Linux x86_64**, utilizando uma runtime freestanding própria.
 
+O resultado pode ser um executável:
+
+```text
+ELF 64-bit LSB executable, statically linked
 ```
-PASS=56  FAIL-COMPILE=0  FAIL-LINK=0  FAIL-RUN=0  SKIP=15
-```
 
-Os 15 skips têm motivo documentado: 1 módulo auxiliar, e 14 que dependem de subsistemas fora do escopo do linker (pthread, raylib, FFI C++, WASM, servidores que não terminam). Detalhes de arquitetura, extensão e debug em **[`docs/internals/linking.md`](docs/internals/linking.md)**.
+sem depender do dynamic linker do sistema.
 
----
+> **Importante:** o linker próprio atualmente é destinado ao **x86_64 Linux**. Cross-compilation e WebAssembly utilizam o linker LLVM/Clang.
 
-## 📚 Exemplos
+Documentação:
 
-**[`examples/`](examples/)** tem 71 arquivos cobrindo:
-
-| Categoria | Exemplos |
-|---|---|
-| **Fundamentos** | `features.lm`, `features_showcase.lm`, `ergonomia.lm` |
-| **Generics & types** | `generics_test.lm`, `monomorph_test.lm`, `nested_generics.lm` |
-| **Closures & HOFs** | `lambda_test.lm`, `iter_test.lm`, `iterator_test.lm` |
-| **Traits & impls** | `trait_test.lm`, `trait_default_test.lm`, `overload_test.lm` |
-| **Pattern matching** | `match_expr_test.lm`, `match_struct_test.lm`, `destructure_test.lm` |
-| **Macros** | `comptime_test.lm`, `macro_test.lm` |
-| **Concorrência** | `threads.lm`, `coroutines.lm`, `async_server.lm` |
-| **I/O e web** | `http_framework.lm`, `server.lm`, `proxy.lm` |
-| **FFI & raylib** | `ffi_test.lm`, `chip8.lm`, `engine.lm` |
-| **Projetos maiores** | `json_parser.lm`, `sql_engine.lm`, `vm.lm`, `search_engine.lm` |
-| **Bare-metal & WASM** | `wasm_math.lm`, `wasm_memory.lm`, `wasm_js_interop.lm` |
-
-Verificação automatizada: **[`scripts/check_examples.sh`](scripts/check_examples.sh)**
-compila e roda cada um. Suporta `--linker=self` para usar o linker próprio
-na etapa de link. Ver [`docs/internals/linking.md`](docs/internals/linking.md)
-para detalhes.
+[`docs/internals/linking.md`](docs/internals/linking.md)
 
 ---
 
-## 📊 Status
+## LSP
 
-**Alpha / Active.** A linguagem funciona end-to-end para uso real, com cobertura de testes em cada camada:
+O LSP oferece recursos como:
 
-| Métrica | Valor | Referência |
-|---|---|---|
-| Testes pytest | **434 passed** | [`docs/engineering/tests.md`](docs/engineering/tests.md) |
-| Exemplos compilando | **54 PASS / 17 SKIP / 0 FAIL** (clang) | [`scripts/check_examples.sh`](scripts/check_examples.sh) |
-| Exemplos com linker próprio | **56 PASS / 15 SKIP / 0 FAIL** | [`linker/triagem.sh`](linker/triagem.sh) |
-| Suite standalone | **28/28** | [`run_tests.py`](run_tests.py) |
-| LSP | **8 passed** | [`lumina-vscode/tests/`](lumina-vscode/tests/) |
-
-Testes cobrem **runtime end-to-end** (não só parser/semantic) — cada bug histórico tem teste de regressão. A lista completa de fixes com sintoma, causa e teste associado está em **[`docs/engineering/bugs.md`](docs/engineering/bugs.md)**.
+* hover;
+* go-to-definition;
+* references;
+* rename;
+* outline;
+* semantic tokens;
+* resolução de nomes considerando escopo.
 
 ---
 
-## ⚡ Performance
-
-Mediana de 20 execuções com [`hyperfine`](https://github.com/sharkdp/hyperfine),
-afinidade fixa em vCPU 1 (`taskset -c 1`), warmup 3, N passado por `argv`.
-Host: AMD EPYC 7763 (2 vCPUs compartilhadas, Codespace). Todos os tempos em ms.
-C compilado com **clang 18.1.3** (mesmo backend do Lumina).
-
-| Teste | C -O3 | Rust -O3 | **Lumina --release** | Go | **Lumina / C** |
-| :--- | ---: | ---: | ---: | ---: | ---: |
-| Fibonacci (N=35) | 32.9 | 32.1 | **31.9** | 62.2 | **0.97×** |
-| Crivo de Eratóstenes (10M) | 21.8 | 21.7 | 24.3 | 35.9 | 1.11× |
-| Loop matemático (100M) | 88.1 | 96.8 | **88.9** | 82.6 | **1.01×** |
-| Matriz 200×200 (int64) | 5.5 | 8.0 | **5.4** | 14.3 | **0.97×** |
-| Alloc churn (1M, GC) | 13.3 | — | 50.0 | — | 3.77× |
-
-**Variantes `--no-gc` (item #4 do roadmap):**
-
-| Bench | GC | no-GC | Custo do GC |
-| :--- | ---: | ---: | ---: |
-| primes (1 alloc de 10 MB) | 27.8 | **23.5** | 15% |
-| alloc_churn (1M allocs) | 50.0 | **12.2** | 76% |
-
-**Destaques:**
-
-- **Compute-bound (matrix, loop):** **empata com C** (matrix: 5.4 vs 5.5; loop: 88.9 vs 88.1). Mesmo backend LLVM; codegen comparável.
-- **Call-heavy (fib):** **empata com C e Rust** (31.9 vs 32.9 / 32.1). A vantagem histórica de "1.25×" era gcc-vs-clang, não Lumina-vs-C.
-- **Memory-bound (primes):** 11% atrás de C. O gap está em **System time** — ~3 ms de CPU do `GC_malloc` na alocação inicial de 10 MB. `--no-gc` fecha o gap (23.5 ms, empata com C).
-- **Churn (alloc_churn):** 3.77× com GC. O `--no-gc` empata com C (12.2 vs 13.3) — o Boehm GC tem custo real em churn pequeno, e este benchmark **mede isso**.
-
-**Caveats honestos:**
-
-- VM compartilhada: IQR/mediana de 5–60% em várias linhas. A **mediana** é o número reportável; `mean ± σ` seria enganoso (o σ de `fib_c` foi 3.9 ms sobre uma média de 21.9 ms em uma das rodadas).
-- C compilado com **clang**, não gcc. Com gcc, `fib_c` cai para ~21 ms — mas aí mede-se `gcc vs clang`, não `C vs Lumina`. O script permite `CC=gcc ./bench.sh` para quem quiser o comparativo cross-compiler.
-- Matrix em `int64` nos três. Vetorização: **nenhum** dos compiladores vetoriza o hot loop do matmul 200×200 — é memory-bound no L2 (~1 MB de working set). Os 7 `vector.body` do Lumina são loops de inicialização, não o matmul.
-
-Metodologia completa (flags exatos, código de cada benchmark, critérios de descarte, `bench.sh` comentado) em **[`docs/engineering/benchmarks.md`](docs/engineering/benchmarks.md)**.
-
----
-
-## 🛠️ CLI
+## Linter
 
 ```bash
-# Projeto
-lumina new meu_projeto              # cria lumina.toml + main.lm
-lumina install                      # baixa deps github:* para lumina_modules/
-lumina bind header.h nome           # gera FFI bindings de um header C
+lumina lint arquivo.lm
+```
 
-# Compilar & executar
-lumina run arquivo.lm               # compila e executa (propaga exit code)
-lumina build arquivo.lm             # só compila
-lumina check arquivo.lm             # lexer + parser + semantic (rápido)
-lumina jit arquivo.lm               # executa via JIT
-lumina build app.lm --release       # -O3 + opt -O2 no IR
-lumina build app.lm --debug         # -O0 + DWARF
-lumina build app.lm --wasm          # WebAssembly (força --no-gc)
-lumina build app.lm --no-gc         # bare-metal
-lumina build app.lm --linker=self   # usa lumina-ld (ELF estático)
+Warnings disponíveis atualmente:
+
+```text
+W001
+W002
+W003
+W004
+W005
+```
+
+Para integração com ferramentas:
+
+```bash
+lumina lint arquivo.lm --format=json
+```
+
+O exit code corresponde ao número de warnings encontrados.
+
+---
+
+## Formatter
+
+```bash
+lumina fmt arquivo.lm
+```
+
+O formatter preserva elementos importantes do código, incluindo comentários, atributos e construções específicas da linguagem.
+
+---
+
+## REPL
+
+```bash
+lumina repl
+```
+
+Com comandos como:
+
+```text
+:history
+:decls
+:clear
+```
+
+---
+
+## Documentação automática
+
+```bash
+lumina doc
+```
+
+Formatos disponíveis:
+
+```bash
+lumina doc --format=html
+lumina doc --format=md
+lumina doc --format=json
+```
+
+---
+
+## FFI
+
+O comando:
+
+```bash
+lumina bind header.h nome
+```
+
+gera bindings para headers C.
+
+A integração com C/C++ continua tendo áreas que dependem do ambiente e de componentes externos.
+
+---
+
+# 🔗 Linker próprio
+
+O linker é composto por:
+
+```text
+linker/
+├── Makefile
+├── rt.c
+├── start.S
+├── lumina-ld
+├── test.sh
+└── triagem.sh
+```
+
+A runtime freestanding implementa as operações necessárias diretamente sobre syscalls Linux.
+
+Exemplo:
+
+```bash
+cd linker
+make
+```
+
+Depois:
+
+```bash
+lumina build examples/main.lm --linker=self
+```
+
+O pipeline pode ser visualizado como:
+
+```text
+Lumina source
+     │
+     ▼
+  Lexer
+     │
+     ▼
+  Parser
+     │
+     ▼
+ Semantic analysis
+     │
+     ▼
+  LLVM IR
+     │
+     ▼
+   clang -c
+     │
+     ▼
+  ELF objects
+     │
+     ▼
+ lumina-ld
+     │
+     ▼
+Static ELF x86_64
+```
+
+A triagem atual do linker apresenta:
+
+```text
+PASS=53
+FAIL-COMPILE=0
+FAIL-LINK=0
+FAIL-RUN=0
+SKIP=18
+```
+
+Os skips correspondem principalmente a exemplos que dependem de subsistemas fora do escopo atual do linker, como pthread, raylib, FFI C++, WASM ou servidores que não terminam automaticamente.
+
+Veja [`docs/internals/linking.md`](docs/internals/linking.md) para detalhes de arquitetura, runtime, símbolos, debugging e extensão.
+
+---
+
+# 📚 Exemplos
+
+O diretório [`examples/`](examples/) contém **71 arquivos** cobrindo diferentes partes da linguagem.
+
+| Categoria             | Exemplos                                                            |
+| --------------------- | ------------------------------------------------------------------- |
+| **Fundamentos**       | `features.lm`, `features_showcase.lm`, `ergonomia.lm`               |
+| **Generics & types**  | `generics_test.lm`, `monomorph_test.lm`, `nested_generics.lm`       |
+| **Closures & HOFs**   | `lambda_test.lm`, `iter_test.lm`, `iterator_test.lm`                |
+| **Traits & impls**    | `trait_test.lm`, `trait_default_test.lm`, `overload_test.lm`        |
+| **Pattern matching**  | `match_expr_test.lm`, `match_struct_test.lm`, `destructure_test.lm` |
+| **Macros**            | `comptime_test.lm`, `macro_test.lm`                                 |
+| **Concorrência**      | `threads.lm`, `coroutines.lm`, `async_server.lm`                    |
+| **I/O e web**         | `http_framework.lm`, `server.lm`, `proxy.lm`                        |
+| **FFI & raylib**      | `ffi_test.lm`, `chip8.lm`, `engine.lm`                              |
+| **Projetos maiores**  | `json_parser.lm`, `sql_engine.lm`, `vm.lm`, `search_engine.lm`      |
+| **Bare-metal & WASM** | `wasm_math.lm`, `wasm_memory.lm`, `wasm_js_interop.lm`              |
+
+A verificação automatizada pode ser executada com:
+
+```bash
+./scripts/check_examples.sh --run
+```
+
+Resultado atual:
+
+```text
+54 PASS
+17 SKIP
+0 FAIL
+```
+
+---
+
+# 📊 Status
+
+**Active / Public Release**
+
+O compilador possui pipeline end-to-end funcional, uma suíte extensa de testes e ferramentas suficientes para desenvolver, testar e experimentar programas reais em Lumina.
+
+## Verificação atual
+
+| Métrica           |                      Resultado |
+| ----------------- | -----------------------------: |
+| Testes `pytest`   |                 **440 passed** |
+| Suite standalone  |                      **28/28** |
+| Exemplos          | **54 PASS / 17 SKIP / 0 FAIL** |
+| Triagem do linker | **53 PASS / 18 SKIP / 0 FAIL** |
+
+### Pytest
+
+```bash
+pytest tests/ -q
+```
+
+Resultado:
+
+```text
+440 passed in 139.78s (0:02:19)
+```
+
+### Suite standalone
+
+```bash
+python3 run_tests.py
+```
+
+Resultado:
+
+```text
+28/28 verifications OK
+```
+
+### Exemplos
+
+```bash
+./scripts/check_examples.sh --run
+```
+
+Resultado:
+
+```text
+54 PASS / 17 SKIP / 0 FAIL
+```
+
+### Linker
+
+```bash
+./linker/triagem.sh examples
+```
+
+Resultado:
+
+```text
+PASS=53
+FAIL-COMPILE=0
+FAIL-LINK=0
+FAIL-RUN=0
+SKIP=18
+```
+
+## Exemplos atualmente ignorados
+
+Os exemplos que aparecem como `SKIP` na verificação atual incluem:
+
+```text
+api
+app
+async_server
+bootstrap_lexer
+chip8
+coroutines
+database
+engine
+ffi_test
+gc_test
+http_framework
+json_parser
+proxy
+serve
+server
+threads
+util
+wasm_js_interop
+```
+
+Os motivos variam conforme o exemplo e incluem dependências externas, subsistemas experimentais, FFI, WASM ou programas que não possuem comportamento adequado para execução automática na triagem.
+
+Os motivos detalhados devem ser consultados em [`docs/engineering/bugs.md`](docs/engineering/bugs.md).
+
+---
+
+# ⚡ Performance
+
+Os benchmarks utilizam mediana de 20 execuções, com 3 warm-ups e afinidade fixa em uma vCPU.
+
+Host utilizado no benchmark:
+
+| Item   | Valor                    |
+| ------ | ------------------------ |
+| CPU    | AMD EPYC 7763 @ 3.24 GHz |
+| vCPUs  | 2 compartilhadas         |
+| RAM    | 7.9 GiB                  |
+| SO     | Ubuntu 24.04.4 LTS       |
+| Kernel | 6.8.0-1064-azure         |
+
+Toolchain:
+
+| Linguagem | Configuração      |
+| --------- | ----------------- |
+| C         | clang 18.1.3      |
+| Rust      | 1.98.1, `-O3`     |
+| Go        | 1.27.0            |
+| Node.js   | 24.20.0           |
+| Python    | 3.14.2            |
+| Lumina    | HEAD, `--release` |
+
+## Resultados
+
+| Teste                      |   C -O3 | Rust -O3 | **Lumina --release** |      Go | **Lumina / C** |
+| -------------------------- | ------: | -------: | -------------------: | ------: | -------------: |
+| Fibonacci (N=35)           | 32.9 ms |  32.1 ms |          **31.9 ms** | 62.2 ms |      **0.97×** |
+| Crivo de Eratóstenes (10M) | 21.8 ms |  21.7 ms |              24.3 ms | 35.9 ms |          1.11× |
+| Loop matemático (100M)     | 88.1 ms |  96.8 ms |          **88.9 ms** | 82.6 ms |      **1.01×** |
+| Matriz 200×200             |  5.5 ms |   8.0 ms |           **5.4 ms** | 14.3 ms |      **0.97×** |
+| Alloc churn (1M)           | 13.3 ms |        — |              50.0 ms |       — |          3.77× |
+
+## GC vs `--no-gc`
+
+| Benchmark   |      GC |   `--no-gc` |
+| ----------- | ------: | ----------: |
+| primes      | 27.8 ms | **23.5 ms** |
+| alloc_churn | 50.0 ms | **12.2 ms** |
+
+O benchmark de `alloc_churn` demonstra diretamente o custo do GC em workloads com muitas pequenas alocações.
+
+Por outro lado, `--no-gc` permite aproximar o comportamento de um runtime baseado em `malloc`/`free`.
+
+### Observações
+
+* Os números foram coletados em uma VM compartilhada.
+* A mediana é utilizada para reduzir o impacto de outliers.
+* C é compilado com **clang**, não gcc, para manter o backend de comparação alinhado com LLVM.
+* `--no-gc` é especialmente relevante para workloads com alta frequência de alocações.
+* Os benchmarks devem ser interpretados junto com a metodologia completa.
+
+Metodologia, código e resultados históricos:
+
+[`docs/engineering/benchmarks.md`](docs/engineering/benchmarks.md)
+
+---
+
+# 🛠️ CLI
+
+## Projetos
+
+```bash
+lumina new meu_projeto
+lumina install
+lumina bind header.h nome
+```
+
+## Compilar e executar
+
+```bash
+lumina run arquivo.lm
+lumina build arquivo.lm
+lumina check arquivo.lm
+lumina jit arquivo.lm
+```
+
+## Modos de build
+
+```bash
+lumina build app.lm --release
+lumina build app.lm --debug
+lumina build app.lm --wasm
+lumina build app.lm --no-gc
+lumina build app.lm --linker=self
+```
+
+## Targets
+
+```bash
 lumina build app.lm --target=aarch64-linux-gnu
-
-# Qualidade
-lumina test arquivo.lm              # suíte de testes nativa
-lumina lint arquivo.lm              # W001..W005
-lumina fmt arquivo.lm               # formatter (preserva comentários)
-lumina doc --format=html|md|json
-
-# Interativo
-lumina repl                         # REPL persistente
-lumina playground [porta]           # playground web (padrão 8080)
-
-# Manutenção
-lumina clean                        # limpa cache e binários
+lumina build app.lm --target=arm-linux-gnueabihf
+lumina build app.lm --target=riscv64-linux-gnu
+lumina build app.lm --target=i386-linux-gnu
 ```
 
-Exit codes: `run` propaga o do binário; `test` = nº de falhas; `lint` = nº de warnings; `build`/`check` = 0/1. `--error-format=json` é pipe-safe (progresso vai para stderr).
+## Qualidade
 
-Detalhes de cada comando em **[`docs/ferramental.md`](docs/ferramental.md)**.
+```bash
+lumina test arquivo.lm
+lumina lint arquivo.lm
+lumina fmt arquivo.lm
+lumina doc
+```
+
+## Interativo
+
+```bash
+lumina repl
+lumina playground
+```
+
+## Manutenção
+
+```bash
+lumina clean
+```
+
+### Exit codes
+
+| Comando | Exit code             |
+| ------- | --------------------- |
+| `run`   | exit code do programa |
+| `test`  | número de falhas      |
+| `lint`  | número de warnings    |
+| `build` | `0`/`1`               |
+| `check` | `0`/`1`               |
+
+Para ferramentas de CI:
+
+```bash
+--error-format=json
+```
+
+O progresso é enviado para `stderr`, permitindo que a saída estruturada seja consumida por outras ferramentas.
+
+Mais detalhes em [`docs/ferramental.md`](docs/ferramental.md).
 
 ---
 
-## 🌍 Cross-compilation
+# 🌍 Cross-compilation
+
+Lumina suporta diferentes targets através do backend LLVM e dos toolchains disponíveis no ambiente.
 
 ```bash
-lumina build app.lm --target=aarch64-linux-gnu      # ARM64
-lumina build app.lm --target=arm-linux-gnueabihf    # ARMv7
-lumina build app.lm --target=riscv64-linux-gnu      # RISC-V 64
-lumina build app.lm --target=i386-linux-gnu         # x86 32-bit
-lumina build app.lm --target=wasm32-wasi --wasm     # WebAssembly
+lumina build app.lm --target=aarch64-linux-gnu
+lumina build app.lm --target=arm-linux-gnueabihf
+lumina build app.lm --target=riscv64-linux-gnu
+lumina build app.lm --target=i386-linux-gnu
 ```
 
-Requer toolchain do target no PATH:
+## Toolchains
+
+Em Ubuntu/Debian:
 
 ```bash
-sudo apt install -y gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf \
-                    gcc-riscv64-linux-gnu qemu-user
+sudo apt install -y \
+    gcc-aarch64-linux-gnu \
+    gcc-arm-linux-gnueabihf \
+    gcc-riscv64-linux-gnu \
+    qemu-user
 ```
 
-`libgc` precisa estar cross-compilada para o target, ou use `--no-gc`.
+Dependendo do modo de runtime utilizado, `libgc` também precisa estar disponível para o target.
 
-**Nota:** `--linker=self` só suporta x86_64 nativo. Para cross-compile ou
-WASM, use `--linker=clang` (o padrão).
+Para ambientes sem Boehm GC:
 
-### WebAssembly
+```bash
+lumina build app.lm --no-gc
+```
+
+### Limitação do linker próprio
+
+O `lumina-ld` atualmente suporta:
+
+```text
+x86_64 Linux
+```
+
+Para outros targets, utilize o linker LLVM/Clang:
+
+```bash
+lumina build app.lm --linker=clang
+```
+
+---
+
+# 🕸️ WebAssembly
+
+Lumina também pode gerar WebAssembly.
+
+Exemplo:
 
 ```lumina
 export fn fib(n: int) -> int:
     if n <= 1:
         return n
+
     return fib(n - 1) + fib(n - 2)
 ```
+
+Compile:
 
 ```bash
 lumina build math.lm --wasm
 ```
 
+O modo WASM utiliza `--no-gc`.
+
+Exemplo de consumo:
+
 ```javascript
 WebAssembly.instantiateStreaming(fetch("math.wasm"))
-  .then(obj => console.log(obj.instance.exports.fib(35)));
+    .then(obj => console.log(obj.instance.exports.fib(35)));
 ```
 
 ---
 
-## 📖 Documentação
+# 🧪 Testes
 
-| Documento | Para quem |
-|---|---|
-| [**Guia Rápido**](docs/guia-rapido.md) | Instalação, primeiro programa, CLI essencial |
-| [**Linguagem**](docs/linguagem.md) | Referência completa da sintaxe |
-| [**Standard Library**](docs/stdlib.md) | `math`, `sort`, `io`, `result`, `map`, `json`... |
-| [**Ferramental**](docs/ferramental.md) | CLI, LSP, formatter, linter, REPL |
-| [**Internals**](docs/internals.md) | Pipeline, codegen LLVM, TCO, escape analysis, GC |
-| [**Linker**](docs/internals/linking.md) | `lumina-ld` — arquitetura, runtime, integração, extensão |
-| [**Contributing**](docs/contributing.md) | Setup de dev, estilo, checklist de PR |
+Lumina possui testes em múltiplas camadas:
 
-Material de engenharia (para quem mexe no compilador):
+```text
+tests/
+├── parser
+├── semantic
+├── codegen
+├── runtime
+├── compiler
+└── integration
+```
 
-- [`docs/engineering/bugs.md`](docs/engineering/bugs.md) — lista completa de bugs corrigidos + identificados (sintoma, causa, teste)
-- [`docs/engineering/tests.md`](docs/engineering/tests.md) — os 428 testes por arquivo
-- [`docs/engineering/benchmarks.md`](docs/engineering/benchmarks.md) — metodologia completa dos benchmarks
+Execute a suíte principal:
+
+```bash
+pytest tests/ -q
+```
+
+Resultado atual:
+
+```text
+440 passed in 139.78s
+```
+
+Suite adicional:
+
+```bash
+python3 run_tests.py
+```
+
+Resultado:
+
+```text
+28/28 verifications OK
+```
+
+Exemplos end-to-end:
+
+```bash
+./scripts/check_examples.sh --run
+```
+
+Resultado:
+
+```text
+54 PASS / 17 SKIP / 0 FAIL
+```
+
+Triagem do linker:
+
+```bash
+./linker/triagem.sh examples
+```
+
+Resultado:
+
+```text
+PASS=53 FAIL-COMPILE=0 FAIL-LINK=0 FAIL-RUN=0 SKIP=18
+```
 
 ---
 
-## 🤝 Contributing
+# 🐛 Engenharia e regressões
 
-Contribuições são bem-vindas. Antes de abrir um PR:
+O projeto mantém documentação específica para bugs e regressões:
 
-```bash
-pytest tests/ -q                                  # 434 passed
-python3 run_tests.py                              # 28/28
-./scripts/check_examples.sh --run                 # 54 PASS / 17 SKIP / 0 FAIL
-./linker/triagem.sh examples                      # 56 PASS / 15 SKIP / 0 FAIL
-lumina fmt --check <arquivos>                     # se mexeu em .lm
-lumina lint <arquivos>                            # sem novos warnings
+[`docs/engineering/bugs.md`](docs/engineering/bugs.md)
+
+Cada correção relevante deve, quando aplicável, possuir:
+
+```text
+sintoma
+   ↓
+causa
+   ↓
+correção
+   ↓
+teste de regressão
 ```
 
-Se você mexeu no linker, rode também:
+Entre as correções recentes estão problemas envolvendo:
+
+* terminadores ausentes em determinados exemplos;
+* stack growth causado por `alloca` dentro de loops;
+* monomorphization de tipos genéricos;
+* resolução de métodos em `impl`;
+* nomes canônicos de tipos;
+* traits default;
+* closures;
+* codegen de `ret void`;
+* parâmetros via `argv`;
+* proteção contra dead-code elimination em benchmarks.
+
+---
+
+# 📖 Documentação
+
+| Documento                                                          | Conteúdo                           |
+| ------------------------------------------------------------------ | ---------------------------------- |
+| [`docs/README.md`](docs/README.md)                                 | Índice da documentação             |
+| [`docs/guia-rapido.md`](docs/guia-rapido.md)                       | Instalação e primeiros passos      |
+| [`docs/linguagem.md`](docs/linguagem.md)                           | Referência da linguagem            |
+| [`docs/stdlib.md`](docs/stdlib.md)                                 | Standard Library                   |
+| [`docs/ferramental.md`](docs/ferramental.md)                       | CLI, LSP, formatter, linter e REPL |
+| [`docs/internals.md`](docs/internals.md)                           | Pipeline e internals               |
+| [`docs/internals/linking.md`](docs/internals/linking.md)           | Linker próprio e runtime           |
+| [`docs/contributing.md`](docs/contributing.md)                     | Desenvolvimento e contribuição     |
+| [`docs/engineering/bugs.md`](docs/engineering/bugs.md)             | Bugs e regressões                  |
+| [`docs/engineering/tests.md`](docs/engineering/tests.md)           | Organização dos testes             |
+| [`docs/engineering/benchmarks.md`](docs/engineering/benchmarks.md) | Metodologia dos benchmarks         |
+
+---
+
+# 🤝 Contributing
+
+Contribuições são bem-vindas.
+
+Antes de abrir um PR:
 
 ```bash
-( cd linker && make clean && make )
+pytest tests/ -q
+
+python3 run_tests.py
+
+./scripts/check_examples.sh --run
+
+./linker/triagem.sh examples
+
+lumina fmt --check <arquivos>
+
+lumina lint <arquivos>
+```
+
+Se você modificou o linker:
+
+```bash
+cd linker
+make clean
+make
+cd ..
+
 ./scripts/check_examples.sh --run --linker=self
 ```
 
-Checklist completo, estilo de código, como adicionar features e onde pedir ajuda em **[`docs/contributing.md`](docs/contributing.md)**.
+Consulte [`docs/contributing.md`](docs/contributing.md) para:
+
+* setup de desenvolvimento;
+* estilo de código;
+* estrutura do projeto;
+* processo de contribuição;
+* criação de novas features;
+* testes;
+* checklist de PR.
 
 ---
 
-## 📜 Licença
+# 🏗️ Estrutura do projeto
 
-MIT. Veja [LICENSE](LICENSE).
+```text
+Lumina/
+├── lumina/                 # Compilador
+├── lumina_cli/             # CLI
+├── lumina-vscode/          # LSP / extensão VS Code
+├── std/                    # Standard Library
+├── tests/                  # Testes
+├── examples/               # Exemplos
+├── docs/                   # Documentação
+├── scripts/                # Scripts auxiliares
+├── linker/                 # lumina-ld + runtime freestanding
+├── benchmarks/             # Benchmarks
+├── run_tests.py            # Suite standalone
+├── CHANGELOG.md            # Histórico de versões
+└── README.md               # Este documento
+```
 
 ---
 
-## 🗺️ Roadmap
+# 🗺️ Roadmap
 
-**Concluído:**
+## Concluído
 
-- [x] Lexer/parser/AST com indentação significativa
-- [x] Codegen LLVM + JIT + REPL persistente
-- [x] Generics (aninhados), traits, pattern matching
-- [x] Cross-compile (`--target`)
-- [x] TCO self-recursion **e** mutual recursion
-- [x] Boehm GC, escape analysis, `--no-gc`
-- [x] `nil`, `@safe`, `@macro`, `defer` com escopo de bloco
-- [x] `for x in arr`, `for i, x in arr`, tuplas
-- [x] Closures com captura (fat pointer unificado)
-- [x] `fn(int) -> int` como tipo checado
-- [x] `impl Box<T>` **e** `impl Trait for Box<int>`
-- [x] Enums genéricos, type aliases (incl. genéricos)
-- [x] Macros multi-statement (`nome!(args)`)
-- [x] Linter, formatter, `lumina doc`, LSP completo
-- [x] **`black_box(x)`** — primitiva nativa anti-DCE
-- [x] **`argv(i)` / `atoi`** — parametrização por linha de comando
-- [x] **Benchmarks comparáveis** em todas as 5 suites (`bench.sh` com clang, `-fwrapv`, `--no-gc`)
-- [x] **Linker próprio** (`lumina-ld`) — ELF estático x86_64, runtime freestanding, paridade com clang no `check_examples.sh`
-- [x] **Codegen `ret void` implícito** — funções sem `return` explícito não causam mais segfault no linker próprio
-- [x] **Hoisting de `alloca`** — variáveis locais em loops não estouram a pilha
+* [x] Lexer/parser/AST com indentação significativa
+* [x] Codegen LLVM
+* [x] JIT
+* [x] REPL persistente
+* [x] Generics
+* [x] Generics aninhados
+* [x] Monomorphization
+* [x] Traits
+* [x] Métodos default
+* [x] Pattern matching
+* [x] Multi-pattern
+* [x] Guards
+* [x] Destructuring
+* [x] Enums multi-payload
+* [x] Enums genéricos
+* [x] Type aliases
+* [x] Tuplas
+* [x] Closures com captura
+* [x] Tipos de função
+* [x] `impl Box<T>`
+* [x] `impl Trait for Box<int>`
+* [x] Boehm GC
+* [x] Escape analysis
+* [x] `--no-gc`
+* [x] `nil`
+* [x] `@safe`
+* [x] `defer` com escopo de bloco
+* [x] `@macro`
+* [x] Macros multi-statement
+* [x] `comptime`
+* [x] `for x in arr`
+* [x] `for i, x in arr`
+* [x] Tail Call Optimization
+* [x] Mutual recursion
+* [x] Formatter
+* [x] Linter
+* [x] `lumina doc`
+* [x] LSP
+* [x] FFI bindings
+* [x] Build incremental
+* [x] Cross-compilation
+* [x] WebAssembly
+* [x] `black_box(x)`
+* [x] `argv(i)`
+* [x] `atoi`
+* [x] Benchmarks comparáveis
+* [x] Linker próprio
+* [x] Runtime freestanding
+* [x] ELF estático x86_64
+* [x] Codegen de `ret void`
+* [x] Hoisting de `alloca`
 
-**Em aberto:**
+## Em aberto
 
-- [ ] Safe-by-default global (sem `@safe` explícito)
-- [ ] Macros com quasiquote
-- [ ] Self-hosting (bootstrapping)
-- [ ] Package registry
-- [ ] Code actions (quick fixes) no LSP
-- [ ] Inlay hints no LSP
-- [ ] **Escape analysis** para arrays com N dinâmico mas loop-bounded
-- [ ] **`std/alloc` arena** como primitiva de 1ª classe para churn controlado
-- [ ] **Aliasing hints** (`restrict`/`noalias`) expostos em Lumina
-- [ ] **Linker: pthreads** (`pthread_create` via `clone()` + TLS)
-- [ ] **Linker: cross-compile** (linkers separados para aarch64, riscv64)
-- [ ] **Linker: W^X** (dois segmentos `PT_LOAD` em vez de um RWX)
+* [ ] Safe-by-default global
+* [ ] Macros com quasiquote
+* [ ] Self-hosting / bootstrapping
+* [ ] Package registry
+* [ ] Code actions no LSP
+* [ ] Inlay hints no LSP
+* [ ] Escape analysis para arrays com tamanho dinâmico mas loop-bounded
+* [ ] `std/alloc` com arenas como primitiva de primeira classe
+* [ ] Aliasing hints (`restrict` / `noalias`)
+* [ ] Suporte a pthreads no linker próprio
+* [ ] Linker próprio para AArch64
+* [ ] Linker próprio para RISC-V
+* [ ] Suporte W^X no linker próprio
 
-Detalhes do que já foi feito em **[CHANGELOG.md](CHANGELOG.md)**.
+O roadmap é evolutivo; itens marcados como concluídos representam funcionalidades presentes no estado atual do projeto, enquanto itens em aberto não fazem parte do contrato de estabilidade atual.
+
+Veja [`CHANGELOG.md`](CHANGELOG.md) para o histórico detalhado.
+
+---
+
+# 📜 Versionamento
+
+Lumina segue [Semantic Versioning](https://semver.org/) como referência para versões públicas.
+
+O histórico completo está em:
+
+[`CHANGELOG.md`](CHANGELOG.md)
+
+Para uma mudança relevante na linguagem, o changelog deve documentar:
+
+* alteração de sintaxe;
+* alteração semântica;
+* impacto na compatibilidade;
+* novos recursos;
+* bugs corrigidos;
+* testes relevantes.
+
+---
+
+# 📌 Estado atual
+
+O estado atual do projeto pode ser resumido assim:
+
+```text
+Compiler             ████████████████████  Functional
+LLVM backend         ████████████████████  Functional
+Type system          ████████████████████  Functional
+Generics             ████████████████████  Functional
+Pattern matching     ████████████████████  Functional
+Macros/comptime      ████████████████████  Functional
+GC / memory          ████████████████████  Functional
+CLI                  ████████████████████  Functional
+LSP                  ████████████████████  Functional
+Formatter/linter     ████████████████████  Functional
+JIT/REPL             ████████████████████  Functional
+Cross compilation    ████████████████████  Available
+WebAssembly          ████████████████████  Available
+Own linker            ████████████████████  x86_64 Linux
+Self-hosting         ███░░░░░░░░░░░░░░░░░  Planned
+Package registry     ███░░░░░░░░░░░░░░░░░  Planned
+```
+
+A suíte atual fornece uma base de regressão significativa:
+
+```text
+440 pytest tests
+28/28 standalone verifications
+54 example PASS
+0 example FAIL
+0 linker compile failures
+0 linker link failures
+0 linker runtime failures
+```
+
+Os `SKIP` existentes são explícitos e documentados, em vez de serem tratados como falhas silenciosas.
+
+---
+
+# 📦 Licença
+
+Lumina é distribuída sob a licença **MIT**.
+
+Veja [`LICENSE`](LICENSE).
+
+---
+
+# 🔗 Links
+
+* **Repositório:** [https://github.com/adamgabriel701/Lumina](https://github.com/adamgabriel701/Lumina)
+* **Documentação:** [`docs/`](docs/README.md)
+* **Changelog:** [`CHANGELOG.md`](CHANGELOG.md)
+* **Exemplos:** [`examples/`](examples/)
+* **Benchmarks:** [`benchmarks/`](benchmarks/)
+* **Issues:** [https://github.com/adamgabriel701/Lumina/issues](https://github.com/adamgabriel701/Lumina/issues)
+
+---
+
+<p align="center">
+
+**Lumina — uma linguagem de sistemas construída do compilador ao linker.**
+
+</p>

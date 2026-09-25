@@ -932,7 +932,7 @@ class LuminaLSP:
             'return', 'print', 'true', 'false', 'match', 'case', 'default',
             'and', 'or', 'not', 'struct', 'enum', 'extern', 'import', 'defer',
             'break', 'continue', 'assert', 'bench', 'trait', 'comptime', 'as',
-            'impl', 'switch', 'export', 'none', 'nil',
+            'impl', 'switch', 'export', 'none', 'nil', 'quote',
         ]
         for kw in keywords:
             items.append({"label": kw, "kind": 14, "detail": "Lumina Keyword"})

@@ -295,8 +295,14 @@ class DeclarationParser(StatementParser):
         if not self.check(TokenType.RPAREN):
             while True:
                 p_name = self.expect(TokenType.IDENT).value
-                self.expect(TokenType.COLON)
-                p_type = self.parse_type()
+                # ADR 0003: tipo opcional em parâmetros de função.
+                # Sem anotação, o parâmetro recebe o tipo `"auto"`,
+                # interpretado como "type param" pelo semantic
+                # (aceita qualquer coisa). Usado principalmente em
+                # macros `@macro`, cujos params recebem nós de AST.
+                p_type = "auto"
+                if self.match(TokenType.COLON):
+                    p_type = self.parse_type()
                 default_val = None
                 if self.match(TokenType.ASSIGN):
                     default_val = self.parse_expression()

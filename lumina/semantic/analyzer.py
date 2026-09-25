@@ -160,8 +160,15 @@ class SemanticAnalyzer(
                     )
 
         # Passada 3: corpos de funções e métodos de impl.
+        #
+        # ADR 0003: corpos de macros são **pulados**. Usam
+        # `quote:`/`~`/`~@`/`gensym` — construções que não têm
+        # semântica de runtime. A expansão em si gera AST que será
+        # analisada/gerada no call site.
         for decl in declarations:
             if isinstance(decl, Function):
+                if decl.name in self.macros:
+                    continue
                 self.analyze_function(decl)
             elif isinstance(decl, ImplBlock):
                 for method in decl.methods:

@@ -309,6 +309,12 @@ class OperatorsMixin:
                 null = ir.Constant(val.type, None)
                 return self.builder.icmp_signed("==", val, null, name="not_ptr")
             return val
+        elif node.op == '~':
+            # ADR 0003: `~x` fora de quote: é bitwise NOT (int).
+            if isinstance(val.type, ir.IntType):
+                return self.builder.not_(val, name="bitnot")
+            # Fallback: tipo desconhecido — retorna como está.
+            return val
         return val
 
     def visit_CastExpr(self, node):

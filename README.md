@@ -6,11 +6,12 @@
 [![LLVM](https://img.shields.io/badge/LLVM-14%2B-blue.svg)](https://llvm.org/)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg?logo=python\&logoColor=white)](https://www.python.org/)
 [![Status](https://img.shields.io/badge/Status-Active-success.svg)](#-status)
-[![Tests](https://img.shields.io/badge/tests-523%20passed-brightgreen.svg)](docs/engineering/tests.md)
+[![Tests](https://img.shields.io/badge/tests-510%20passed-brightgreen.svg)](docs/engineering/tests.md)
 [![Examples](https://img.shields.io/badge/examples-55%20pass%20%2F%2016%20skip-success.svg)](examples/)
 [![Benchmarks](https://img.shields.io/badge/benchmarks-5%20suites-blue.svg)](benchmarks/results/)
 [![Cross-compile](https://img.shields.io/badge/cross--compile-arm64%20%7C%20armv7%20%7C%20risc--v%20%7C%20wasm-blueviolet.svg)](#-cross-compilation)
 [![Linker](https://img.shields.io/badge/linker-lumina--ld-orange.svg)](docs/internals/linking.md)
+[![Slices](https://img.shields.io/badge/slices-%5BT%5D-important.svg)](#-slices)
 
 **Lumina** é uma linguagem de programação de sistemas com sintaxe limpa baseada em indentação, backend **LLVM** e foco em ergonomia moderna, controle de memória, performance e tooling.
 
@@ -20,25 +21,29 @@ A linguagem possui:
 
 * sintaxe baseada em indentação significativa;
 * inferência de tipos;
+* **safe-by-default** com `@unsafe` como opt-out;
 * generics e monomorphization;
 * traits com métodos default;
 * enums algébricos com múltiplos payloads;
 * pattern matching;
 * closures;
-* macros e `comptime`;
+* **macros com quasiquote** (`quote:` / `~` / `~@`);
+* `comptime`;
 * TCO (self e mutual recursion);
 * arrays tipados (int, float, str);
+* **slices `[T]`** — views tipadas e com comprimento;
 * Boehm GC + `--no-gc`;
-* escape analysis;
+* escape analysis + VLA;
 * FFI;
 * concorrência e I/O assíncrono;
 * backend LLVM;
 * JIT e REPL;
-* LSP;
+* LSP com inlay hints e code actions;
 * formatter e linter;
 * compilação incremental;
 * cross-compilation;
 * WebAssembly;
+* **lexer self-hosted** em `.lm`;
 * linker ELF próprio para **x86_64 Linux**.
 
 📖 **Documentação completa em [`docs/`](docs/README.md).**
@@ -64,6 +69,22 @@ fn main() -> int:
 
 O objetivo é manter o código compacto sem sacrificar recursos normalmente encontrados em linguagens de sistemas.
 
+### Segurança por padrão
+
+Null checks são o comportamento padrão. Nada de `@safe` em cada função — `@unsafe` é o opt-out para hot paths que precisam de acesso direto.
+
+```lumina
+struct U:
+    id: int
+
+fn get_id(u: U) -> int:
+    return u.id        # retorna 0 se u == nil
+
+@unsafe
+fn hot_get_id(u: U) -> int:
+    return u.id        # SIGSEGV se u == nil — mais rápido
+```
+
 ### Performance próxima de C
 
 O backend LLVM permite que Lumina gere código nativo competitivo em workloads computacionais.
@@ -78,28 +99,38 @@ O benchmark de alocação mostra explicitamente o custo do Boehm GC, enquanto `-
 
 A metodologia completa está em [`docs/engineering/benchmarks.md`](docs/engineering/benchmarks.md).
 
-### Memória com GC ou controle manual
+### Slices em vez de `(ptr, len)`
 
-O runtime usa **Boehm GC** por padrão, mas Lumina também oferece:
+Slices `[T]` são views tipadas e com comprimento — sem alocação, sem parâmetros duplos:
 
-* escape analysis;
-* stack allocation para determinados `alloc(N)`;
-* `--no-gc`;
-* `malloc`/`free` sem GC;
-* `nil` como null pointer real;
-* `@safe` para null checks automáticos;
-* `?.` para navegação segura explícita.
+```lumina
+fn sum(s: [float]) -> float:
+    mut total = 0.0
+    for x in s:
+        total += x
+    return total
 
-### Metaprogramação em compile-time
+fn main() -> int:
+    let v = [1.5, 2.5, 3.5]
+    print(sum(v[..]))       # view zero-copy
+    return 0
+```
 
-Lumina possui:
+### Metaprogramação com quasiquote
 
-* `@macro`;
-* macros de expressão e statement;
-* `@derive`;
-* `comptime`;
-* constant folding;
-* atributos LLVM como `@inline`, `@noinline`, `@cold` e `@hot`.
+Macros podem construir AST — não apenas substituir texto:
+
+```lumina
+@macro
+fn unless(cond, body):
+    quote:
+        if not ~cond:
+            ~body
+
+fn main() -> int:
+    unless(1 > 100, print("nunca"))
+    return 0
+```
 
 ### Tooling completo
 
@@ -108,7 +139,7 @@ O ecossistema inclui:
 * compilador LLVM;
 * JIT;
 * REPL persistente;
-* LSP;
+* LSP (hover, definition, references, rename, inlay hints, code actions);
 * formatter;
 * linter;
 * documentação automática;
@@ -116,7 +147,8 @@ O ecossistema inclui:
 * build incremental;
 * cross-compilation;
 * Web Playground;
-* linker próprio.
+* linker próprio;
+* **lexer self-hosted em `.lm`**.
 
 ---
 
@@ -247,17 +279,19 @@ Lumina possui diferentes estratégias de gerenciamento dependendo do contexto:
 
 | Situação                      | Comportamento                                           |
 | ----------------------------- | ------------------------------------------------------- |
-| `alloc(N)` com `N` variável   | Boehm GC (`GC_malloc`)                                  |
+| `alloc(N)` com `N` variável   | Boehm GC (`GC_malloc`) se inseguro, senão VLA           |
 | `alloc(N)` literal sem escape | Stack (`alloca`), quando permitido pela escape analysis |
+| `alloc(N)` dinâmico seguro    | Stack (`alloca` VLA) — não em loop, no topo, sem escape |
 | `free(x)` explícito           | `GC_free` quando o objeto usa GC                        |
 | `--no-gc`                     | `malloc` / `free` da libc                               |
 | `--target=wasm`               | `--no-gc`                                               |
 | `ptr`                         | ponteiro bruto                                          |
 | `str`                         | `i8*` null-terminated                                   |
+| `[T]`                         | slice `{T*, i64}` — view com comprimento                |
 | `nil`                         | null pointer C-style                                    |
 | `none`                        | `Option::None`                                          |
-| `u.id` sem `@safe`            | acesso direto                                           |
-| `u.id` com `@safe`            | null check automático                                   |
+| `u.id` (default)              | null check automático                                   |
+| `u.id` com `@unsafe`          | acesso direto (mais rápido, mais perigoso)              |
 | `u?.id`                       | navegação segura explícita                              |
 
 O Boehm GC é inicializado antes das alocações que dependem dele.
@@ -279,7 +313,7 @@ Mais detalhes em [`docs/internals.md`](docs/internals.md).
 
 ## Sistema de tipos
 
-* **Inferência estática** em retornos, lambdas, expressões binárias, generics, `Option<T>`, tuplas e `comptime`.
+* **Inferência estática** em retornos, lambdas, expressões binárias, generics, `Option<T>`, tuplas, slices e `comptime`.
 * **Enums multi-payload** com variantes bare.
 * **Pattern matching** com:
 
@@ -302,7 +336,21 @@ Mais detalhes em [`docs/internals.md`](docs/internals.md).
 * **Type aliases**, inclusive genéricos e encadeados.
 * **Tipos de função** como `fn(int) -> int`.
 * **Tuplas** com destructuring heterogêneo.
+* **Slices `[T]`** — views tipadas e com comprimento.
 * Distinção entre `nil` e `none`.
+
+## Safe-by-default
+
+A partir da v0.7.0, null checks são o comportamento padrão:
+
+* `u.id` com `u == nil` retorna `0` (em vez de SIGSEGV).
+* `s[i]` com `i` fora dos limites em slices retorna `0`.
+* `@unsafe` desliga os checks explicitamente.
+
+Herança:
+
+* Closures, cópias especializadas de genéricos e membros de SCCs (mutual TCO) herdam `_safe_mode`.
+* `@unsafe` na função externa propaga para a closure.
 
 ## Arrays tipados
 
@@ -321,15 +369,54 @@ print(precos[1])    # float (não bits do f64)
 print(nomes[0])     # str   (não ponteiro formatado como int)
 ```
 
-Sliding:
+## Slices
+
+O tipo `[T]` é uma **view** sobre região contígua de memória —
+`{T*, i64}` — sem alocação.
 
 ```lumina
-let s = v[1..3]     # fatia [1, 3)
-let t = v[1..]      # até o fim (usa array_lengths)
-let u = v[..]       # cópia completa
+fn sum(s: [float]) -> float:
+    mut total = 0.0
+    for x in s:
+        total += x
+    return total
+
+fn main() -> int:
+    let v = [1.5, 2.5, 3.5]
+    print(sum(v[..]))       # 7.5
+    print(sum(v[1..]))      # 5.5
+    return 0
 ```
 
-Slicing preserva o tipo do elemento: `[f64;N] → f64*`, `[str;N] → i8**`.
+Funciona em:
+
+```lumina
+let v = [1, 2, 3, 4, 5]
+let s = v[1..4]             # [int], view de v[1..4]
+
+print(len(s))               # 3
+print(s[0])                 # 2
+print(s.data)               # ptr para v[1]
+print(s.len)                # 3
+
+for x in s: print(x)        # itera 2, 3, 4
+
+let sub = s[1..]            # [int], view dentro da view
+```
+
+Builtins:
+
+```lumina
+let p: ptr = ...
+let s = as_slice(p, 10)     # [int] — view sobre p[0..10]
+let w = view(p, 2, 7)       # [int] — view sobre p[2..7]
+```
+
+Sub-slicing e views são **zero-copy**.
+
+**Nota sobre migração:** a partir da v0.8.0, `v[a..b]` retorna
+`[T]` em vez de cópia `T*`. Strings mantêm retrocompat. A flag
+`--legacy-slice-copy` restaura o comportamento anterior.
 
 ## Literais numéricos
 
@@ -347,10 +434,10 @@ let f = 1e10        # float com expoente
 ## Memória e segurança
 
 * Boehm GC por padrão.
-* Escape analysis.
+* Escape analysis (VLA para `alloc(N)` dinâmico seguro).
 * Stack allocation para determinadas alocações.
 * `--no-gc`.
-* `@safe`.
+* **Safe-by-default** com `@unsafe` como opt-out.
 * `nil` como ponteiro nulo real.
 * `free`.
 * Compatibilidade com FFI.
@@ -372,18 +459,57 @@ Alguns desses componentes continuam sendo **experimentais** e possuem exemplos m
 
 ## Metaprogramação
 
-### Macros
+### Macros com substituição
 
 ```lumina
 @macro
-fn hello():
-    println("Hello!")
+fn dobro(x: int) -> int:
+    return x * 2
+
+fn main() -> int:
+    let a = 5
+    print(dobro(a + 1))   # (5+1)*2 = 12
+    return 0
 ```
 
-Lumina suporta macros de expressão e macros multi-statement utilizando a sintaxe:
+### Macros com quasiquote
 
-```text
-nome!(args)
+`quote:` constrói AST em compile-time. `~x` interpola o AST de `x`;
+`~@xs` espalha uma lista de nós.
+
+```lumina
+@macro
+fn unless(cond, body):
+    quote:
+        if not ~cond:
+            ~body
+
+fn main() -> int:
+    let x = 10
+    unless(x > 100, print("pequeno"))
+    return 0
+```
+
+Corpo da macro pode conter `let`, `if`, `while`, `return` para
+scaffolding:
+
+```lumina
+@macro
+fn choose(flag: int, a, b):
+    if flag > 0:
+        return quote: ~a
+    return quote: ~b
+```
+
+`gensym(name)` gera bindings únicos:
+
+```lumina
+@macro
+fn double(x):
+    let tmp = gensym("tmp")
+    quote:
+        let ~tmp = ~x
+        ~tmp + ~tmp
 ```
 
 ### Derive
@@ -420,6 +546,19 @@ x ^= 0xFF   # x = x ^ 0xFF
 ```
 
 O lvalue é resolvido **uma única vez** — `arr[f()] += v` chama `f()` uma vez, não duas.
+
+## Lexer self-hosted
+
+O lexer em `lumina_core/lexer.lm` tem paridade funcional com o lexer
+Python:
+
+* `INDENT` / `DEDENT` via `indent_stack`.
+* `paren_depth` para supressão de `NEWLINE` em `(...)`, `[...]`, `{...}`.
+* Suporte a `\r\n` (CRLF).
+* `0b` / `0o` / `0x` — paridade com o lexer Python.
+* DEDENT final + `EOF`.
+
+O parser self-hosted está em desenvolvimento em `lumina_core/parser.lm`.
 
 ---
 
@@ -461,6 +600,8 @@ O LSP oferece recursos como:
 * rename;
 * outline;
 * semantic tokens;
+* **inlay hints** (tipo inferido para `let x = 10`);
+* **code actions** ("Anotar tipo inferido: `x: int`");
 * resolução de nomes considerando escopo.
 
 ---
@@ -497,7 +638,7 @@ O exit code corresponde ao número de warnings encontrados.
 lumina fmt arquivo.lm
 ```
 
-O formatter preserva elementos importantes do código, incluindo comentários, atributos e construções específicas da linguagem.
+O formatter preserva elementos importantes do código, incluindo comentários, atributos, slices, `quote:` e `for x: T in arr`.
 
 ---
 
@@ -670,7 +811,7 @@ O compilador possui pipeline end-to-end funcional, uma suíte extensa de testes 
 
 | Métrica           |                      Resultado |
 | ----------------- | -----------------------------: |
-| Testes `pytest`   |                 **523 passed** |
+| Testes `pytest`   |                 **510 passed** |
 | Suite standalone  |                      **28/28** |
 | Exemplos          | **55 PASS / 16 SKIP / 0 FAIL** |
 | Triagem do linker | **59 PASS / 12 SKIP / 0 FAIL** |
@@ -684,7 +825,7 @@ pytest tests/ -q
 Resultado:
 
 ```text
-523 passed in 151.37s (0:02:31)
+510 passed in 141.61s (0:02:21)
 ```
 
 ### Suite standalone
@@ -882,6 +1023,13 @@ lumina playground
 lumina clean
 ```
 
+### Flags globais
+
+```bash
+--error-format=text|json
+--legacy-slice-copy            # restaura cópia em v[a..b] (será removida em v0.9.0)
+```
+
 ### Exit codes
 
 | Comando | Exit code             |
@@ -1005,43 +1153,15 @@ pytest tests/ -q
 Resultado atual:
 
 ```text
-523 passed in 151.37s
+510 passed in 141.61s
 ```
 
-Suite adicional:
+Suites adicionais:
 
 ```bash
-python3 run_tests.py
-```
-
-Resultado:
-
-```text
-28/28 verifications OK
-```
-
-Exemplos end-to-end:
-
-```bash
-./scripts/check_examples.sh --run
-```
-
-Resultado:
-
-```text
-55 PASS / 16 SKIP / 0 FAIL
-```
-
-Triagem do linker:
-
-```bash
-./linker/triagem.sh examples
-```
-
-Resultado:
-
-```text
-PASS=59 FAIL-COMPILE=0 FAIL-LINK=0 FAIL-RUN=0 SKIP=12
+python3 run_tests.py                    # 28/28
+./scripts/check_examples.sh --run       # 55 PASS / 16 SKIP / 0 FAIL
+./linker/triagem.sh examples            # PASS=59 FAIL-*=0 SKIP=12
 ```
 
 ---
@@ -1084,7 +1204,12 @@ Entre as correções recentes estão problemas envolvendo:
 * cases vazios em `match` (fallthrough);
 * `trait Marker:` sem corpo;
 * bloco `/* */` em coluna diferente do código ao redor;
-* literais binários (`0b`) e octais (`0o`).
+* literais binários (`0b`) e octais (`0o`);
+* `lumina/common/attrs.py` ausente;
+* `_analyze_for` hardcoded em `int`;
+* escape analysis conservadora em subscript;
+* `is_string` não computado em `visit_SliceExpr`;
+* `_build_expr` retornando primitivos Python em vez de nós de AST.
 
 ---
 
@@ -1103,6 +1228,12 @@ Entre as correções recentes estão problemas envolvendo:
 | [`docs/engineering/bugs.md`](docs/engineering/bugs.md)             | Bugs e regressões                  |
 | [`docs/engineering/tests.md`](docs/engineering/tests.md)           | Organização dos testes             |
 | [`docs/engineering/benchmarks.md`](docs/engineering/benchmarks.md) | Metodologia dos benchmarks         |
+
+ADRs:
+
+* [`docs/engineering/decisoes/0001-backend-llvm.md`](docs/engineering/decisoes/0001-backend-llvm.md)
+* [`docs/engineering/decisoes/0002-slice-types.md`](docs/engineering/decisoes/0002-slice-types.md)
+* [`docs/engineering/decisoes/0003-quasiquote.md`](docs/engineering/decisoes/0003-quasiquote.md)
 
 ---
 
@@ -1153,8 +1284,11 @@ Consulte [`docs/contributing.md`](docs/contributing.md) para:
 
 ```text
 Lumina/
-├── lumina/                 # Compilador
+├── lumina/                 # Compilador (Python)
 ├── lumina_cli/             # CLI
+├── lumina_core/            # Compilador self-hosted (.lm)
+│   ├── lexer.lm            # Lexer em Lumina
+│   └── parser.lm           # Parser em Lumina (em dev)
 ├── lumina-vscode/          # LSP / extensão VS Code
 ├── std/                    # Standard Library
 ├── tests/                  # Testes
@@ -1173,6 +1307,8 @@ Lumina/
 # 🗺️ Roadmap
 
 ## Concluído
+
+### Linguagem
 
 * [x] Lexer/parser/AST com indentação significativa
 * [x] Codegen LLVM
@@ -1198,14 +1334,19 @@ Lumina/
 * [x] `impl Box<T>`
 * [x] `impl Trait for Box<int>`
 * [x] Arrays tipados (`int`, `float`, `str`)
+* [x] **Slices `[T]` — views tipadas e com comprimento**
 * [x] Slice de array com `end` implícito
 * [x] Literais binários, octais e hex
 * [x] `x op= y` com avaliação única do lvalue
+* [x] **Safe-by-default global + `@unsafe` opt-out**
+* [x] **`for x: T in arr` — iteração tipada**
+* [x] **Escape analysis VLA para `alloc(N)` dinâmico**
+* [x] **Macros com quasiquote (`quote:` / `~` / `~@`)**
+* [x] `gensym()`
 * [x] Boehm GC
 * [x] Escape analysis
 * [x] `--no-gc`
 * [x] `nil`
-* [x] `@safe`
 * [x] `defer` com escopo de bloco
 * [x] `@macro`
 * [x] Macros multi-statement
@@ -1214,10 +1355,14 @@ Lumina/
 * [x] `for i, x in arr`
 * [x] Tail Call Optimization (self)
 * [x] Mutual recursion (SCC dispatcher)
+
+### Tooling
+
 * [x] Formatter
 * [x] Linter
 * [x] `lumina doc`
 * [x] LSP
+* [x] **LSP: inlay hints + code actions**
 * [x] FFI bindings
 * [x] Build incremental
 * [x] Cross-compilation
@@ -1226,6 +1371,9 @@ Lumina/
 * [x] `argv(i)` com bounds check
 * [x] `atoi`
 * [x] Benchmarks comparáveis
+
+### Linker / Runtime
+
 * [x] Linker próprio
 * [x] Runtime freestanding
 * [x] ELF estático x86_64
@@ -1234,15 +1382,22 @@ Lumina/
 * [x] W^X estrito no linker próprio
 * [x] Init runtime de globais `mut X = <não-literal>`
 
+### Self-hosting
+
+* [x] **Lexer self-hosted em `.lm`** (paridade funcional com Python)
+
 ## Em aberto
 
-* [ ] Safe-by-default global
-* [ ] Macros com quasiquote
-* [ ] Self-hosting / bootstrapping
+* [ ] Parser self-hosted em `.lm` (em desenvolvimento)
+* [ ] Self-hosting completo / bootstrapping
 * [ ] Package registry
-* [ ] Code actions no LSP
-* [ ] Inlay hints no LSP
-* [ ] Escape analysis para arrays com tamanho dinâmico mas loop-bounded
+* [ ] `bytes(s)` — slice de string como `[int]`
+* [ ] `copy(s: [T]) -> ptr` — migração programática
+* [ ] Migração de `std/*` para aceitar slices
+* [ ] Remoção de `--legacy-slice-copy` (v0.9.x)
+* [ ] Hygiene automática em macros
+* [ ] `~@` em statement position
+* [ ] `macro_rules!`-style pattern matching sobre AST
 * [ ] `std/alloc` com arenas como primitiva de primeira classe
 * [ ] Aliasing hints (`restrict` / `noalias`)
 * [ ] Suporte a pthreads no linker próprio
@@ -1273,6 +1428,14 @@ Para uma mudança relevante na linguagem, o changelog deve documentar:
 * bugs corrigidos;
 * testes relevantes.
 
+### Versões recentes
+
+* **v0.5.0** — linker próprio + runtime freestanding.
+* **v0.6.0** — otimizador O1, pattern matching de structs, arrays tipados, literais binários/octais, `CompoundAssignStmt`.
+* **v0.7.0** — safe-by-default, `for x: T in arr`, VLA, LSP inlay hints + code actions, lexer self-hosted.
+* **v0.8.0** — slices `[T]`, builtins `as_slice`/`view`, sub-slicing zero-copy. **Breaking:** `v[a..b]` retorna `[T]`.
+* **v0.9.0** — quasiquote (`quote:` / `~` / `~@`), `gensym()`, `QuoteInterpreter`.
+
 ---
 
 # 📌 Estado atual
@@ -1285,7 +1448,8 @@ LLVM backend         ███████████████████�
 Type system          ████████████████████  Functional
 Generics             ████████████████████  Functional
 Pattern matching     ████████████████████  Functional
-Macros/comptime      ████████████████████  Functional
+Slices [T]           ████████████████████  Functional
+Macros / quasiquote  ████████████████████  Functional
 GC / memory          ████████████████████  Functional
 CLI                  ████████████████████  Functional
 LSP                  ████████████████████  Functional
@@ -1294,14 +1458,16 @@ JIT/REPL             ███████████████████�
 Cross compilation    ████████████████████  Available
 WebAssembly          ████████████████████  Available
 Own linker            ████████████████████  x86_64 Linux
-Self-hosting         ███░░░░░░░░░░░░░░░░░  Planned
+Self-hosting lexer   ████████████████████  Functional
+Self-hosting parser  ████████████░░░░░░░░  In progress
+Self-hosting full    ███░░░░░░░░░░░░░░░░░  Planned
 Package registry     ███░░░░░░░░░░░░░░░░░  Planned
 ```
 
 A suíte atual fornece uma base de regressão significativa:
 
 ```text
-523 pytest tests
+510 pytest tests
 28/28 standalone verifications
 55 example PASS
 0 example FAIL

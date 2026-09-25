@@ -164,22 +164,28 @@ def test_macro_expr_still_works():
     assert "12" in out, f"out={out!r}"
 
 
-def test_macro_expr_multistatement_rejected():
-    """Macro multi-statement usada como expressão (sem `!`) deve falhar."""
+def test_macro_expr_multistatement_works():
+    """Macro multi-statement como expressão funciona (v0.9.0).
+
+    Antes da ADR 0003 Fase 2, uma macro com corpo multi-statement
+    só podia ser chamada como statement (`nome!(...)`). Agora o
+    `QuoteInterpreter` avalia `let`/`return` dentro do corpo,
+    então a chamada como expressão é válida.
+    """
     src = (
         '@macro\n'
-        'fn bad(x: int) -> int:\n'
+        'fn compute(x: int) -> int:\n'
         '    let y = x + 1\n'
         '    return y * 2\n'
         '\n'
         'fn main() -> int:\n'
-        '    print(bad(3))\n'
+        '    print(compute(3))\n'   # (3+1)*2 = 8
         '    return 0\n'
     )
-    out, rc = _build_fails(src)
-    assert rc != 0
-    assert "return <expr>" in out or "posição de statement" in out, f"out={out!r}"
-
+    out, rc = _run(src)
+    assert rc == 0, f"deveria compilar:\n{out}"
+    assert "8" in out, f"out={out!r}"
+    
 
 def test_macro_stmt_inside_loop():
     src = (

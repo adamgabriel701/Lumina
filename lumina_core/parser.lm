@@ -1,0 +1,1641 @@
+# lumina_core/parser.lm — Parser self-hosted da Lumina (Sprint 12)
+#
+# Porte completo do parser Python original para Lumina.
+# Cria uma AST utilizando um Arena Allocator (arrays paralelas globais)
+# para evitar a complexidade de gerenciamento manual de memória para structs.
+#
+# Cobre: declarações, statements, expressões, match/switch, etc.
+
+# ============================================================
+# Tokens (Espelham o lexer.lm)
+# ============================================================
+let T_EOF = 0
+let T_NEWLINE = 1
+let T_COMMENT = 2
+let T_IDENT = 3
+let T_NUMBER = 4
+let T_FLOAT = 5
+let T_STRING = 6
+let T_INDENT = 8
+let T_DEDENT = 9
+
+let T_LET = 10
+let T_MUT = 12
+let T_FN = 13
+let T_RETURN = 14
+let T_IF = 15
+let T_ELIF = 16
+let T_ELSE = 17
+let T_WHILE = 18
+let T_FOR = 19
+let T_IN = 20
+let T_BREAK = 21
+let T_CONTINUE = 22
+let T_DEFER = 23
+let T_MATCH = 25
+let T_CASE = 26
+let T_DEFAULT = 27
+let T_SWITCH = 28
+let T_STRUCT = 29
+let T_ENUM = 30
+let T_IMPL = 31
+let T_TRAIT = 32
+let T_IMPORT = 33
+let T_EXTERN = 34
+let T_ASSERT = 35
+let T_BENCH = 36
+let T_TEST = 37
+let T_COMPTIME = 38
+let T_EXPORT = 39
+let T_AS = 40
+let T_TYPE = 41
+let T_TRUE = 42
+let T_FALSE = 43
+let T_NONE = 44
+let T_NIL = 45
+let T_NOT = 46
+
+let T_PLUS = 50
+let T_MINUS = 51
+let T_STAR = 52
+let T_SLASH = 53
+let T_PERCENT = 54
+
+let T_AMP = 55
+let T_PIPE = 56
+let T_CARET = 57
+let T_TILDE = 58
+let T_SHL = 59
+let T_SHR = 60
+
+let T_EQ = 65
+let T_NEQ = 66
+let T_LT = 67
+let T_GT = 68
+let T_LTE = 69
+let T_GTE = 70
+let T_AND = 71
+let T_OR = 72
+let T_BANG = 73
+
+let T_ASSIGN = 80
+let T_PLUS_ASS = 81
+let T_MINUS_ASS = 82
+let T_STAR_ASS = 83
+let T_SLASH_ASS = 84
+
+let T_LPAREN = 90
+let T_RPAREN = 91
+let T_LBRACE = 92
+let T_RBRACE = 93
+let T_LBRACKET = 94
+let T_RBRACKET = 95
+let T_COMMA = 96
+let T_DOT = 97
+let T_DOT_DOT = 98
+let T_COLON = 99
+let T_COLON_ASS = 100
+let T_DCOLON = 101
+let T_SEMI = 102
+let T_ARROW = 103
+let T_FAT_ARROW = 104
+let T_QUESTION = 105
+let T_AT = 106
+let T_DOLLAR = 107
+
+# ============================================================
+# Arena Allocator para AST
+# ============================================================
+let MAX_NODES = 1000000
+
+let node_kinds: ptr
+let node_str_vals: ptr
+let node_int_vals: ptr
+let node_lines: ptr
+let node_cols: ptr
+let node_lefts: ptr
+let node_rights: ptr
+let node_nexts: ptr
+let node_bodys: ptr
+let node_count: int
+
+fn init_parser():
+    node_kinds = alloc(MAX_NODES)
+    node_str_vals = alloc(MAX_NODES)
+    node_int_vals = alloc(MAX_NODES)
+    node_lines = alloc(MAX_NODES)
+    node_cols = alloc(MAX_NODES)
+    node_lefts = alloc(MAX_NODES)
+    node_rights = alloc(MAX_NODES)
+    node_nexts = alloc(MAX_NODES)
+    node_bodys = alloc(MAX_NODES)
+    node_count = 0
+
+# Node Kinds
+let NK_PROGRAM = 0
+let NK_FUNCTION = 1
+let NK_PARAM = 2
+let NK_VAR_DECL = 3
+let NK_ASSIGN = 4
+let NK_RETURN = 5
+let NK_IF = 6
+let NK_WHILE = 7
+let NK_FOR = 8
+let NK_BREAK = 9
+let NK_CONTINUE = 10
+let NK_IMPORT = 11
+let NK_EXTERN = 12
+let NK_DEFER = 13
+let NK_ASSERT = 14
+let NK_BENCH = 15
+let NK_MATCH = 17
+let NK_SWITCH = 18
+let NK_COMPOUND_ASSIGN = 20
+let NK_DESTRUCTURE = 21
+
+let NK_BINARY = 50
+let NK_UNARY = 51
+let NK_NUMBER = 52
+let NK_STRING = 53
+let NK_BOOL = 54
+let NK_VARIABLE = 55
+let NK_CALL = 56
+let NK_ARRAY = 57
+let NK_INDEX = 58
+let NK_SLICE = 59
+let NK_MEMBER = 60
+let NK_ADDRESS_OF = 61
+let NK_DEREF = 62
+let NK_PROPAGATE = 63
+let NK_COMPTIME = 64
+let NK_STRUCT_LITERAL = 65
+let NK_CAST = 66
+let NK_LAMBDA = 67
+let NK_NONE = 68
+let NK_NIL = 69
+let NK_TUPLE = 70
+let NK_FSTRING = 72
+
+let NK_STRUCT_DECL = 100
+let NK_ENUM_DECL = 101
+let NK_TRAIT_DECL = 102
+let NK_IMPL_BLOCK = 103
+let NK_TYPE_ALIAS = 104
+let NK_FIELD = 105
+let NK_ENUM_VARIANT = 106
+
+fn new_node(kind: int, str_val: str, line: int, col: int) -> int:
+    let i = node_count
+    node_kinds[i] = kind
+    node_str_vals[i] = str_val
+    node_int_vals[i] = 0
+    node_lines[i] = line
+    node_cols[i] = col
+    node_lefts[i] = -1
+    node_rights[i] = -1
+    node_nexts[i] = -1
+    node_bodys[i] = -1
+    node_count = node_count + 1
+    return i
+
+# ============================================================
+# Estrutura do Parser
+# ============================================================
+struct TokenList:
+    types: ptr
+    values: ptr
+    lines: ptr
+    cols: ptr
+    size: int
+    cap: int
+
+struct Parser:
+    tokens: TokenList
+    pos: int
+    filename: str
+    source_code: str
+    no_struct_literal: int
+
+impl Parser:
+    # ---- Primitivas de Consumo ----
+    fn current_type() -> int:
+        if self.pos < self.tokens.size:
+            return self.tokens.types[self.pos]
+        return T_EOF
+
+    fn current_value() -> str:
+        if self.pos < self.tokens.size:
+            return self.tokens.values[self.pos] as str
+        return ""
+
+    fn current_line() -> int:
+        if self.pos < self.tokens.size:
+            return self.tokens.lines[self.pos]
+        return 0
+
+    fn current_col() -> int:
+        if self.pos < self.tokens.size:
+            return self.tokens.cols[self.pos]
+        return 0
+
+    fn check(t_type: int) -> int:
+        if self.current_type() == t_type:
+            return 1
+        return 0
+
+    fn consume():
+        self.pos = self.pos + 1
+
+    fn match(t_type: int) -> int:
+        if t_type == T_NEWLINE:
+            self._skip_trailing_comment()
+        if t_type == T_INDENT:
+            self._skip_newlines_and_comments()
+        if self.check(t_type) == 1:
+            self.consume()
+            return 1
+        return 0
+
+    fn expect(t_type: int):
+        if t_type == T_NEWLINE:
+            self._skip_trailing_comment()
+        if t_type == T_INDENT:
+            self._skip_newlines_and_comments()
+        if self.check(t_type) == 1:
+            return
+        let t = self.current_type()
+        let v = self.current_value()
+        print("Erro: Esperado ", t_type, ", mas encontrei ", t, " ('", v, "') na linha ", self.current_line(), " col ", self.current_col())
+        if self.current_type() != T_EOF:
+            self.consume()
+
+    fn peek_type(offset: int) -> int:
+        let p = self.pos + offset
+        if p < self.tokens.size:
+            return self.tokens.types[p]
+        return T_EOF
+
+    fn _skip_trailing_comment():
+        if self.current_type() == T_COMMENT:
+            if self.peek_type(1) == T_NEWLINE:
+                self.consume()
+
+    fn _skip_newlines_and_comments():
+        while self.current_type() == T_NEWLINE or self.current_type() == T_COMMENT:
+            self.consume()
+
+    # ---- Tipos ----
+    fn parse_type() -> str:
+        if self.check(T_LBRACKET) == 1:
+            self.consume()
+            let inner = self.parse_type()
+            self.expect(T_RBRACKET)
+            return "[" + inner + "]"
+
+        let type_name = ""
+        if self.check(T_FN) == 1:
+            self.consume()
+            if self.check(T_LPAREN) == 1:
+                self.consume()
+                let params = ""
+                if self.check(T_RPAREN) == 0:
+                    params = self.parse_type()
+                    while self.match(T_COMMA) == 1:
+                        params = params + "," + self.parse_type()
+                self.expect(T_RPAREN)
+                let ret = "void"
+                if self.match(T_ARROW) == 1:
+                    ret = self.parse_type()
+                type_name = "fn(" + params + ") -> " + ret
+            else:
+                type_name = "fn"
+        else:
+            type_name = self.current_value()
+            self.expect(T_IDENT)
+
+        if self.check(T_LT) == 1:
+            self.consume()
+            let args = self.parse_type()
+            while self.match(T_COMMA) == 1:
+                args = args + "," + self.parse_type()
+            self._expect_gt_for_type()
+            type_name = type_name + "<" + args + ">"
+        return type_name
+
+    fn _expect_gt_for_type():
+        let t = self.current_type()
+        if t == T_GT:
+            self.consume()
+            return
+        if t == T_SHR:
+            self.consume()
+            return
+        self.expect(T_GT)
+
+    fn parse_type_params() -> str:
+        self.expect(T_LT)
+        let params = self.current_value()
+        self.expect(T_IDENT)
+        while self.match(T_COMMA) == 1:
+            params = params + "," + self.current_value()
+            self.expect(T_IDENT)
+        self._expect_gt_for_type()
+        return params
+
+    # ---- Expressões ----
+    fn make_binary(op: str, left: int, right: int) -> int:
+        let n = new_node(NK_BINARY, op, 0, 0)
+        node_lefts[n] = left
+        node_rights[n] = right
+        return n
+
+    fn parse_expression() -> int:
+        let node = self.parse_logical()
+        while self.check(T_PIPE) == 1:
+            if self.peek_type(1) != T_GT:
+                break
+            self.consume()
+            self.consume()
+            let func_name = self.current_value()
+            self.expect(T_IDENT)
+            let callee = new_node(NK_VARIABLE, func_name, 0, 0)
+            let call = new_node(NK_CALL, "", 0, 0)
+            node_lefts[call] = callee
+            node_nexts[call] = node
+            node = call
+        return node
+
+    fn parse_logical() -> int:
+        let node = self.parse_bitwise_or()
+        while self.check(T_AND) == 1 or self.check(T_OR) == 1:
+            let op = self.current_value()
+            self.consume()
+            let right = self.parse_bitwise_or()
+            node = self.make_binary(op, node, right)
+        return node
+
+    fn parse_bitwise_or() -> int:
+        let node = self.parse_bitwise_xor()
+        while self.check(T_PIPE) == 1:
+            if self.peek_type(1) == T_GT:
+                break
+            let op = self.current_value()
+            self.consume()
+            let right = self.parse_bitwise_xor()
+            node = self.make_binary(op, node, right)
+        return node
+
+    fn parse_bitwise_xor() -> int:
+        let node = self.parse_bitwise_and()
+        while self.check(T_CARET) == 1:
+            let op = self.current_value()
+            self.consume()
+            let right = self.parse_bitwise_and()
+            node = self.make_binary(op, node, right)
+        return node
+
+    fn parse_bitwise_and() -> int:
+        let node = self.parse_comparison()
+        while self.check(T_AMP) == 1:
+            if self.peek_type(1) == T_AMP:
+                break
+            let op = self.current_value()
+            self.consume()
+            let right = self.parse_comparison()
+            node = self.make_binary(op, node, right)
+        return node
+
+    fn parse_comparison() -> int:
+        let node = self.parse_shift()
+        if self.check(T_EQ) == 1 or self.check(T_NEQ) == 1 or self.check(T_LT) == 1 or self.check(T_GT) == 1 or self.check(T_LTE) == 1 or self.check(T_GTE) == 1 or self.check(T_IN) == 1:
+            let op = self.current_value()
+            self.consume()
+            let right = self.parse_shift()
+            return self.make_binary(op, node, right)
+        return node
+
+    fn parse_shift() -> int:
+        let node = self.parse_range()
+        while self.check(T_SHL) == 1 or self.check(T_SHR) == 1:
+            let op = self.current_value()
+            self.consume()
+            let right = self.parse_range()
+            node = self.make_binary(op, node, right)
+        return node
+
+    fn parse_range() -> int:
+        let node = self.parse_additive()
+        while self.check(T_DOT_DOT) == 1:
+            self.consume()
+            let right = self.parse_additive()
+            node = self.make_binary("..", node, right)
+        return node
+
+    fn parse_additive() -> int:
+        let node = self.parse_term()
+        while self.check(T_PLUS) == 1 or self.check(T_MINUS) == 1:
+            let op = self.current_value()
+            self.consume()
+            let right = self.parse_term()
+            node = self.make_binary(op, node, right)
+        return node
+
+    fn parse_term() -> int:
+        let node = self.parse_factor()
+        while self.check(T_STAR) == 1 or self.check(T_SLASH) == 1 or self.check(T_PERCENT) == 1:
+            let op = self.current_value()
+            self.consume()
+            let right = self.parse_factor()
+            node = self.make_binary(op, node, right)
+        return node
+
+    fn parse_factor() -> int:
+        let t_type = self.current_type()
+        let t_val = self.current_value()
+        let t_line = self.current_line()
+        let t_col = self.current_col()
+
+        if t_type == T_COMPTIME:
+            self.consume()
+            if self.check(T_LPAREN) == 1:
+                self.consume()
+                let inner = self.parse_expression()
+                self.expect(T_RPAREN)
+                let n = new_node(NK_COMPTIME, "", t_line, t_col)
+                node_lefts[n] = inner
+                return self.parse_postfix(n)
+            let inner = self.parse_factor()
+            let n = new_node(NK_COMPTIME, "", t_line, t_col)
+            node_lefts[n] = inner
+            return self.parse_postfix(n)
+
+        if t_type == T_MATCH:
+            return self.parse_match_expr()
+
+        if t_type == T_DOLLAR:
+            self.consume()
+            let s = self.current_value()
+            self.expect(T_STRING)
+            let n = new_node(NK_FSTRING, s, t_line, t_col)
+            return self.parse_postfix(n)
+
+        if t_type == T_FN:
+            self.consume()
+            self.expect(T_LPAREN)
+            let params = new_node(NK_NONE, "", t_line, t_col)
+            let last_p = params
+            if self.check(T_RPAREN) == 0:
+                while 1 == 1:
+                    let p_name = self.current_value()
+                    self.expect(T_IDENT)
+                    self.expect(T_COLON)
+                    let p_type = self.parse_type()
+                    let p = new_node(NK_PARAM, p_name, t_line, t_col)
+                    node_str_vals[p] = p_name + ":" + p_type
+                    node_nexts[last_p] = p
+                    last_p = p
+                    if self.match(T_COMMA) == 0:
+                        break
+            self.expect(T_RPAREN)
+            let ret_type = "void"
+            if self.match(T_ARROW) == 1:
+                ret_type = self.parse_type()
+            
+            let lambda = new_node(NK_LAMBDA, "", t_line, t_col)
+            node_lefts[lambda] = node_nexts[params]
+            node_rights[lambda] = new_node(NK_NONE, ret_type, 0, 0)
+            
+            if self.match(T_FAT_ARROW) == 1:
+                let body = self.parse_expression()
+                node_bodys[lambda] = body
+            elif self.match(T_COLON) == 1:
+                if self.check(T_NEWLINE) == 1:
+                    self.expect(T_NEWLINE)
+                    self.expect(T_INDENT)
+                    let body = new_node(NK_NONE, "", 0, 0)
+                    let last = body
+                    while self.check(T_DEDENT) == 0 and self.check(T_EOF) == 0:
+                        if self.match(T_NEWLINE) == 1:
+                            continue
+                        let stmt = self.parse_statement()
+                        if stmt != -1:
+                            node_nexts[last] = stmt
+                            last = stmt
+                    self.expect(T_DEDENT)
+                    node_bodys[lambda] = node_nexts[body]
+                else:
+                    let body = self.parse_expression()
+                    node_bodys[lambda] = body
+            return lambda
+
+        if t_type == T_MINUS or t_type == T_PLUS:
+            self.consume()
+            let inner = self.parse_factor()
+            let n = new_node(NK_UNARY, t_val, t_line, t_col)
+            node_lefts[n] = inner
+            return self.parse_postfix(n)
+
+        if t_type == T_NOT:
+            self.consume()
+            let inner = self.parse_factor()
+            let n = new_node(NK_UNARY, "not", t_line, t_col)
+            node_lefts[n] = inner
+            return self.parse_postfix(n)
+
+        if t_type == T_AMP:
+            self.consume()
+            let inner = self.parse_factor()
+            let n = new_node(NK_ADDRESS_OF, "", t_line, t_col)
+            node_lefts[n] = inner
+            return self.parse_postfix(n)
+
+        if t_type == T_STAR:
+            self.consume()
+            let inner = self.parse_factor()
+            let n = new_node(NK_DEREF, "", t_line, t_col)
+            node_lefts[n] = inner
+            return self.parse_postfix(n)
+
+        if t_type == T_TRUE or t_type == T_FALSE:
+            self.consume()
+            let n = new_node(NK_BOOL, t_val, t_line, t_col)
+            return self.parse_postfix(n)
+
+        if self.match(T_LBRACKET) == 1:
+            let arr = new_node(NK_ARRAY, "", t_line, t_col)
+            let last = arr
+            if self.check(T_RBRACKET) == 0:
+                while 1 == 1:
+                    let elem = self.parse_expression()
+                    node_nexts[last] = elem
+                    last = elem
+                    if self.match(T_COMMA) == 0:
+                        break
+            self.expect(T_RBRACKET)
+            return self.parse_postfix(arr)
+
+        if t_type == T_NUMBER or t_type == T_FLOAT:
+            self.consume()
+            let n = new_node(NK_NUMBER, t_val, t_line, t_col)
+            return self.parse_postfix(n)
+
+        if t_type == T_STRING:
+            self.consume()
+            let n = new_node(NK_STRING, t_val, t_line, t_col)
+            return self.parse_postfix(n)
+
+        if t_type == T_IDENT:
+            self.consume()
+            if self.no_struct_literal == 0 and self.check(T_LBRACE) == 1:
+                self.consume()
+                let sl = new_node(NK_STRUCT_LITERAL, t_val, t_line, t_col)
+                let last = sl
+                while self.check(T_RBRACE) == 0:
+                    if self.match(T_NEWLINE) == 1 or self.match(T_INDENT) == 1 or self.match(T_DEDENT) == 1:
+                        continue
+                    let fname = self.current_value()
+                    self.expect(T_IDENT)
+                    self.expect(T_COLON)
+                    let fval = self.parse_expression()
+                    let field = new_node(NK_FIELD, fname, t_line, t_col)
+                    node_lefts[field] = fval
+                    node_nexts[last] = field
+                    last = field
+                    if self.match(T_COMMA) == 0:
+                        break
+                self.expect(T_RBRACE)
+                return sl
+
+            if self.check(T_LPAREN) == 1:
+                self.consume()
+                let call = new_node(NK_CALL, t_val, t_line, t_col)
+                let last = call
+                if self.check(T_RPAREN) == 0:
+                    while 1 == 1:
+                        let arg = self.parse_expression()
+                        node_nexts[last] = arg
+                        last = arg
+                        if self.match(T_COMMA) == 0:
+                            break
+                self.expect(T_RPAREN)
+                return self.parse_postfix(call)
+            else:
+                let n = new_node(NK_VARIABLE, t_val, t_line, t_col)
+                return self.parse_postfix(n)
+
+        if self.match(T_LPAREN) == 1:
+            let node = self.parse_expression()
+            if self.check(T_COMMA) == 1:
+                let tup = new_node(NK_TUPLE, "", t_line, t_col)
+                node_lefts[tup] = node
+                let last = tup
+                while self.match(T_COMMA) == 1:
+                    if self.check(T_RPAREN) == 1:
+                        break
+                    let elem = self.parse_expression()
+                    node_nexts[last] = elem
+                    last = elem
+                self.expect(T_RPAREN)
+                return self.parse_postfix(tup)
+            self.expect(T_RPAREN)
+            return self.parse_postfix(node)
+
+        if t_type == T_NONE:
+            self.consume()
+            return self.parse_postfix(new_node(NK_NONE, "", t_line, t_col))
+
+        if t_type == T_NIL:
+            self.consume()
+            return self.parse_postfix(new_node(NK_NIL, "", t_line, t_col))
+
+        print("Erro: Token inesperado ", t_type, " ('", t_val, "') na expressão")
+        return new_node(NK_NONE, "", t_line, t_col)
+
+    fn parse_postfix(node: int) -> int:
+        while 1 == 1:
+            if self.match(T_LBRACKET) == 1:
+                let n = self._parse_slice_or_index(node)
+                node = n
+            elif self.check(T_QUESTION) == 1 and self.peek_type(1) == T_DOT:
+                self.consume()
+                self.consume()
+                let mname = self.current_value()
+                self.expect(T_IDENT)
+                let m = new_node(NK_MEMBER, mname, self.current_line(), self.current_col())
+                node_lefts[m] = node
+                node_int_vals[m] = 1 # is_safe
+                if self.check(T_LPAREN) == 1:
+                    self.consume()
+                    let call = new_node(NK_CALL, "", 0, 0)
+                    node_lefts[call] = m
+                    node_int_vals[call] = 1 # is_method
+                    let last = call
+                    if self.check(T_RPAREN) == 0:
+                        while 1 == 1:
+                            let arg = self.parse_expression()
+                            node_nexts[last] = arg
+                            last = arg
+                            if self.match(T_COMMA) == 0:
+                                break
+                    self.expect(T_RPAREN)
+                    node = call
+                else:
+                    node = m
+            elif self.check(T_DOT) == 1:
+                self.consume()
+                let mname = self.current_value()
+                self.expect(T_IDENT)
+                let m = new_node(NK_MEMBER, mname, self.current_line(), self.current_col())
+                node_lefts[m] = node
+                if self.check(T_LPAREN) == 1:
+                    self.consume()
+                    let call = new_node(NK_CALL, "", 0, 0)
+                    node_lefts[call] = m
+                    node_int_vals[call] = 1 # is_method
+                    let last = call
+                    if self.check(T_RPAREN) == 0:
+                        while 1 == 1:
+                            let arg = self.parse_expression()
+                            node_nexts[last] = arg
+                            last = arg
+                            if self.match(T_COMMA) == 0:
+                                break
+                    self.expect(T_RPAREN)
+                    node = call
+                else:
+                    node = m
+            else:
+                break
+
+        if self.match(T_QUESTION) == 1:
+            let p = new_node(NK_PROPAGATE, "", 0, 0)
+            node_lefts[p] = node
+            node = p
+
+        if self.check(T_AS) == 1:
+            self.consume()
+            let t = self.current_value()
+            self.expect(T_IDENT)
+            let c = new_node(NK_CAST, t, 0, 0)
+            node_lefts[c] = node
+            node = c
+
+        return node
+
+    fn _parse_slice_or_index(base_node: int) -> int:
+        if self.check(T_DOT_DOT) == 1:
+            self.consume()
+            if self.check(T_RBRACKET) == 1:
+                self.consume()
+                let s = new_node(NK_SLICE, "", 0, 0)
+                node_lefts[s] = base_node
+                return s
+            let end = self.parse_additive()
+            self.expect(T_RBRACKET)
+            let s = new_node(NK_SLICE, "", 0, 0)
+            node_lefts[s] = base_node
+            node_rights[s] = end
+            return s
+
+        let first = self.parse_additive()
+        if self.check(T_DOT_DOT) == 1:
+            self.consume()
+            if self.check(T_RBRACKET) == 1:
+                self.consume()
+                let s = new_node(NK_SLICE, "", 0, 0)
+                node_lefts[s] = base_node
+                node_rights[s] = first
+                return s
+            let end = self.parse_additive()
+            self.expect(T_RBRACKET)
+            let s = new_node(NK_SLICE, "", 0, 0)
+            node_lefts[s] = base_node
+            node_rights[s] = first
+            node_nexts[s] = end
+            return s
+
+        self.expect(T_RBRACKET)
+        let i = new_node(NK_INDEX, "", 0, 0)
+        node_lefts[i] = base_node
+        node_rights[i] = first
+        return i
+
+    # ---- Statements ----
+    fn parse_statement() -> int:
+        self._skip_newlines_and_comments()
+        if self.current_type() == T_EOF or self.current_type() == T_DEDENT:
+            return -1
+
+        let t_type = self.current_type()
+        let t_val = self.current_value()
+        let t_line = self.current_line()
+        let t_col = self.current_col()
+
+        if t_type == T_LET or t_type == T_MUT:
+            return self.parse_let()
+        if t_type == T_RETURN:
+            return self.parse_return()
+        if t_type == T_IF:
+            return self.parse_if()
+        if t_type == T_WHILE:
+            return self.parse_while()
+        if t_type == T_FOR:
+            return self.parse_for()
+        if t_type == T_BREAK:
+            self.consume()
+            self.match(T_NEWLINE)
+            return new_node(NK_BREAK, "", t_line, t_col)
+        if t_type == T_CONTINUE:
+            self.consume()
+            self.match(T_NEWLINE)
+            return new_node(NK_CONTINUE, "", t_line, t_col)
+        if t_type == T_IMPORT:
+            return self.parse_import()
+        if t_type == T_EXTERN:
+            return self.parse_extern()
+        if t_type == T_DEFER:
+            return self.parse_defer()
+        if t_type == T_ASSERT:
+            return self.parse_assert()
+        if t_type == T_BENCH:
+            return self.parse_bench()
+        if t_type == T_TEST:
+            return self.parse_test()
+        if t_type == T_MATCH:
+            return self.parse_match_stmt()
+        if t_type == T_SWITCH:
+            return self.parse_switch()
+
+        let expr = self.parse_expression()
+
+        if self.check(T_ASSIGN) == 1:
+            self.consume()
+            let val = self.parse_expression()
+            self.match(T_NEWLINE)
+            let n = new_node(NK_ASSIGN, "", t_line, t_col)
+            node_lefts[n] = expr
+            node_rights[n] = val
+            return n
+
+        if self.check(T_PLUS_ASS) == 1 or self.check(T_MINUS_ASS) == 1 or self.check(T_STAR_ASS) == 1 or self.check(T_SLASH_ASS) == 1:
+            let op = self.current_value()
+            self.consume()
+            let val = self.parse_expression()
+            self.match(T_NEWLINE)
+            let n = new_node(NK_COMPOUND_ASSIGN, op, t_line, t_col)
+            node_lefts[n] = expr
+            node_rights[n] = val
+            return n
+
+        self.match(T_NEWLINE)
+        return expr
+
+    fn parse_let() -> int:
+        let is_mut = 0
+        if self.check(T_MUT) == 1:
+            is_mut = 1
+            self.consume()
+        else:
+            self.expect(T_LET)
+
+        if self.check(T_LPAREN) == 1:
+            self.consume()
+            let names = ""
+            while 1 == 1:
+                if self.check(T_RPAREN) == 1:
+                    break
+                names = names + self.current_value()
+                self.expect(T_IDENT)
+                if self.match(T_COMMA) == 1:
+                    names = names + ","
+                    continue
+                else:
+                    break
+            self.expect(T_RPAREN)
+            self.expect(T_ASSIGN)
+            let expr = self.parse_expression()
+            self.match(T_NEWLINE)
+            let n = new_node(NK_DESTRUCTURE, names, 0, 0)
+            node_lefts[n] = expr
+            node_int_vals[n] = is_mut
+            return n
+
+        let var_name = self.current_value()
+        let line = self.current_line()
+        let col = self.current_col()
+        self.expect(T_IDENT)
+        let var_type = "inferred"
+        if self.match(T_COLON) == 1:
+            var_type = self.parse_type()
+        let n = new_node(NK_VAR_DECL, var_name, line, col)
+        node_str_vals[n] = var_name + ":" + var_type
+        node_int_vals[n] = is_mut
+        if self.match(T_ASSIGN) == 1:
+            let expr = self.parse_expression()
+            node_lefts[n] = expr
+        self.match(T_NEWLINE)
+        return n
+
+    fn parse_return() -> int:
+        self.consume(T_RETURN)
+        let n = new_node(NK_RETURN, "", 0, 0)
+        if self.check(T_NEWLINE) == 0 and self.check(T_DEDENT) == 0:
+            let val = self.parse_expression()
+            node_lefts[n] = val
+            let last = val
+            while self.match(T_COMMA) == 1:
+                let next_val = self.parse_expression()
+                node_nexts[last] = next_val
+                last = next_val
+        self.match(T_NEWLINE)
+        return n
+
+    fn parse_if() -> int:
+        self.consume(T_IF)
+        return self._parse_if_core()
+
+    fn _parse_if_core() -> int:
+        let cond = self.parse_expression()
+        self.expect(T_COLON)
+        self.expect(T_NEWLINE)
+        while self.check(T_NEWLINE) == 1:
+            self.consume()
+        self.expect(T_INDENT)
+        let then_body = new_node(NK_NONE, "", 0, 0)
+        let last = then_body
+        while self.check(T_DEDENT) == 0 and self.check(T_EOF) == 0:
+            if self.match(T_NEWLINE) == 1:
+                continue
+            let stmt = self.parse_statement()
+            if stmt != -1:
+                node_nexts[last] = stmt
+                last = stmt
+        self.expect(T_DEDENT)
+
+        let else_body = new_node(NK_NONE, "", 0, 0)
+        if self.check(T_ELIF) == 1:
+            self.consume()
+            let inner = self._parse_if_core()
+            node_nexts[else_body] = inner
+        elif self.check(T_ELSE) == 1:
+            self.consume()
+            self.expect(T_COLON)
+            self.expect(T_NEWLINE)
+            while self.check(T_NEWLINE) == 1:
+                self.consume()
+            self.expect(T_INDENT)
+            let last_else = else_body
+            while self.check(T_DEDENT) == 0 and self.check(T_EOF) == 0:
+                if self.match(T_NEWLINE) == 1:
+                    continue
+                let stmt = self.parse_statement()
+                if stmt != -1:
+                    node_nexts[last_else] = stmt
+                    last_else = stmt
+            self.expect(T_DEDENT)
+
+        let n = new_node(NK_IF, "", 0, 0)
+        node_lefts[n] = cond
+        node_bodys[n] = node_nexts[then_body]
+        node_rights[n] = node_nexts[else_body]
+        return n
+
+    fn parse_while() -> int:
+        self.consume(T_WHILE)
+        let cond = self.parse_expression()
+        self.expect(T_COLON)
+        self.expect(T_NEWLINE)
+        while self.check(T_NEWLINE) == 1:
+            self.consume()
+        self.expect(T_INDENT)
+        let body = new_node(NK_NONE, "", 0, 0)
+        let last = body
+        while self.check(T_DEDENT) == 0 and self.check(T_EOF) == 0:
+            if self.match(T_NEWLINE) == 1:
+                continue
+            let stmt = self.parse_statement()
+            if stmt != -1:
+                node_nexts[last] = stmt
+                last = stmt
+        self.expect(T_DEDENT)
+        let n = new_node(NK_WHILE, "", 0, 0)
+        node_lefts[n] = cond
+        node_bodys[n] = node_nexts[body]
+        return n
+
+    fn parse_for() -> int:
+        self.consume(T_FOR)
+        let first = self.current_value()
+        self.expect(T_IDENT)
+        let second = ""
+        if self.check(T_COMMA) == 1:
+            self.consume()
+            second = self.current_value()
+            self.expect(T_IDENT)
+
+        let elem_type = "inferred"
+        if self.check(T_COLON) == 1:
+            if self.peek_type(1) == T_IDENT:
+                self.consume()
+                elem_type = self.parse_type()
+
+        self.expect(T_IN)
+        let start = -1
+        let end = -1
+        let iterable = -1
+        let first_expr = self.parse_additive()
+        if self.check(T_DOT_DOT) == 1:
+            self.consume()
+            start = first_expr
+            end = self.parse_additive()
+        else:
+            iterable = first_expr
+
+        self.expect(T_COLON)
+        self.expect(T_NEWLINE)
+        while self.check(T_NEWLINE) == 1:
+            self.consume()
+        self.expect(T_INDENT)
+        let body = new_node(NK_NONE, "", 0, 0)
+        let last = body
+        while self.check(T_DEDENT) == 0 and self.check(T_EOF) == 0:
+            if self.match(T_NEWLINE) == 1:
+                continue
+            let stmt = self.parse_statement()
+            if stmt != -1:
+                node_nexts[last] = stmt
+                last = stmt
+        self.expect(T_DEDENT)
+
+        let n = new_node(NK_FOR, "", 0, 0)
+        if second != "":
+            node_str_vals[n] = second + "," + first
+        else:
+            node_str_vals[n] = first
+        node_str_vals[n] = node_str_vals[n] + ":" + elem_type
+        node_lefts[n] = iterable
+        node_rights[n] = start
+        node_nexts[n] = end
+        node_bodys[n] = node_nexts[body]
+        return n
+
+    fn parse_defer() -> int:
+        self.consume(T_DEFER)
+        let n = new_node(NK_DEFER, "", 0, 0)
+        if self.match(T_COLON) == 1:
+            self.expect(T_NEWLINE)
+            while self.check(T_NEWLINE) == 1:
+                self.consume()
+            self.expect(T_INDENT)
+            let body = new_node(NK_NONE, "", 0, 0)
+            let last = body
+            while self.check(T_DEDENT) == 0 and self.check(T_EOF) == 0:
+                if self.match(T_NEWLINE) == 1:
+                    continue
+                let stmt = self.parse_statement()
+                if stmt != -1:
+                    node_nexts[last] = stmt
+                    last = stmt
+            self.expect(T_DEDENT)
+            node_bodys[n] = node_nexts[body]
+            return n
+        let expr = self.parse_expression()
+        self.match(T_NEWLINE)
+        node_lefts[n] = expr
+        return n
+
+    fn parse_assert() -> int:
+        self.consume(T_ASSERT)
+        self.expect(T_LPAREN)
+        let cond = self.parse_expression()
+        self.expect(T_RPAREN)
+        self.match(T_NEWLINE)
+        let n = new_node(NK_ASSERT, "", 0, 0)
+        node_lefts[n] = cond
+        return n
+
+    fn parse_test() -> int:
+        self.consume(T_TEST)
+        let name = self.current_value()
+        self.expect(T_STRING)
+        self.expect(T_COLON)
+        self.expect(T_NEWLINE)
+        while self.check(T_NEWLINE) == 1:
+            self.consume()
+        self.expect(T_INDENT)
+        let body = new_node(NK_NONE, "", 0, 0)
+        let last = body
+        while self.check(T_DEDENT) == 0 and self.check(T_EOF) == 0:
+            if self.match(T_NEWLINE) == 1:
+                continue
+            let stmt = self.parse_statement()
+            if stmt != -1:
+                node_nexts[last] = stmt
+                last = stmt
+        self.expect(T_DEDENT)
+        let n = new_node(NK_FUNCTION, "test_" + name, 0, 0)
+        node_str_vals[n] = "test_" + name + ":fn():int"
+        node_bodys[n] = node_nexts[body]
+        return n
+
+    fn parse_bench() -> int:
+        self.consume(T_BENCH)
+        let name = self.current_value()
+        self.expect(T_STRING)
+        self.expect(T_COLON)
+        self.expect(T_NEWLINE)
+        while self.check(T_NEWLINE) == 1:
+            self.consume()
+        self.expect(T_INDENT)
+        let body = new_node(NK_NONE, "", 0, 0)
+        let last = body
+        while self.check(T_DEDENT) == 0 and self.check(T_EOF) == 0:
+            if self.match(T_NEWLINE) == 1:
+                continue
+            let stmt = self.parse_statement()
+            if stmt != -1:
+                node_nexts[last] = stmt
+                last = stmt
+        self.expect(T_DEDENT)
+        let n = new_node(NK_BENCH, name, 0, 0)
+        node_bodys[n] = node_nexts[body]
+        return n
+
+    # ---- Patterns & Match ----
+    fn _parse_case_body() -> int:
+        if self.check(T_NEWLINE) == 1:
+            self.expect(T_NEWLINE)
+            while self.check(T_NEWLINE) == 1:
+                self.consume()
+            if self.check(T_INDENT) == 0:
+                return -1
+            self.expect(T_INDENT)
+            let body = new_node(NK_NONE, "", 0, 0)
+            let last = body
+            while self.check(T_DEDENT) == 0 and self.check(T_EOF) == 0:
+                if self.match(T_NEWLINE) == 1:
+                    continue
+                let stmt = self.parse_statement()
+                if stmt != -1:
+                    node_nexts[last] = stmt
+                    last = stmt
+            self.expect(T_DEDENT)
+            return node_nexts[body]
+        let stmt = self.parse_statement()
+        return stmt
+
+    fn _parse_case_pattern() -> int:
+        let variants = self._parse_single_pattern()
+        let last_v = variants
+        while self.check(T_PIPE) == 1:
+            if self.peek_type(1) == T_GT:
+                break
+            self.consume()
+            let next_v = self._parse_single_pattern()
+            node_nexts[last_v] = next_v
+            last_v = next_v
+
+        if self.check(T_IF) == 1:
+            self.consume()
+            let guard = self.parse_expression()
+            # Hack: attach guard to variants' right
+            node_rights[variants] = guard
+        return variants
+
+    fn _parse_single_pattern() -> int:
+        if self.check(T_NUMBER) == 1:
+            let n = new_node(NK_NUMBER, self.current_value(), 0, 0)
+            self.consume()
+            return n
+        if self.check(T_STRING) == 1:
+            let n = new_node(NK_STRING, self.current_value(), 0, 0)
+            self.consume()
+            return n
+        if self.check(T_IDENT) == 1:
+            let name = self.current_value()
+            self.expect(T_IDENT)
+            let n = new_node(NK_VARIABLE, name, 0, 0)
+            if self.check(T_LBRACE) == 1:
+                self.consume()
+                let last = n
+                while self.check(T_RBRACE) == 0:
+                    let fname = self.current_value()
+                    self.expect(T_IDENT)
+                    self.expect(T_COLON)
+                    let val = self.parse_expression()
+                    let f = new_node(NK_FIELD, fname, 0, 0)
+                    node_lefts[f] = val
+                    node_nexts[last] = f
+                    last = f
+                    if self.match(T_COMMA) == 0:
+                        break
+                self.expect(T_RBRACE)
+                return n
+            if self.check(T_LPAREN) == 1:
+                self.consume()
+                let last = n
+                while 1 == 1:
+                    let bname = self.current_value()
+                    self.expect(T_IDENT)
+                    let b = new_node(NK_VARIABLE, bname, 0, 0)
+                    node_nexts[last] = b
+                    last = b
+                    if self.match(T_COMMA) == 0:
+                        break
+                self.expect(T_RPAREN)
+                return n
+            return n
+        print("Erro: Pattern inválido")
+        return new_node(NK_NONE, "", 0, 0)
+
+    fn parse_match_expr() -> int:
+        self.consume(T_MATCH)
+        self.no_struct_literal = 1
+        let cond = self.parse_expression()
+        self.no_struct_literal = 0
+
+        if self.check(T_COLON) == 1:
+            self.consume()
+            self.expect(T_NEWLINE)
+            while self.check(T_NEWLINE) == 1:
+                self.consume()
+            self.expect(T_INDENT)
+        else:
+            self.expect(T_LBRACE)
+
+        let n = new_node(NK_MATCH, "", 0, 0)
+        node_lefts[n] = cond
+        let last_case = n
+        let default_case = -1
+
+        while self.check(T_DEDENT) == 0 and self.check(T_RBRACE) == 0 and self.check(T_EOF) == 0:
+            if self.match(T_NEWLINE) == 1:
+                continue
+            if self.check(T_CASE) == 1:
+                self.consume()
+                let variant = self._parse_case_pattern()
+                self.expect(T_COLON)
+                self.expect(T_NEWLINE)
+                while self.check(T_NEWLINE) == 1:
+                    self.consume()
+                self.expect(T_INDENT)
+                let body = new_node(NK_NONE, "", 0, 0)
+                let last = body
+                while self.check(T_DEDENT) == 0 and self.check(T_EOF) == 0:
+                    if self.match(T_NEWLINE) == 1:
+                        continue
+                    let stmt = self.parse_statement()
+                    if stmt != -1:
+                        node_nexts[last] = stmt
+                        last = stmt
+                self.expect(T_DEDENT)
+                
+                let c = new_node(NK_NONE, "", 0, 0)
+                node_lefts[c] = variant
+                node_bodys[c] = node_nexts[body]
+                node_nexts[last_case] = c
+                last_case = c
+            elif self.check(T_ELSE) == 1:
+                self.consume()
+                self.expect(T_FAT_ARROW)
+                let res = self.parse_expression()
+                self.match(T_COMMA)
+                default_case = res
+            else:
+                let val = self.parse_expression()
+                self.expect(T_FAT_ARROW)
+                let res = self.parse_expression()
+                self.match(T_COMMA)
+                let c = new_node(NK_NONE, "", 0, 0)
+                node_lefts[c] = val
+                node_rights[c] = res
+                node_nexts[last_case] = c
+                last_case = c
+
+        if self.check(T_DEDENT) == 1:
+            self.consume(T_DEDENT)
+        elif self.check(T_RBRACE) == 1:
+            self.consume(T_RBRACE)
+        node_rights[n] = default_case
+        return n
+
+    fn parse_match_stmt() -> int:
+        self.consume(T_MATCH)
+        self.no_struct_literal = 1
+        let cond = self.parse_expression()
+        self.no_struct_literal = 0
+        self.expect(T_COLON)
+        self.expect(T_NEWLINE)
+        while self.check(T_NEWLINE) == 1:
+            self.consume()
+        self.expect(T_INDENT)
+
+        let n = new_node(NK_MATCH, "", 0, 0)
+        node_lefts[n] = cond
+        let last_case = n
+        let default_case = -1
+
+        while self.check(T_DEDENT) == 0 and self.check(T_EOF) == 0:
+            if self.match(T_NEWLINE) == 1:
+                continue
+            if self.check(T_CASE) == 1:
+                self.consume()
+                let variant = self._parse_case_pattern()
+                self.expect(T_COLON)
+                let body = self._parse_case_body()
+                let c = new_node(NK_NONE, "", 0, 0)
+                node_lefts[c] = variant
+                node_bodys[c] = body
+                node_nexts[last_case] = c
+                last_case = c
+            elif self.check(T_DEFAULT) == 1:
+                self.consume()
+                self.expect(T_COLON)
+                default_case = self._parse_case_body()
+            else:
+                print("Erro: Esperado case ou default no match")
+                break
+        self.expect(T_DEDENT)
+        node_rights[n] = default_case
+        return n
+
+    fn parse_switch() -> int:
+        self.consume(T_SWITCH)
+        self.no_struct_literal = 1
+        let cond = self.parse_expression()
+        self.no_struct_literal = 0
+        self.expect(T_COLON)
+        self.expect(T_NEWLINE)
+        while self.check(T_NEWLINE) == 1:
+            self.consume()
+        self.expect(T_INDENT)
+        return self.parse_match_stmt() # simplificado
+
+    # ---- Declarações ----
+    fn parse_import() -> int:
+        self.consume(T_IMPORT)
+        let path = self.current_value()
+        self.expect(T_STRING)
+        self.match(T_NEWLINE)
+        return new_node(NK_IMPORT, path, 0, 0)
+
+    fn parse_extern() -> int:
+        self.consume(T_EXTERN)
+        let is_wasm = 0
+        if self.check(T_STRING) == 1:
+            if self.current_value() == "wasm":
+                is_wasm = 1
+            self.consume()
+        self.expect(T_FN)
+        let name = self.current_value()
+        self.expect(T_IDENT)
+        self.expect(T_LPAREN)
+        let params = new_node(NK_NONE, "", 0, 0)
+        let last_p = params
+        if self.check(T_RPAREN) == 0:
+            while 1 == 1:
+                let p_name = self.current_value()
+                self.expect(T_IDENT)
+                self.expect(T_COLON)
+                let p_type = self.parse_type()
+                let p = new_node(NK_PARAM, p_name, 0, 0)
+                node_str_vals[p] = p_name + ":" + p_type
+                node_nexts[last_p] = p
+                last_p = p
+                if self.match(T_COMMA) == 0:
+                    break
+        self.expect(T_RPAREN)
+        let ret_type = "void"
+        if self.match(T_ARROW) == 1:
+            ret_type = self.parse_type()
+        self.match(T_NEWLINE)
+
+        let n = new_node(NK_EXTERN, name, 0, 0)
+        node_str_vals[n] = name + ":fn:" + ret_type
+        node_lefts[n] = node_nexts[params]
+        node_int_vals[n] = is_wasm
+        return n
+
+    fn parse_struct() -> int:
+        self.consume(T_STRUCT)
+        let name = self.current_value()
+        self.expect(T_IDENT)
+        let type_params = ""
+        if self.check(T_LT) == 1:
+            type_params = self.parse_type_params()
+        self.expect(T_COLON)
+        self.expect(T_NEWLINE)
+        while self.check(T_NEWLINE) == 1:
+            self.consume()
+        self.expect(T_INDENT)
+        
+        let fields = new_node(NK_NONE, "", 0, 0)
+        let last_f = fields
+        while self.check(T_DEDENT) == 0 and self.check(T_EOF) == 0:
+            self._skip_newlines_and_comments()
+            if self.check(T_DEDENT) == 1 or self.check(T_EOF) == 1:
+                break
+            let fn_name = self.current_value()
+            self.expect(T_IDENT)
+            self.expect(T_COLON)
+            let ft = self.parse_type()
+            let f = new_node(NK_FIELD, fn_name, 0, 0)
+            node_str_vals[f] = fn_name + ":" + ft
+            node_nexts[last_f] = f
+            last_f = f
+            self.match(T_NEWLINE)
+        self.match(T_DEDENT)
+
+        let n = new_node(NK_STRUCT_DECL, name, 0, 0)
+        node_str_vals[n] = name + ":" + type_params
+        node_lefts[n] = node_nexts[fields]
+        return n
+
+    fn parse_enum() -> int:
+        self.consume(T_ENUM)
+        let name = self.current_value()
+        self.expect(T_IDENT)
+        let type_params = ""
+        if self.check(T_LT) == 1:
+            type_params = self.parse_type_params()
+        self.expect(T_COLON)
+        self.expect(T_NEWLINE)
+        while self.check(T_NEWLINE) == 1:
+            self.consume()
+        self.expect(T_INDENT)
+
+        let variants = new_node(NK_NONE, "", 0, 0)
+        let last_v = variants
+        while self.check(T_DEDENT) == 0 and self.check(T_EOF) == 0:
+            self._skip_newlines_and_comments()
+            if self.check(T_DEDENT) == 1 or self.check(T_EOF) == 1:
+                break
+            let vname = self.current_value()
+            self.expect(T_IDENT)
+            let v = new_node(NK_ENUM_VARIANT, vname, 0, 0)
+            if self.check(T_LPAREN) == 1:
+                self.consume()
+                let payloads = self.parse_type()
+                while self.match(T_COMMA) == 1:
+                    payloads = payloads + "," + self.parse_type()
+                self.expect(T_RPAREN)
+                node_str_vals[v] = vname + ":" + payloads
+            else:
+                node_str_vals[v] = vname
+            node_nexts[last_v] = v
+            last_v = v
+            self.match(T_NEWLINE)
+        self.match(T_DEDENT)
+
+        let n = new_node(NK_ENUM_DECL, name, 0, 0)
+        node_str_vals[n] = name + ":" + type_params
+        node_lefts[n] = node_nexts[variants]
+        return n
+
+    fn parse_trait() -> int:
+        self.consume(T_TRAIT)
+        let name = self.current_value()
+        self.expect(T_IDENT)
+        self.expect(T_COLON)
+        self.expect(T_NEWLINE)
+        self._skip_newlines_and_comments()
+
+        let methods = new_node(NK_NONE, "", 0, 0)
+        let last_m = methods
+        if self.check(T_INDENT) == 1:
+            self.consume()
+            while self.check(T_DEDENT) == 0 and self.check(T_EOF) == 0:
+                self._skip_newlines_and_comments()
+                if self.check(T_DEDENT) == 1 or self.check(T_EOF) == 1:
+                    break
+                if self.check(T_FN) == 1:
+                    let m = self.parse_function()
+                    node_nexts[last_m] = m
+                    last_m = m
+                else:
+                    print("Erro: Esperado fn em trait")
+                    break
+            self.expect(T_DEDENT)
+
+        let n = new_node(NK_TRAIT_DECL, name, 0, 0)
+        node_lefts[n] = node_nexts[methods]
+        return n
+
+    fn parse_impl() -> int:
+        self.consume(T_IMPL)
+        let first_type = self.parse_type()
+        let trait_name = ""
+        let struct_name = first_type
+        if self.check(T_FOR) == 1:
+            trait_name = first_type
+            self.consume()
+            struct_name = self.parse_type()
+
+        self.expect(T_COLON)
+        self.expect(T_NEWLINE)
+        self._skip_newlines_and_comments()
+
+        let methods = new_node(NK_NONE, "", 0, 0)
+        let last_m = methods
+        if self.check(T_INDENT) == 1:
+            self.consume()
+            while self.check(T_DEDENT) == 0 and self.check(T_EOF) == 0:
+                self._skip_newlines_and_comments()
+                if self.check(T_DEDENT) == 1 or self.check(T_EOF) == 1:
+                    break
+                if self.check(T_FN) == 1:
+                    let m = self.parse_function()
+                    node_str_vals[m] = struct_name + "_" + node_str_vals[m]
+                    node_nexts[last_m] = m
+                    last_m = m
+                else:
+                    print("Erro: Esperado fn em impl")
+                    break
+            self.expect(T_DEDENT)
+
+        let n = new_node(NK_IMPL_BLOCK, struct_name, 0, 0)
+        node_str_vals[n] = struct_name + ":" + trait_name
+        node_lefts[n] = node_nexts[methods]
+        return n
+
+    fn parse_function() -> int:
+        self.expect(T_FN)
+        let name = self.current_value()
+        let line = self.current_line()
+        let col = self.current_col()
+        self.expect(T_IDENT)
+        
+        let type_params = ""
+        if self.check(T_LT) == 1:
+            type_params = self.parse_type_params()
+
+        self.expect(T_LPAREN)
+        let params = new_node(NK_NONE, "", 0, 0)
+        let last_p = params
+        if self.check(T_RPAREN) == 0:
+            while 1 == 1:
+                let p_name = self.current_value()
+                self.expect(T_IDENT)
+                self.expect(T_COLON)
+                let p_type = self.parse_type()
+                let p = new_node(NK_PARAM, p_name, 0, 0)
+                node_str_vals[p] = p_name + ":" + p_type
+                node_nexts[last_p] = p
+                last_p = p
+                if self.match(T_COMMA) == 0:
+                    break
+        self.expect(T_RPAREN)
+
+        let ret_type = "void"
+        if self.match(T_ARROW) == 1:
+            ret_type = self.parse_type()
+
+        self.expect(T_COLON)
+        self.expect(T_NEWLINE)
+        while self.check(T_NEWLINE) == 1:
+            self.consume()
+        self.expect(T_INDENT)
+        let body = new_node(NK_NONE, "", 0, 0)
+        let last = body
+        while self.check(T_DEDENT) == 0 and self.check(T_EOF) == 0:
+            if self.match(T_NEWLINE) == 1:
+                continue
+            let stmt = self.parse_statement()
+            if stmt != -1:
+                node_nexts[last] = stmt
+                last = stmt
+        self.expect(T_DEDENT)
+
+        let n = new_node(NK_FUNCTION, name, line, col)
+        node_str_vals[n] = name + ":fn(" + type_params + "):" + ret_type
+        node_lefts[n] = node_nexts[params]
+        node_bodys[n] = node_nexts[body]
+        return n
+
+    fn parse_type_alias() -> int:
+        self.consume(T_TYPE)
+        let name = self.current_value()
+        self.expect(T_IDENT)
+        let type_params = ""
+        if self.check(T_LT) == 1:
+            type_params = self.parse_type_params()
+        self.expect(T_ASSIGN)
+        let target = self.parse_type()
+        self.match(T_NEWLINE)
+        let n = new_node(NK_TYPE_ALIAS, name, 0, 0)
+        node_str_vals[n] = name + ":" + target
+        return n
+
+    # ---- Ponto de Entrada ----
+    fn parse() -> int:
+        let decls = new_node(NK_PROGRAM, "", 0, 0)
+        let last = decls
+        while self.current_type() != T_EOF:
+            self._skip_newlines_and_comments()
+            if self.current_type() == T_EOF:
+                break
+
+            while self.check(T_AT) == 1:
+                self.consume()
+                self.expect(T_IDENT)
+                if self.match(T_LPAREN) == 1:
+                    if self.check(T_RPAREN) == 0:
+                        while 1 == 1:
+                            self.expect(T_IDENT)
+                            if self.match(T_COMMA) == 0:
+                                break
+                    self.expect(T_RPAREN)
+                self._skip_newlines_and_comments()
+
+            let is_export = 0
+            if self.check(T_EXPORT) == 1:
+                is_export = 1
+                self.consume()
+
+            let decl = -1
+            if self.check(T_FN) == 1:
+                decl = self.parse_function()
+            elif self.check(T_STRUCT) == 1:
+                decl = self.parse_struct()
+            elif self.check(T_ENUM) == 1:
+                decl = self.parse_enum()
+            elif self.check(T_IMPL) == 1:
+                decl = self.parse_impl()
+            elif self.check(T_TRAIT) == 1:
+                decl = self.parse_trait()
+            elif self.check(T_LET) == 1 or self.check(T_MUT) == 1 or self.check(T_TEST) == 1 or self.check(T_BENCH) == 1 or self.check(T_IMPORT) == 1 or self.check(T_EXTERN) == 1:
+                decl = self.parse_statement()
+            elif self.check(T_TYPE) == 1:
+                decl = self.parse_type_alias()
+            else:
+                print("Erro: Declaração de nível superior inválida: ", self.current_type())
+                self.consume()
+
+            if decl != -1:
+                if is_export == 1:
+                    node_int_vals[decl] = 1
+                node_nexts[last] = decl
+                last = decl
+
+        return decls
+
+# ============================================================
+# API Pública
+# ============================================================
+fn tokenize(source: str) -> TokenList:
+    # Stub - assume que o lexer.lm já carregou isso em uma estrutura compatível
+    mut tl: TokenList
+    return tl
+
+fn parse_source(source: str, filename: str) -> int:
+    init_parser()
+    let tokens = tokenize(source)
+    
+    mut p: Parser
+    p.tokens = tokens
+    p.pos = 0
+    p.filename = filename
+    p.source_code = source
+    p.no_struct_literal = 0
+    
+    return p.parse()

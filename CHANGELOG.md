@@ -8,7 +8,265 @@ O formato segue, de forma geral, as convenções do [Keep a Changelog](https://k
 
 ---
 
-## [0.8.0] — 2026-10-02
+## [0.9.0] — 2026-09-25
+
+> **Milestone:** quasiquote (`quote:` / `~` / `~@`) — macros de verdade.
+
+Esta versão introduz **quasiquote** como primitiva de construção de
+AST em compile-time. Macros `@macro` deixam de ser apenas substituição
+de texto — podem gerar nós sintáticos novos (`if`, `match`, `for`,
+declarações) que o chamador não escreveu.
+
+### ✨ Adicionado
+
+#### `quote:` — construção de AST
+
+* Nova construção `quote:` permite que macros `@macro` construam
+  nós de AST:
+
+  ```lumina
+  @macro
+  fn unless(cond, body):
+      quote:
+          if not ~cond:
+              ~body
+
+  fn main() -> int:
+      let x = 10
+      unless(x > 100, print("pequeno"))
+      return 0
+  ```
+
+* Forma multi-linha (bloco indentado) e single-line (`quote: ~x`)
+  suportadas.
+* Um `quote:` com múltiplos statements produz um `BlockExpr` que
+  preserva `final_expr` (a última expressão) como valor.
+
+#### `~x` — unquote
+
+* Dentro de `quote:`, `~x` insere o AST de `x` no ponto.
+* `x` é avaliado em compile-time. Pode ser:
+  * um parâmetro da macro (nó de AST ligado ao argumento);
+  * uma variável local da macro;
+  * o resultado de `gensym(...)`;
+  * o resultado de uma chamada a outra macro.
+
+#### `~@xs` — unquote-splice
+
+* Espalha uma lista de nós: `~@stmts` em posição de statement, ou
+  `~@elems` dentro de `[...]`.
+* Requer que `xs` avalie para `[AstNode]` (lista de nós).
+
+#### `gensym(name)` — geração de nomes únicos
+
+* Builtin compile-time dentro de macros.
+* Retorna `VariableExpr` com nome mangled (`__name_N`).
+* Uso típico para hygiene manual:
+
+  ```lumina
+  @macro
+  fn swap(a, b):
+      let tmp = gensym("tmp")
+      quote:
+          let ~tmp = ~a
+          ~a = ~b
+          ~b = ~tmp
+  ```
+
+#### Interpretador em compile-time
+
+* Novo módulo `lumina/codegen/quote_eval.py` — `QuoteInterpreter`.
+* Avalia o corpo da macro em compile-time, misturando:
+  * **valores Python** (int, float, bool, str) quando o resultado é
+    computável (`1 + 2` → `3`);
+  * **nós de AST** quando o resultado depende de argumentos.
+* Fast-path para corpos de um único `return <expr>`.
+* Suporta `let`, `if`, `while`, `return`, `assign` como scaffolding
+  dentro do corpo da macro.
+* Erro com mensagem clara (`QuoteError`) se o corpo usar construções
+  não suportadas.
+
+#### Expansão recursiva de macros aninhadas
+
+* Uma macro pode chamar outra dentro do corpo, e a expansão é
+  recursiva:
+
+  ```lumina
+  @macro
+  fn dobro(x):
+      return x * 2
+
+  @macro
+  fn quadruplo(x):
+      return dobro(dobro(x))
+  ```
+
+* `QuoteInterpreter(macros=...)` recebe o dicionário de macros do
+  compilador; ao encontrar `CallExpr` cujo callee é uma macro, expande
+  recursivamente.
+
+#### Parâmetros de macro sem anotação de tipo
+
+* Parâmetros de `@macro` podem ser declarados sem `: T`:
+
+  ```lumina
+  @macro
+  fn unless(cond, body):     # sem tipo
+      quote: ...
+  ```
+
+* Semantic trata `"auto"` como type param — aceita qualquer coisa.
+* Parâmetros com anotação continuam funcionando.
+
+### 🔧 Alterado
+
+#### `_expand_macro_expr` usa `QuoteInterpreter`
+
+* Macros de expressão deixam de fazer substituição textual
+  (`_substitute_in_expr`) e passam a interpretar o corpo via
+  `QuoteInterpreter`.
+* Substituição direta continua funcionando — o interpretador
+  generaliza o comportamento anterior.
+* Comportamento de `return quote:` no top-level do corpo é
+  equivalente a `quote:` isolado.
+
+#### Semantic pula corpos de macro
+
+* `SemanticAnalyzer.analyze` não analisa mais o corpo de funções
+  com atributo `@macro`.
+* Justificativa: usam `quote:` / `~` / `~@` / `gensym` — construções
+  que **não têm semântica de runtime**. O AST gerado pela expansão
+  é analisado normalmente no call site.
+
+#### Formatter preserva `quote:` / `~` / `~@`
+
+* `format_node` reconhece `QuoteExpr`, `UnquoteExpr`,
+  `UnquoteSpliceExpr` e reemite a sintaxe corretamente.
+* Round-trip `fmt(fmt(x)) == fmt(x)` mantido.
+
+#### Parser — `~` como bitwise NOT fora de quote
+
+* Fecha gap antigo: o lexer emitia `TILDE` mas o parser não parseava.
+* Fora de `quote:` (`_in_quote_depth == 0`), `~x` é `UnaryExpr('~', x)`
+  → bitwise NOT.
+* Dentro de `quote:`, `~x` é unquote.
+* Codegen de `~x` (bitwise NOT) implementado em
+  `visit_UnaryExpr` (`self.builder.not_`).
+
+#### LSP autocompleta `quote`
+
+* Adicionada keyword `quote` à lista de completions.
+
+### 🐛 Corrigido
+
+#### `visit_SliceExpr` — `is_string` não computado
+
+* A versão inicial referenciava `is_string` antes de definir,
+  disparando `UnboundLocalError` em todo `v[a..b]`. Corrigido
+  computando `is_string` imediatamente após `arr_val = visit(...)`.
+
+#### `visit_MemberExpr` (semantic) — slices sem campos
+
+* `s.len` e `s.data` falhavam com "Tipo '[int]' não é uma
+  Struct/Enum". Adicionado caso explícito para slices.
+
+#### `_infer_for_elem_type` — slices não reconhecidos
+
+* `for x in v[..]` caía no fallback `int`. Adicionado caso
+  `[T]` → `T`.
+
+#### `visit_AssignStmt` — `s[i] = v` em slice
+
+* Atribuição via index em slice exigia extrair `.data` antes do
+  GEP. Sem isso, `s[0] = 42` escrevia no `%Slice_T_*` em vez de no
+  buffer de dados.
+
+#### `_eval(VariableExpr)` retornava nó literal sem unbox
+
+* `if flag > 0` no corpo da macro construía um `BinaryExpr` em vez
+  de computar — nós de AST são truthy, então o `if` sempre tomava
+  o ramo `then`. Adicionado `_unbox` que converte literais AST
+  (`NumberExpr("1")` → `1`, `BoolExpr(True)` → `True`, etc.) em
+  valores Python.
+
+#### `_build_expr(UnquoteExpr)` retornava primitivo Python
+
+* `quote: let tmp = ~x` onde `x` é ligado a um literal produzia
+  `VarDecl(value=21)` — o codegen não tem `visit_int`, e o valor
+  virava `0`. Corrigido com `_to_ast()` envolvendo primitivos.
+* Invariante documentado: `_build_expr` sempre retorna nó de AST;
+  `_eval` é quem lida com primitivos.
+
+#### `visit_BlockExpr` ausente no codegen
+
+* `quote:` multi-statement gera `BlockExpr`, que não tinha visitor
+  — caía em `generic_visit` retornando `Constant(0)`. Adicionado
+  `visit_BlockExpr` executando statements e retornando `final_expr`.
+
+#### `_expand_macro_expr` não passava `macros` ao interpreter
+
+* Macros aninhadas não expandiam: `quadruplo` chamando `dobro`
+  falhava com "função não suportada no corpo da macro: 'dobro'".
+* Corrigido passando `QuoteInterpreter(macros=self.macros)`.
+
+### 🧪 Testes
+
+Estado após este ciclo:
+
+```text
+pytest tests/ -q
+510 passed in 141.61s (0:02:21)
+```
+
+Testes novos:
+
+* `tests/test_quasiquote_parser.py` — 13 testes:
+  * `quote` é keyword reservada.
+  * `quote:` multi-linha e single-line.
+  * `~x` dentro/fora de quote.
+  * `~@xs` dentro de quote; erro fora.
+  * `quote:` aninhado.
+  * `quote` não pode ser identificador.
+  * Bitwise NOT runtime.
+  * Formatter preserva a sintaxe.
+  * Erro claro quando `quote:` é usado fora de macro.
+* `tests/test_quasiquote_expand.py` — 10 testes:
+  * Substituição direta continua funcionando.
+  * `quote: ~x` (identidade).
+  * `unless` canônico.
+  * Expressão composta (`~x + 1`).
+  * Bloco com `let` (`twice`).
+  * Scaffolding no corpo (`choose` com `if`).
+  * `quote:` fora de macro → erro.
+  * `~x` fora de quote em corpo de macro → bitwise NOT.
+
+### 📚 Documentação
+
+* Nova ADR **`docs/engineering/decisoes/0003-quasiquote.md`**
+  documentando design, alternativas descartadas (Lisp backtick,
+  S-expr, AST-builder) e fases de implementação.
+* Status alterado para "aceito" após Phase 1 e Phase 2.
+
+### 🚧 Não implementado neste ciclo
+
+* **Hygiene automática** — rename de bindings introduzidos por
+  `quote:` é manual via `gensym`. Automação fica para v1.
+* **`~@` em statement position** — espalhamento de lista de
+  statements (fora de `[...]`) fica para v0.9.x.
+* **`quote:` em tipo** (`quote_type:`) para gerar `TypeNode` —
+  adiado.
+* **Pattern matching sobre AST** (`macro_rules!`-style) —
+  `~x.kind` para inspeção de nó fica para v1.
+* **Migração de `@derive`** para `std/derives.lm` usando quasiquote
+  — v0.9.x.
+* **Deprecation de `--legacy-slice-copy`** — v0.10.0.
+
+[Unreleased]: https://github.com/adamgabriel701/Lumina/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/adamgabriel701/Lumina/compare/v0.8.0...v0.9.0
+
+---
+
+## [0.8.0] — 2026-09-25
 
 > **Milestone:** slice types (`[T]`) — views tipadas e com comprimento.
 
@@ -83,7 +341,7 @@ preparando o terreno para APIs de stdlib mais ergonômicas.
 
 * Restaura o comportamento de `v[a..b]` anterior à v0.8.0
   (cópia em vez de view). Destinada à migração.
-* Será removida em v0.9.0.
+* Será removida em v0.10.0.
 
 ### 🔧 Alterado
 
@@ -184,7 +442,7 @@ Testes novos:
   Cuidado ao usar.
 * **Migração de `std/*`** — APIs duais (`sort` + `sort_slice`).
   v0.8.x.
-* **Deprecation de `--legacy-slice-copy`** — v0.9.0.
+* **Deprecation de `--legacy-slice-copy`** — v0.10.0.
 
 ### 📚 Documentação
 
@@ -204,7 +462,7 @@ Testes novos:
 
 ---
 
-## [0.7.0] — 2026-10-01
+## [0.7.0] — 2026-09-25
 
 > **Milestone:** safe-by-default + preparação para self-hosting.
 
@@ -1302,95 +1560,3 @@ As mudanças são agrupadas nas seguintes categorias:
 
 [Unreleased]: https://github.com/adamgabriel701/Lumina/compare/v0.5.0-linker...HEAD
 [0.5.0-linker]: https://github.com/adamgabriel701/Lumina/releases/tag/v0.5.0-linker
-```
-
----
-
-## Commits
-
-Como você **não commitou o v0.7.0**, recomendo **dois commits separados** — cada um mapeando para uma release no CHANGELOG. Isso facilita `git tag` por release, `git bisect` futuro e revisão.
-
-### Commit 1 — v0.7.0
-
-```
-feat(lang): safe-by-default, for hints tipados, VLA escape analysis
-
-Torna segurança de memória o comportamento padrão e melhora
-iteração sobre arrays.
-
-### Safe-by-default global
-- Null checks em MemberExpr/IndexExpr agora são o padrão.
-- `@unsafe` é o opt-out (substitui `@safe` como opt-in).
-- Herança de safe-mode em closures, genéricos e SCCs.
-
-### `for x: T in arr`
-- Anotação opcional de tipo do elemento.
-- Validação em compile-time (`_is_hint_compatible`).
-- Inferência automática de tipo em `_analyze_for`.
-
-### Escape analysis (VLA)
-- `alloc(N)` dinâmico vira alloca quando seguro:
-  não em loop, no bloco de topo, sem escape, sem free.
-- Reduz pressão no GC.
-
-### Infra
-- `lumina/common/attrs.py` criado (estava ausente).
-- `_extract_args` aceita `List[List[str]]` corretamente.
-
-### Testes
-- 40 testes novos (safe_default, for_hint_type, vla_escape,
-  attrs_normalize).
-- Suíte: 482 passed.
-
-### Doc
-- CHANGELOG.md: entrada v0.7.0.
-- docs/engineering/bugs.md: 3 entradas novas.
-```
-
-### Commit 2 — v0.8.0
-
-```
-feat(lang): slice types `[T]` — views tipadas e com comprimento
-
-Introduz `[T]` como view `{T*, i64}` sobre região contígua de
-memória. Zero-copy, integrado com `for`, `len`, `s[i]`, `s.data`,
-`s.len`.
-
-### Tipo
-- Parser reconhece `[T]` em posição de tipo.
-- Semantic: is_assignable cobre `[T] ↔ [U]` e `[T] → ptr` (via
-  `.data`).
-- Codegen: `%Slice_T_` monomorphizado, passado por ponteiro.
-- Mangling: `'int'` → `'Slice_int_'`.
-
-### Consumo
-- `for x in slice:` extrai `.data` + `.len`.
-- `s[i]` com bounds check em safe mode.
-- `s.data` e `s.len` como fields.
-- Sub-slicing zero-copy.
-
-### Builtins
-- `as_slice(p, n) -> [int]`.
-- `view(arr, a, b) -> [T]`.
-
-### Migração
-- `--legacy-slice-copy` restaura cópia em `v[a..b]`.
-- Strings mantêm retrocompat (retornam `str` copiado).
-
-### Bug fixes
-- `visit_SliceExpr`: `is_string` computado antes do uso.
-- `visit_MemberExpr` (semantic): reconhece `[T].data`/`[T].len`.
-- `_infer_for_elem_type`: reconhece `[T]`.
-- `visit_AssignStmt`: `s[i] = v` extrai `.data`.
-
-### Testes
-- test_slice_basic.py: 5 casos.
-- Suíte: 487 passed.
-
-### Doc
-- ADR 0002: docs/engineering/decisoes/0002-slice-types.md.
-- CHANGELOG.md: entrada v0.8.0.
-
-BREAKING CHANGE: `v[a..b]` retorna `[T]` (view zero-copy) em vez
-de cópia `T*`. Strings preservadas. Use `--legacy-slice-copy` para
-o comportamento antigo (será removida em v0.9.0).

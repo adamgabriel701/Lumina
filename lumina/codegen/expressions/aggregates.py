@@ -280,3 +280,27 @@ class AggregatesMixin:
         )
         self.builder.store(env_raw, env_slot)
         return closure_raw
+
+    # ==================================================================
+    # ADR 0003 Fase 2: `BlockExpr` gerado por `quote:` com múltiplos
+    # statements. Executa cada statement; o valor é `final_expr` se
+    # setado, senão o resultado da última Expressão em `statements`,
+    # senão 0.
+    # ==================================================================
+    def visit_BlockExpr(self, node):
+        from ...ast import Expr as AstExpr
+
+        last_val = ir.Constant(self.i64_ty, 0)
+
+        for stmt in node.statements:
+            if self.builder.block.is_terminated:
+                break
+            if isinstance(stmt, AstExpr):
+                last_val = self.visit(stmt)
+            else:
+                self.visit(stmt)
+
+        if node.final_expr is not None and not self.builder.block.is_terminated:
+            last_val = self.visit(node.final_expr)
+
+        return last_val

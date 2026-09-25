@@ -12,6 +12,9 @@ class ParserBase:
         self.source_code = source_code
         self.no_struct_literal = False
         self.pending_comments = []
+        # ADR 0003 — profundidade de `quote:` aberto no parser.
+        # > 0 significa que `~` é unquote (não bitwise NOT).
+        self._in_quote_depth = 0
 
     def current_token(self):
         return self.tokens[self.pos] if self.pos < len(self.tokens) else None

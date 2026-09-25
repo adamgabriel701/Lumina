@@ -6,6 +6,7 @@ from ..ast import (
     UnaryExpr, PropagateExpr, ComptimeExpr, StructLiteralExpr, CastExpr,
     LambdaExpr, StructLiteralField, Param, InterpolatedStringExpr, NoneExpr,
     NilExpr, TupleExpr, ChainedComparisonExpr,
+    QuoteExpr, UnquoteExpr, UnquoteSpliceExpr,
 )
 from ..errors import LuminaError
 
@@ -148,6 +149,12 @@ class ExpressionParser(ParserBase):
                 "Fim inesperado do código",
                 filename=self.filename, line=0, col=0, source_code=self.source_code,
             )
+
+        # ADR 0003 — Fase 1: reconhece quote: e ~/~@.
+        if self.check(TokenType.QUOTE):
+            return self.parse_quote()
+        if self.check(TokenType.TILDE):
+            return self.parse_tilde()
 
         if self.check(TokenType.COMPTIME):
             self.consume()
@@ -405,6 +412,82 @@ class ExpressionParser(ParserBase):
 
         self.expect(TokenType.RBRACKET)
         return IndexExpr(base_node, first)
+
+    # ============================================================
+    # ADR 0003 — quasiquote (Fase 1: parser-only)
+    # ============================================================
+    def parse_quote(self):
+        """`quote:` — abre um bloco de construção de AST.
+
+        Duas formas:
+            quote:
+                stmt1
+                stmt2
+                <última expressão>
+
+            quote: <expr>          # single-line
+
+        Ambas aceitam `~x` (unquote) e `~@xs` (unquote-splice).
+        """
+        self.consume()  # QUOTE
+        self.expect(TokenType.COLON)
+
+        # Forma single-line: `quote: <expr>`
+        if not self.check(TokenType.NEWLINE):
+            self._in_quote_depth += 1
+            try:
+                expr = self.parse_expression()
+            finally:
+                self._in_quote_depth -= 1
+            return QuoteExpr(statements=[expr])
+
+        # Forma multi-linha: `quote:\n    ...`
+        self.expect(TokenType.NEWLINE)
+        while self.check(TokenType.NEWLINE):
+            self.consume()
+        self.expect(TokenType.INDENT)
+
+        self._in_quote_depth += 1
+        try:
+            statements = []
+            while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
+                if self.match(TokenType.NEWLINE):
+                    continue
+                stmt = self.parse_statement()
+                if stmt is not None:
+                    statements.append(stmt)
+            self.expect(TokenType.DEDENT)
+        finally:
+            self._in_quote_depth -= 1
+
+        return QuoteExpr(statements)
+
+    def parse_tilde(self):
+        """`~x` (unquote) ou `~@xs` (unquote-splice).
+
+        Dentro de `quote:` (`_in_quote_depth > 0`), `~` significa
+        unquote. Fora, `~` é bitwise NOT (unário).
+
+        `~@` só é válido dentro de quote; fora, levanta erro
+        apontando para a linha do til.
+        """
+        if self._in_quote_depth > 0:
+            self.consume()  # TILDE
+            if self.check(TokenType.AT):
+                self.consume()  # AT
+                inner = self.parse_factor()
+                return UnquoteSpliceExpr(inner)
+            inner = self.parse_factor()
+            return UnquoteExpr(inner)
+        else:
+            tilde_tok = self.consume()  # TILDE
+            if self.check(TokenType.AT):
+                raise LuminaError(
+                    "`~@` só é válido dentro de um bloco `quote:`.",
+                    self.filename, tilde_tok.line, tilde_tok.col,
+                    self.source_code,
+                )
+            return UnaryExpr('~', self.parse_factor())
 
     # ==================================================================
     # v0.8.0: reconhece `[T]` como tipo slice.

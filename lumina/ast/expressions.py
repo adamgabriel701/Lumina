@@ -250,3 +250,45 @@ class ChainedComparisonExpr(Expr):
     """
     operands: List[Expr]
     ops: List[str]
+
+# ============================================================
+# ADR 0003 — quasiquote (Fase 1: parser-only)
+# ============================================================
+
+@dataclass
+class QuoteExpr(Expr):
+    """`quote:` — constrói um nó de AST em compile-time.
+
+    O corpo é uma lista de statements (podendo terminar em uma
+    expressão). Durante a fase de expansão de macros (Fase 2 da
+    ADR 0003), este nó é avaliado como construtor de AST, não
+    como código a ser executado.
+
+    `~x` (`UnquoteExpr`) interpola o nó da expressão `x`.
+    `~@xs` (`UnquoteSpliceExpr`) espalha uma lista de nós.
+
+    Fase 1: parser-only. Codegen rejeita este nó com erro
+    explícito ("Fase 2 não implementada").
+    """
+    statements: List[Any]
+
+
+@dataclass
+class UnquoteExpr(Expr):
+    """`~x` dentro de `quote:` — interpola o nó de AST de `x`.
+
+    Só pode aparecer dentro de um bloco `quote:`. O parser
+    rejeita `~@` fora de quote; `~x` fora de quote vira
+    `UnaryExpr('~', x)` (bitwise NOT).
+    """
+    expr: Expr
+
+
+@dataclass
+class UnquoteSpliceExpr(Expr):
+    """`~@xs` dentro de `quote:` — espalha a lista de nós `xs`.
+
+    `xs` deve avaliar em uma lista de nós (`[AstNode]`) durante
+    a expansão (Fase 2).
+    """
+    expr: Expr

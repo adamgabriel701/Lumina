@@ -7,6 +7,7 @@ from lumina.ast import (
     UnaryExpr, CastExpr, StructLiteralExpr, MatchExpr, LambdaExpr,
     DeferStmt, AssertStmt, BenchStmt, BreakStmt, ContinueStmt, NoneExpr,
     NilExpr, TypeAlias, ChainedComparisonExpr,
+    QuoteExpr, UnquoteExpr, UnquoteSpliceExpr,
 )
 from lumina.ast.expressions import ArrayExpr, BoolExpr, PropagateExpr
 from lumina.ast.statements import MatchStmt
@@ -283,6 +284,24 @@ def _format_node_impl(node, indent_level=0):
         if indent_level > 0:
             return f"{indent}nil\n"
         return "nil"
+
+    elif isinstance(node, QuoteExpr):
+        s = f"{indent}quote:\n"
+        for stmt in node.statements:
+            s += format_node(stmt, indent_level + 1)
+        return s
+
+    elif isinstance(node, UnquoteExpr):
+        inner = format_node(node.expr, 0)
+        if indent_level > 0:
+            return f"{indent}~{inner}\n"
+        return f"~{inner}"
+
+    elif isinstance(node, UnquoteSpliceExpr):
+        inner = format_node(node.expr, 0)
+        if indent_level > 0:
+            return f"{indent}~@{inner}\n"
+        return f"~@{inner}"
 
     elif isinstance(node, NumberExpr):
         if indent_level > 0:

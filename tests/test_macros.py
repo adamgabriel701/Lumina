@@ -1,4 +1,12 @@
-"""Macros (@macro) via expansão de AST."""
+"""Macros (@macro) via expansão de AST.
+
+Cobre:
+  - Substituição simples (`return x * 2`)
+  - Substituição com expressão como argumento
+  - Composição (macro chamando macro)
+  - `quote:` / `~` (ADR 0003 Fase 2)
+  - Erros: quote fora de macro
+"""
 import os
 import pathlib
 import subprocess
@@ -9,6 +17,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
 def _run(src, timeout=30):
+    """Compila e executa. Retorna (stdout, returncode)."""
     with tempfile.NamedTemporaryFile("w", suffix=".lm", delete=False) as f:
         f.write(src)
         path = f.name
@@ -27,6 +36,42 @@ def _run(src, timeout=30):
                 os.remove(p)
 
 
+def _build(src, timeout=30):
+    """Só compila. Retorna `CompletedProcess`."""
+    with tempfile.NamedTemporaryFile("w", suffix=".lm", delete=False) as f:
+        f.write(src)
+        path = f.name
+    try:
+        return subprocess.run(
+            [sys.executable, "-m", "lumina_cli", "build", path],
+            capture_output=True, text=True, cwd=REPO_ROOT, timeout=timeout,
+        )
+    finally:
+        for p in (path, path[:-3] + ".ll", path[:-3]):
+            if os.path.exists(p):
+                os.remove(p)
+
+
+def _build_fails(src, timeout=30):
+    """Compila e espera falha. Retorna (stdout+stderr, rc)."""
+    with tempfile.NamedTemporaryFile("w", suffix=".lm", delete=False) as f:
+        f.write(src)
+        path = f.name
+    try:
+        r = subprocess.run(
+            [sys.executable, "-m", "lumina_cli", "build", path],
+            capture_output=True, text=True, cwd=REPO_ROOT, timeout=timeout,
+        )
+        return r.stdout + r.stderr, r.returncode
+    finally:
+        for p in (path, path[:-3] + ".ll", path[:-3]):
+            if os.path.exists(p):
+                os.remove(p)
+
+
+# ============================================================
+# Substituição básica
+# ============================================================
 def test_macro_simple():
     src = (
         '@macro\n'
@@ -58,15 +103,7 @@ def test_macro_with_expression_arg():
 
 
 def test_macro_two_args():
-    src = (
-        '@macro\n'
-        'fn max(a: int, b: int) -> int:\n'
-        '    return a > b ? a : b\n'   # sem ternário — usar if inline
-        '\n'
-        'fn main() -> int:\n'
-        '    return 0\n'
-    )
-    # Sem ternário em Lumina. Reescrever.
+    """Macro com 2 args; sem ternário, usa chamada dupla."""
     src = (
         '@macro\n'
         'fn sq(x: int) -> int:\n'
@@ -80,6 +117,9 @@ def test_macro_two_args():
     assert "25" in out, f"out={out!r}"
 
 
+# ============================================================
+# Composição
+# ============================================================
 def test_macro_composes_with_other_calls():
     src = (
         '@macro\n'
@@ -98,12 +138,16 @@ def test_macro_composes_with_other_calls():
     assert "12" in out, f"out={out!r}"
 
 
-def test_macro_rejects_multistatement():
-    """Macro multi-statement chamada como **expressão** (sem `!`) falha.
+# ============================================================
+# Multi-statement via QuoteInterpreter (ADR 0003)
+# ============================================================
+def test_macro_multistatement_ok_via_interpreter():
+    """Corpo multi-statement é interpretado em compile-time (v0.9.0).
 
-    Declarar uma macro com corpo multi-statement é válido (ela pode ser
-    usada em statement via `nome!(...)`). O que falha é tentar usá-la
-    como expressão — isso exigiria um valor de retorno que ela não tem.
+    A partir da ADR 0003 Fase 2, o `QuoteInterpreter` avalia `let`
+    e `return` dentro do corpo da macro. O teste antigo verificava
+    que isso falhava; agora o comportamento é intencionalmente
+    diferente.
     """
     src = (
         '@macro\n'
@@ -112,30 +156,17 @@ def test_macro_rejects_multistatement():
         '    return y * 2\n'
         '\n'
         'fn main() -> int:\n'
-        '    let r = bad(3)\n'   # ← sem `!`, chamada como expressão
-        '    return r\n'
+        '    return bad(3)\n'   # (3+1)*2 = 8
     )
-    with tempfile.NamedTemporaryFile("w", suffix=".lm", delete=False) as f:
-        f.write(src)
-        path = f.name
-    try:
-        r = subprocess.run(
-            [sys.executable, "-m", "lumina_cli", "build", path],
-            capture_output=True, text=True, cwd=REPO_ROOT,
-        )
-        assert r.returncode != 0, (
-            f"macro multi-statement como expressão deveria falhar:\n{r.stdout}"
-        )
-        combined = r.stdout + r.stderr
-        assert "return <expr>" in combined or "posição de statement" in combined, (
-            f"mensagem de erro não menciona a sintaxe correta:\n{combined}"
-        )
-    finally:
-        for p in (path, path[:-3] + ".ll", path[:-3]):
-            if os.path.exists(p):
-                os.remove(p)
+    r = _build(src)
+    assert r.returncode == 0, (
+        f"macro multi-statement como expressão deveria compilar:\n{r.stdout}\n{r.stderr}"
+    )
 
 
+# ============================================================
+# Argumentos `ptr` / composição com codegen
+# ============================================================
 def test_macro_with_ptr_arg():
     src = (
         '@macro\n'
@@ -150,3 +181,21 @@ def test_macro_with_ptr_arg():
     )
     out, rc = _run(src)
     assert "77" in out, f"out={out!r}"
+
+
+# ============================================================
+# ADR 0003 — `quote:` / `~`
+# ============================================================
+def test_quote_identity():
+    src = (
+        '@macro\n'
+        'fn passthrough(x):\n'
+        '    quote:\n'
+        '        ~x\n'
+        '\n'
+        'fn main() -> int:\n'
+        '    print(passthrough(42))\n'
+        '    return 0\n'
+    )
+    out, rc = _run(src)
+    assert "42" in out, f"out={out!r}"

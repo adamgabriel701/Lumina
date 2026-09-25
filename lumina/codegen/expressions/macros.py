@@ -35,39 +35,6 @@ class MacrosMixin:
         return name in getattr(self, 'macros', {})
 
     # ==================================================================
-    # Expansão em posição de expressão (`nome(args)`)
-    # ==================================================================
-    def _expand_macro_expr(self, macro_fn, arg_nodes):
-        """Expande macro_fn como expressão. Corpo deve ser `return <expr>`."""
-        params = macro_fn.params
-
-        if len(arg_nodes) != len(params):
-            from ...errors import LuminaError
-            raise LuminaError(
-                f"Macro '{macro_fn.name}' espera {len(params)} args, "
-                f"recebeu {len(arg_nodes)}.",
-                self.filename if hasattr(self, 'filename') else '<repl>',
-                getattr(macro_fn, 'line', 0), getattr(macro_fn, 'col', 0), '',
-            )
-
-        body = macro_fn.body
-        return_stmts = [s for s in body if type(s).__name__ == 'ReturnStmt']
-        if len(body) != 1 or not return_stmts or not return_stmts[0].values:
-            from ...errors import LuminaError
-            raise LuminaError(
-                f"Macro '{macro_fn.name}' usada como expressão deve ter "
-                f"corpo `return <expr>` (um único statement). Para corpo "
-                f"multi-statement, use `{macro_fn.name}!(...)` em posição "
-                f"de statement.",
-                self.filename if hasattr(self, 'filename') else '<repl>',
-                getattr(macro_fn, 'line', 0), getattr(macro_fn, 'col', 0), '',
-            )
-
-        expr = return_stmts[0].values[0]
-        mapping = {p.name: arg for p, arg in zip(params, arg_nodes)}
-        return self._substitute_in_expr(expr, mapping)
-
-    # ==================================================================
     # Expansão em posição de statement (`nome!(args)`)
     # ==================================================================
     def _expand_macro_stmt(self, macro_fn, arg_nodes):
@@ -271,3 +238,70 @@ class MacrosMixin:
 
         # Fallback: deepcopy sem substituição
         return copy.deepcopy(stmt)
+
+    # ==================================================================
+    # ADR 0003 — Phase 2: expansão com quote:
+    # ==================================================================
+    def _expand_macro_expr(self, macro_fn, arg_nodes):
+        """Expande `macro_fn` como expressão.
+
+        Usa `QuoteInterpreter` para interpretar o corpo em compile-time.
+        Suporta substituição direta **e** construção via `quote:`.
+        """
+        params = macro_fn.params
+        if len(arg_nodes) != len(params):
+            from ...errors import LuminaError
+            raise LuminaError(
+                f"Macro '{macro_fn.name}' espera {len(params)} args, "
+                f"recebeu {len(arg_nodes)}.",
+                self.filename if hasattr(self, 'filename') else '<repl>',
+                getattr(macro_fn, 'line', 0), getattr(macro_fn, 'col', 0), '',
+            )
+
+        env = {p.name: a for p, a in zip(params, arg_nodes)}
+
+        from ..quote_eval import QuoteInterpreter, QuoteError
+        interp = QuoteInterpreter(macros=self.macros)
+        try:
+            return interp.interpret_expression(macro_fn.body, env)
+        except QuoteError as e:
+            from ...errors import LuminaError
+            raise LuminaError(
+                f"Erro na expansão da macro '{macro_fn.name}': {e.msg}",
+                self.filename if hasattr(self, 'filename') else '<repl>',
+                getattr(macro_fn, 'line', 0), getattr(macro_fn, 'col', 0), '',
+            )
+
+    def visit_QuoteExpr(self, node):
+        from ...errors import LuminaError
+        raise LuminaError(
+            message=(
+                "`quote:` só pode aparecer dentro de uma macro `@macro`. "
+                "Fora de macros, `quote:` não tem significado — "
+                "escreva a expressão diretamente."
+            ),
+            filename=getattr(self, 'current_filename', '<codegen>'),
+            line=getattr(node, 'line', 0) or 0,
+            col=getattr(node, 'col', 0) or 0,
+            source_code=getattr(self, 'source_code', '') or '',
+        )
+
+    def visit_UnquoteExpr(self, node):
+        from ...errors import LuminaError
+        raise LuminaError(
+            message="`~x` só pode aparecer dentro de um bloco `quote:`.",
+            filename=getattr(self, 'current_filename', '<codegen>'),
+            line=getattr(node, 'line', 0) or 0,
+            col=getattr(node, 'col', 0) or 0,
+            source_code=getattr(self, 'source_code', '') or '',
+        )
+
+    def visit_UnquoteSpliceExpr(self, node):
+        from ...errors import LuminaError
+        raise LuminaError(
+            message="`~@xs` só pode aparecer dentro de um bloco `quote:`.",
+            filename=getattr(self, 'current_filename', '<codegen>'),
+            line=getattr(node, 'line', 0) or 0,
+            col=getattr(node, 'col', 0) or 0,
+            source_code=getattr(self, 'source_code', '') or '',
+        )

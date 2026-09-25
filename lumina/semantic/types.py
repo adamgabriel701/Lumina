@@ -15,8 +15,17 @@ def _base(t: str) -> str:
 
 
 def _is_type_param(t: str) -> bool:
-    """Um type param genérico é uma letra maiúscula sozinha (T, U, V, ...)."""
-    return bool(t) and len(t) == 1 and t.isupper()
+    """Um type param genérico é uma letra maiúscula sozinha (T, U, V, ...).
+
+    ADR 0003: `"auto"` também é tratado como type param — é o tipo
+    dos parâmetros de macro sem anotação, aceitos em qualquer posição
+    sem checagem.
+    """
+    if not t:
+        return False
+    if t == "auto":
+        return True
+    return len(t) == 1 and t.isupper()
 
 
 def _is_slice_type(t: str) -> bool:

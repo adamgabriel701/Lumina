@@ -1,18 +1,9 @@
 from llvmlite import ir
-from ...ast import BinaryExpr, SliceExpr
+from ...ast import BinaryExpr, SliceExpr, VariableExpr
 
 
 class MembersMixin:
 
-    # ------------------------------------------------------------------
-    # Helper: normaliza um valor lido de memória para i64.
-    # O resto do codegen assume que todo valor "escalar" é i64.
-    # - i1  → zext (bool)
-    # - iN  → sext (N < 64, ex: i8 de alloc_bytes)
-    # - ptr → ptrtoint
-    # - f64 → mantém (é float, não é escalar inteiro)
-    # - i64 → mantém
-    # ------------------------------------------------------------------
     def _normalize_loaded(self, val, name_hint="load"):
         if isinstance(val.type, ir.IntType) and val.type.width < 64:
             if val.type.width == 1:
@@ -27,8 +18,6 @@ class MembersMixin:
         if ptr:
             return self.builder.load(ptr, name=node.name + "_load")
 
-        # Variante de enum bare (ex: `Red`, `Stop`) — antes de funções,
-        # porque variantes são registradas em `functions_table`.
         lookup = self._find_enum_variant(node.name)
         if lookup is not None:
             enum_name, variant_idx = lookup
@@ -46,18 +35,14 @@ class MembersMixin:
                     return self._construct_enum(enum_name, variant_idx, [])
                 break
 
-        # Função nomeada usada como valor → fat pointer {fn_ptr, NULL}.
-        # `&fn_name` (AddressOfExpr) devolve o ptr cru p/ FFI.
         if node.name in self.functions_table:
             func, _ = self.functions_table[node.name]
             return self._wrap_fn_as_closure(func, name_hint=node.name)
 
-        # Globais mutáveis.
         gv = getattr(self, 'global_mut_vars', {}).get(node.name)
         if gv is not None:
             return self.builder.load(gv, name=f"g_{node.name}_load")
 
-        # Top-level `let X = <literal>` vira constante inline.
         global_node = getattr(self, 'global_var_decls', {}).get(node.name)
         if global_node is not None:
             return self.visit(global_node.value)
@@ -65,8 +50,6 @@ class MembersMixin:
         return ir.Constant(self.i64_ty, 0)
 
     def visit_MemberExpr(self, node):
-        """Acesso a campo. Com `?.` (is_safe) OU `@safe` na função,
-        faz null check e retorna 0 se o ponteiro for nil."""
         obj_val = self.visit(node.obj)
 
         if not (isinstance(obj_val.type, ir.PointerType)
@@ -78,7 +61,6 @@ class MembersMixin:
         if field_idx is None:
             return ir.Constant(self.i64_ty, 0)
 
-        # Safe se `?.` explícito OU modo @safe ativo
         safe = node.is_safe or getattr(self, '_safe_mode', False)
 
         if not safe:
@@ -88,7 +70,6 @@ class MembersMixin:
             )
             return self.builder.load(elem_ptr, name=node.member + "_load")
 
-        # Null check
         null_ptr = ir.Constant(obj_val.type, None)
         is_null = self.builder.icmp_signed("==", obj_val, null_ptr, name="safe_nav_isnull")
 
@@ -120,14 +101,12 @@ class MembersMixin:
         return phi
 
     def visit_IndexExpr(self, node):
-        """Index `arr[i]`. Com `@safe`, checa nil do array."""
         arr_val = self.visit(node.array)
         idx_val = self.visit(node.index)
 
         if not isinstance(arr_val.type, ir.PointerType):
             return ir.Constant(self.i64_ty, 0)
 
-        # Em modo @safe, checa nil
         if getattr(self, '_safe_mode', False):
             null_ptr = ir.Constant(arr_val.type, None)
             is_null = self.builder.icmp_signed("==", arr_val, null_ptr, name="safe_idx_isnull")
@@ -138,16 +117,21 @@ class MembersMixin:
 
             self.builder.cbranch(is_null, null_bb, ok_bb)
 
-            self.builder.position_at_end(null_bb)
-            self.builder.branch(end_bb)
-
             self.builder.position_at_end(ok_bb)
             raw = self._load_index(arr_val, idx_val)
             self.builder.branch(end_bb)
 
+            self.builder.position_at_end(null_bb)
+            if isinstance(raw.type, ir.PointerType):
+                default_val = ir.Constant(raw.type, None)
+            elif raw.type == self.f64_ty:
+                default_val = ir.Constant(raw.type, 0.0)
+            else:
+                default_val = ir.Constant(raw.type, 0)
+            self.builder.branch(end_bb)
+
             self.builder.position_at_end(end_bb)
-            default_val = ir.Constant(self.i64_ty, 0)
-            phi = self.builder.phi(self.i64_ty, name="safe_idx_result")
+            phi = self.builder.phi(raw.type, name="safe_idx_result")
             phi.add_incoming(default_val, null_bb)
             phi.add_incoming(raw, ok_bb)
             return phi
@@ -155,35 +139,62 @@ class MembersMixin:
         return self._load_index(arr_val, idx_val)
 
     def _load_index(self, arr_val, idx_val):
-        """Helper: load real do index (sem null check)."""
         if isinstance(arr_val.type.pointee, ir.ArrayType):
             elem_ptr = self.builder.gep(arr_val, [ir.Constant(self.i32_ty, 0), idx_val])
+            elem_ty = elem_ptr.type.pointee
             raw = self.builder.load(elem_ptr, name="arr_idx_load")
         else:
+            elem_ty = arr_val.type.pointee
             elem_ptr = self.builder.gep(arr_val, [idx_val])
             raw = self.builder.load(elem_ptr, name="ptr_idx_load")
-        return self._normalize_loaded(raw, name_hint="idx")
 
-    # ------------------------------------------------------------------
-    # Slicing: arr[a..b], arr[..b], arr[a..], arr[..]
-    # ------------------------------------------------------------------
+        if elem_ty == self.i64_ty:
+            return raw
+        if elem_ty == self.f64_ty:
+            return raw
+        if isinstance(elem_ty, ir.PointerType):
+            return raw
+        if isinstance(elem_ty, ir.IntType) and elem_ty.width < 64:
+            if elem_ty.width == 1:
+                return self.builder.zext(raw, self.i64_ty, name="idx_zext")
+            return self.builder.sext(raw, self.i64_ty, name="idx_sext")
+        return raw
+
+    # ==================================================================
+    # Helper: coerce um valor inteiro para i64.
+    #
+    # `i1` (bool) → `zext` (1 → 1, 0 → 0).
+    # `iN` (N<64, N≠1) → `sext` (preserva sinal).
+    # `i64` → no-op.
+    #
+    # **Crítico:** usar `sext` em `i1` produz `-1` (todos os bits 1),
+    # não `1`. Isso quebra slices cujo bound é uma comparação
+    # (`v[0..n == 4]`), transformando `length = 1` em `length = -1` e
+    # levando a `malloc(-8)` → NULL → SIGSEGV em `s[0]`.
+    # ==================================================================
+    def _to_i64_int(self, val, name_hint):
+        """Converte `val` para i64 com semântica correta para i1."""
+        if val.type == self.i64_ty:
+            return val
+        if isinstance(val.type, ir.IntType):
+            if val.type.width == 1:
+                return self.builder.zext(val, self.i64_ty, name=f"{name_hint}_zext")
+            return self.builder.sext(val, self.i64_ty, name=f"{name_hint}_sext")
+        # Fallback: não é int — provavelmente erro já detectado em semantic.
+        return val
+
     def visit_SliceExpr(self, node):
         """`arr[start..end]` com bounds opcionais.
 
-        - Strings: copia bytes e retorna nova string (malloc + strncpy).
-        - Arrays: copia elementos i64 para novo buffer.
-        - `start` ausente → 0.
-        - `end` ausente em string → strlen(arr).
-        - `end` ausente em array → limitação conhecida: usa `start` (length=0).
-          Fica o TODO de adicionar `len()` para arrays no futuro.
+        FIX (Fase 10c): bounds convertidos para i64 via `_to_i64_int`,
+        que usa `zext` para `i1` (comportamento correto para `bool`).
+        Antes, `sext` transformava `n == 4` (i1 = 1) em `i64 -1`.
         """
         arr_val = self.visit(node.array)
 
-        # --- Bound inferior ---
         if node.start is not None:
             start_val = self.visit(node.start)
-            if start_val.type != self.i64_ty:
-                start_val = self.builder.sext(start_val, self.i64_ty, name="slice_start_sext")
+            start_val = self._to_i64_int(start_val, "slice_start")
         else:
             start_val = ir.Constant(self.i64_ty, 0)
 
@@ -192,24 +203,23 @@ class MembersMixin:
             or (isinstance(arr_val.type, ir.PointerType) and arr_val.type.pointee == self.i8_ty)
         )
 
-        # --- Bound superior ---
         if node.end is not None:
             end_val = self.visit(node.end)
-            if end_val.type != self.i64_ty:
-                end_val = self.builder.sext(end_val, self.i64_ty, name="slice_end_sext")
+            end_val = self._to_i64_int(end_val, "slice_end")
         else:
             if is_string:
-                # String sem `end`: usa strlen
                 end_val = self.builder.call(self.strlen, [arr_val], name="slice_strlen")
             else:
-                # Array sem `end`: limitação — assume length = start (buffer vazio)
-                end_val = start_val
+                arr_len = None
+                if isinstance(node.array, VariableExpr):
+                    arr_len = getattr(self, 'array_lengths', {}).get(node.array.name)
+                if arr_len is not None:
+                    end_val = ir.Constant(self.i64_ty, arr_len)
+                else:
+                    end_val = start_val
 
         length = self.builder.sub(end_val, start_val, name="slice_len")
 
-        # ------------------------------------------------------------------
-        # Caso 1: String → aloca nova string + strncpy
-        # ------------------------------------------------------------------
         if is_string:
             length_plus = self.builder.add(
                 length, ir.Constant(self.i64_ty, 1), name="slice_len_plus"
@@ -221,16 +231,19 @@ class MembersMixin:
             self.builder.store(ir.Constant(self.i8_ty, 0), end_ptr)
             return buf
 
-        # ------------------------------------------------------------------
-        # Caso 2: Array (ponteiro) → copia elemento por elemento
-        # ------------------------------------------------------------------
         if isinstance(arr_val.type, ir.PointerType):
-            buf_size = self.builder.mul(
-                length, ir.Constant(self.i64_ty, 8), name="slice_arr_size"
+            elem_ty = arr_val.type.pointee
+
+            if isinstance(elem_ty, ir.IntType):
+                elem_bytes = max(1, elem_ty.width // 8)
+            else:
+                elem_bytes = 8
+
+            byte_count = self.builder.mul(
+                length, ir.Constant(self.i64_ty, elem_bytes), name="slice_arr_size"
             )
-            buf = self.builder.call(self.malloc, [buf_size], name="slice_arr_buf")
-            buf_ty = self.i64_ty.as_pointer()
-            buf = self.builder.bitcast(buf, buf_ty, name="slice_arr_cast")
+            raw_buf = self.builder.call(self.malloc, [byte_count], name="slice_arr_buf")
+            buf = self.builder.bitcast(raw_buf, elem_ty.as_pointer(), name="slice_arr_cast")
 
             loop_bb = self.builder.append_basic_block(name="slice_loop")
             end_bb = self.builder.append_basic_block(name="slice_end")
@@ -245,7 +258,6 @@ class MembersMixin:
             src_idx = self.builder.add(start_val, i, name="slice_src_idx")
             src_ptr = self.builder.gep(arr_val, [src_idx], name="slice_src_ptr")
             val_loaded = self.builder.load(src_ptr, name="slice_val")
-            val_loaded = self._normalize_loaded(val_loaded, name_hint="slice_val")
 
             dst_ptr = self.builder.gep(buf, [i], name="slice_dst_ptr")
             self.builder.store(val_loaded, dst_ptr)
@@ -259,5 +271,4 @@ class MembersMixin:
             self.builder.position_at_end(end_bb)
             return buf
 
-        # Fallback: tipo desconhecido
         return ir.Constant(self.i64_ty, 0)

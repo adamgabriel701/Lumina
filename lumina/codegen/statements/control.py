@@ -82,13 +82,11 @@ class ControlMixin:
         self.builder.position_at_end(end_bb)
 
     def visit_ForStmt(self, node):
-        # `for x in arr:` — iterable que NÃO é um range `..`.
         if node.iterable is not None and not (
             isinstance(node.iterable, BinaryExpr) and node.iterable.op == '..'
         ):
             return self._visit_for_iterable(node)
 
-        # `for i in a..b:` — comportamento original.
         if node.iterable is not None and isinstance(node.iterable, BinaryExpr) and node.iterable.op == '..':
             start_val = self.visit(node.iterable.left)
             end_val = self.visit(node.iterable.right)
@@ -143,31 +141,28 @@ class ControlMixin:
         self.builder.position_at_end(end_bb)
 
     def _visit_for_iterable(self, node):
-        """`for x in <iterable>:` — itera sobre cada elemento.
-
-        Casos:
-          1. Variável com array literal conhecido (via `array_lengths`):
-             `let arr = [1, 2, 3]; for x in arr` — N conhecido, GEP simples.
-          2. Array literal inline: `for x in [1, 2, 3]` — `alloca` de
-             `ArrayType`, `pointee.count` = N, GEP duplo `[0, idx]`.
-          3. String: `for c in "abc"` — strlen em runtime, GEP simples,
-             elemento `i8`.
-          4. Outros tipos: loop vazio (N=0) — não crasha.
-        """
+        # ==================================================================
+        # FIX (P-10-5): usa `node.index_var` em vez de checar
+        # `"," in node.var_name`.
+        # ==================================================================
 
         # --- Caso 0: `for i, x in arr` — índice + valor ---
-        if "," in node.var_name:
-            idx_name, val_name = node.var_name.split(",", 1)
-            idx_name = idx_name.strip()
-            val_name = val_name.strip()
+        if node.index_var is not None:
+            idx_name = node.index_var
+            val_name = node.var_name
 
             lengths = getattr(self, 'array_lengths', {})
             if isinstance(node.iterable, VariableExpr) and node.iterable.name in lengths:
                 n = lengths[node.iterable.name]
                 arr_val = self.visit(node.iterable)
                 len_val = ir.Constant(self.i64_ty, n)
-                elem_ty = self.i64_ty
-                use_array_gep = False
+                if (isinstance(arr_val.type, ir.PointerType)
+                        and isinstance(arr_val.type.pointee, ir.ArrayType)):
+                    elem_ty = arr_val.type.pointee.element
+                    use_array_gep = True
+                else:
+                    elem_ty = arr_val.type.pointee
+                    use_array_gep = False
             else:
                 arr_val = self.visit(node.iterable)
                 if (isinstance(arr_val.type, ir.PointerType)
@@ -192,7 +187,6 @@ class ControlMixin:
             self.symbol_table[val_name] = elem_ptr
             self.var_types[val_name] = self._llvm_ty_to_str(elem_ty)
 
-            # O índice é o próprio idx_ptr.
             idx_slot = self.builder.alloca(self.i64_ty, name=idx_name)
             self.symbol_table[idx_name] = idx_slot
             self.var_types[idx_name] = "int"
@@ -219,13 +213,12 @@ class ControlMixin:
             else:
                 ep = self.builder.gep(arr_val, [cur], name="forin_ep")
             raw = self.builder.load(ep, name="forin_elem")
-            raw = self._normalize_loaded(raw, name_hint="forin")
             if raw.type != elem_ty:
                 if isinstance(raw.type, ir.IntType) and isinstance(elem_ty, ir.IntType):
                     if raw.type.width > elem_ty.width:
                         raw = self.builder.trunc(raw, elem_ty, name="forin_trunc")
                     elif raw.type.width < elem_ty.width:
-                        raw = self.builder.zext(raw, elem_ty, name="forin_zext")
+                        raw = self.builder.sext(raw, elem_ty, name="forin_sext")
             self.builder.store(raw, elem_ptr)
 
             start = self._begin_scope()
@@ -249,51 +242,50 @@ class ControlMixin:
             self.builder.position_at_end(end_bb)
             return
 
-        # --- Caso 1: variável com array literal registrado ---
+        # --- Caso 0b: array literal inline (`for x in [1, 2, 3]`) ---
+        if isinstance(node.iterable, ArrayExpr):
+            n = len(node.iterable.elements)
+            arr_val = self.visit(node.iterable)
+            elem_ty = arr_val.type.pointee
+            return self._emit_forin_loop(
+                node, arr_val, ir.Constant(self.i64_ty, n), elem_ty,
+                use_array_gep=False,
+            )
+
+        # --- Caso 1: variável com array registrado ---
         if isinstance(node.iterable, VariableExpr):
             lengths = getattr(self, 'array_lengths', {})
             if node.iterable.name in lengths:
                 n = lengths[node.iterable.name]
                 arr_val = self.visit(node.iterable)
                 len_val = ir.Constant(self.i64_ty, n)
-                elem_ty = self.i64_ty
+                if (isinstance(arr_val.type, ir.PointerType)
+                        and isinstance(arr_val.type.pointee, ir.ArrayType)):
+                    elem_ty = arr_val.type.pointee.element
+                    use_array_gep = True
+                else:
+                    elem_ty = arr_val.type.pointee
+                    use_array_gep = False
                 return self._emit_forin_loop(
-                    node, arr_val, len_val, elem_ty, use_array_gep=False
+                    node, arr_val, len_val, elem_ty, use_array_gep=use_array_gep
                 )
 
         arr_val = self.visit(node.iterable)
 
-        # --- Caso 2: array literal inline (alloca de ArrayType) ---
-        if isinstance(arr_val.type, ir.PointerType) and isinstance(arr_val.type.pointee, ir.ArrayType):
-            n = arr_val.type.pointee.count
-            elem_ty = arr_val.type.pointee.element
-            return self._emit_forin_loop(
-                node, arr_val, ir.Constant(self.i64_ty, n), elem_ty,
-                use_array_gep=True,
-            )
-
-        # --- Caso 3: string ---
+        # --- Caso 2: string ---
         if arr_val.type == self.voidptr_ty:
             len_val = self.builder.call(self.strlen, [arr_val], name="forin_strlen")
             return self._emit_forin_loop(
                 node, arr_val, len_val, self.i8_ty, use_array_gep=False
             )
 
-        # --- Caso 4: não suportado — loop vazio ---
+        # --- Caso 3: não suportado — loop vazio ---
         return self._emit_forin_loop(
             node, arr_val, ir.Constant(self.i64_ty, 0), self.i64_ty,
             use_array_gep=False,
         )
 
     def _emit_forin_loop(self, node, arr_val, len_val, elem_ty, use_array_gep):
-        """Emite o loop `forin` propriamente dito.
-
-        `arr_val`: ponteiro para o primeiro elemento ou array.
-        `len_val`: i64 — número de iterações.
-        `elem_ty`: tipo LLVM do elemento.
-        `use_array_gep`: True se `arr_val` é `ArrayType*` (precisa GEP
-            com 2 índices); False se é `i64*`/`i8*` (GEP com 1 índice).
-        """
         idx_ptr = self.builder.alloca(self.i64_ty, name=f"__for_idx_{node.var_name}")
         self.builder.store(ir.Constant(self.i64_ty, 0), idx_ptr)
 
@@ -324,13 +316,16 @@ class ControlMixin:
             ep = self.builder.gep(arr_val, [cur], name="forin_ep")
 
         raw = self.builder.load(ep, name="forin_elem")
-        raw = self._normalize_loaded(raw, name_hint="forin")
+
         if raw.type != elem_ty:
             if isinstance(raw.type, ir.IntType) and isinstance(elem_ty, ir.IntType):
-                if raw.type.width > elem_ty.width:
+                if raw.type.width < elem_ty.width:
+                    raw = self.builder.sext(raw, elem_ty, name="forin_sext")
+                else:
                     raw = self.builder.trunc(raw, elem_ty, name="forin_trunc")
-                elif raw.type.width < elem_ty.width:
-                    raw = self.builder.zext(raw, elem_ty, name="forin_zext")
+            elif isinstance(raw.type, ir.PointerType) and isinstance(elem_ty, ir.PointerType):
+                raw = self.builder.bitcast(raw, elem_ty, name="forin_bitcast")
+
         self.builder.store(raw, elem_ptr)
 
         start = self._begin_scope()

@@ -59,16 +59,16 @@ class MatchStmtMixin:
         self.builder.branch(test_bb)
 
         self.builder.position_at_end(test_bb)
-        
+
         if is_struct_match:
             pattern_match = self._compute_struct_pattern_match(cond_val, variant)
         else:
             pattern_match = self._compute_pattern_match(kind, cond_val, variant, variant_map, i)
-            
+
         self.builder.cbranch(pattern_match, bind_bb, next_bb)
 
         self.builder.position_at_end(bind_bb)
-        
+
         if is_struct_match:
             self._emit_struct_bindings(cond_val, variant, binding)
         else:
@@ -121,29 +121,27 @@ class MatchStmtMixin:
     def _compute_struct_pattern_match(self, cond_val, variant_node):
         struct_name = cond_val.type.pointee.name
         fields_map = self.struct_fields.get(struct_name, {})
-        
+
         result = ir.Constant(ir.IntType(1), 1)
-        
+
         for field in variant_node.fields:
             fname = field.name
             fexpr = field.value
-            
-            # Se for apenas variável (binding), não testa valor
+
             if isinstance(fexpr, VariableExpr) and fexpr.name not in self.functions_table:
                 continue
-            # Se for número ou string, testa o valor
             if isinstance(fexpr, (NumberExpr, VariableExpr)):
                 elem_index = fields_map.get(fname)
                 if elem_index is None:
                     return ir.Constant(ir.IntType(1), 0)
-                
+
                 elem_ptr = self.builder.gep(
                     cond_val,
                     [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, elem_index)],
                     name=f"struct_match_ptr_{fname}"
                 )
                 field_val = self.builder.load(elem_ptr, name=f"struct_match_val_{fname}")
-                
+
                 if isinstance(fexpr, NumberExpr):
                     expected_val = ir.Constant(self.i64_ty, int(fexpr.value, 0))
                     cmp_val = self.builder.icmp_signed("==", field_val, expected_val, name=f"struct_match_eq_{fname}")
@@ -151,15 +149,15 @@ class MatchStmtMixin:
                     expected_str = self.visit(fexpr)
                     cmp_res = self.builder.call(self.strcmp, [field_val, expected_str], name=f"struct_match_strcmp_{fname}")
                     cmp_val = self.builder.icmp_signed("==", cmp_res, ir.Constant(ir.IntType(32), 0), name=f"struct_match_streq_{fname}")
-                
+
                 result = self.builder.and_(result, cmp_val, name=f"struct_match_and_{fname}")
-                
+
         return result
 
     def _emit_struct_bindings(self, cond_val, variant_node, binding):
         struct_name = cond_val.type.pointee.name
         fields_map = self.struct_fields.get(struct_name, {})
-            
+
         for field in variant_node.fields:
             fname = field.name
             fexpr = field.value
@@ -246,6 +244,21 @@ class MatchStmtMixin:
 
         return ir.Constant(ir.IntType(1), 0)
 
+    # ==================================================================
+    # Bindings de enum
+    #
+    # O slot físico do payload é:
+    #   - `i64` em enums não-genéricos (layout fixo)
+    #   - tipo concreto em enums genéricos (ex: `Box_str_` → `i8*`)
+    #
+    # O tipo DECLARADO (semântico) é sempre o da variante. Se os dois
+    # batem, no-op. Se o slot é `i64` e o declarado é `str`/`float`,
+    # converte preservando bits.
+    #
+    # Se `declared` é um type param não-resolvido (`T`), usamos o slot
+    # diretamente — o tipo já está correto (foi monomorphizado no
+    # `get_or_create_monomorphized_enum`).
+    # ==================================================================
     def _emit_bindings(self, kind, cond_val, variant, binding):
         if not binding:
             return
@@ -255,6 +268,19 @@ class MatchStmtMixin:
         names = binding if isinstance(binding, list) else [binding]
 
         if kind == "enum" and variant is not None:
+            # Descobre os tipos Lumina declarados dos payloads da variante.
+            struct_name = cond_val.type.pointee.name
+            struct_def = self.struct_defs.get(struct_name)
+            payload_lumina_types = []
+            if struct_def is not None and hasattr(struct_def, 'variants'):
+                for v in struct_def.variants:
+                    if v[0] == variant:
+                        payloads = v[1] if len(v) > 1 else []
+                        if not isinstance(payloads, list):
+                            payloads = [payloads] if payloads else []
+                        payload_lumina_types = payloads
+                        break
+
             for idx, name in enumerate(names):
                 pp = self.builder.gep(
                     cond_val,
@@ -262,16 +288,83 @@ class MatchStmtMixin:
                      ir.Constant(self.i32_ty, idx + 1)],
                     name=f"payload_ptr_{name}",
                 )
-                field_ty = pp.type.pointee
+                slot_ty = pp.type.pointee
                 payload_val = self.builder.load(pp, name=f"payload_{name}")
-                var_ptr = self.builder.alloca(field_ty, name=name)
+
+                declared = (payload_lumina_types[idx]
+                            if idx < len(payload_lumina_types) else None)
+
+                # Decide o tipo alvo.
+                # Type param não-resolvido (`T`, `U`) → slot já tem o tipo
+                # concreto; usar direto.
+                if declared is None or (len(declared) == 1 and declared.isupper()):
+                    target_ty = slot_ty
+                    var_lumina_type = self._llvm_ty_to_str(slot_ty)
+                else:
+                    target_ty = self.get_llvm_type(declared)
+                    var_lumina_type = declared
+                    # Slot é i64 mas declarado é str/f64/ptr → converter.
+                    payload_val = self._coerce_enum_payload_load(
+                        payload_val, slot_ty, target_ty, name,
+                    )
+                    target_ty = payload_val.type
+
+                var_ptr = self.builder.alloca(target_ty, name=name)
                 self.builder.store(payload_val, var_ptr)
                 self.symbol_table[name] = var_ptr
+                self.var_types[name] = var_lumina_type
         else:
             for name in names:
                 var_ptr = self.builder.alloca(cond_val.type, name=name)
                 self.builder.store(cond_val, var_ptr)
                 self.symbol_table[name] = var_ptr
+
+    def _coerce_enum_payload_load(self, loaded, slot_ty, target_ty, name):
+        """Converte o valor LIDO de um slot de enum para o tipo declarado,
+        preservando bits.
+
+        Casos:
+          - slot i64, target f64  → bitcast (reinterpreta bits)
+          - slot i64, target i8*  → inttoptr
+          - slot i8*, target i64  → ptrtoint
+          - int widening/narrowing → sext/zext/trunc
+        """
+        if loaded.type == target_ty:
+            return loaded
+
+        # int → int
+        if isinstance(loaded.type, ir.IntType) and isinstance(target_ty, ir.IntType):
+            if loaded.type.width < target_ty.width:
+                if loaded.type.width == 1:
+                    return self.builder.zext(loaded, target_ty, name=f"{name}_zext")
+                return self.builder.sext(loaded, target_ty, name=f"{name}_sext")
+            return self.builder.trunc(loaded, target_ty, name=f"{name}_trunc")
+
+        # i64 → i8* (payload str em enum não-genérico)
+        if loaded.type == self.i64_ty and isinstance(target_ty, ir.PointerType):
+            return self.builder.inttoptr(loaded, target_ty, name=f"{name}_itop")
+
+        # i64 → f64 (payload float em enum não-genérico)
+        if loaded.type == self.i64_ty and target_ty == self.f64_ty:
+            return self.builder.bitcast(loaded, target_ty, name=f"{name}_bitcast")
+
+        # f64 → i64
+        if loaded.type == self.f64_ty and target_ty == self.i64_ty:
+            return self.builder.bitcast(loaded, target_ty, name=f"{name}_bitcast")
+
+        # i8* → i64
+        if isinstance(loaded.type, ir.PointerType) and target_ty == self.i64_ty:
+            return self.builder.ptrtoint(loaded, target_ty, name=f"{name}_ptoi")
+
+        # ptr → ptr
+        if isinstance(loaded.type, ir.PointerType) and isinstance(target_ty, ir.PointerType):
+            return self.builder.bitcast(loaded, target_ty, name=f"{name}_bitcast")
+
+        # Fallback
+        try:
+            return self.builder.bitcast(loaded, target_ty, name=f"{name}_fallback")
+        except Exception:
+            return loaded
 
     def _is_enum_condition(self, cond_val):
         return self._classify_match_kind(cond_val) == "enum"

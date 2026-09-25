@@ -18,7 +18,15 @@ class CallsMixin:
         if not node.kwargs:
             return
         if fn_def is None:
-            return
+            raise LuminaError(
+                f"Argumentos nomeados não são suportados em "
+                f"'{getattr(node.callee, 'name', '?')}'. "
+                f"Use argumentos posicionais.",
+                self.filename,
+                getattr(node, 'line', 0) or 0,
+                getattr(node, 'col', 0) or 0,
+                self.source_code,
+            )
 
         params = fn_def.params
         if skip_self and params:
@@ -51,8 +59,6 @@ class CallsMixin:
                 )
             new_args[idx] = val
 
-        # Preenche buracos com o default do param. Se não houver,
-        # é erro de argumento obrigatório faltando.
         final_args = []
         for i in range(n):
             if new_args[i] is not None:
@@ -95,10 +101,7 @@ class CallsMixin:
                 self._resolve_kwargs(node, fn_def, skip_self=False)
 
         # Builtins com tipo de retorno conhecido (fonte única:
-        # lumina/builtins.py::BUILTIN_RET). Sem isso, o VarDecl infere
-        # "int" por padrão e `buf = alloc_bytes(N)` acaba batendo em
-        # campos `str`/`ptr`; `fgets` retornaria int e `r == nil`
-        # falharia.
+        # lumina/builtins.py::BUILTIN_RET).
         if not node.is_method:
             if func_name in BUILTIN_RET:
                 for arg in node.args:
@@ -106,8 +109,6 @@ class CallsMixin:
                 return BUILTIN_RET[func_name]
 
         # `obj.campo_fn(args)` — o "método" é na verdade um campo fn-typed.
-        # Precisa vir antes do branch `is_method` porque o parser não
-        # distingue `obj.metodo(x)` de `obj.campo(x)`.
         if (node.is_method
                 and isinstance(node.callee, MemberExpr)
                 and len(node.args) >= 1):
@@ -119,15 +120,13 @@ class CallsMixin:
                 if struct_def is not None and hasattr(struct_def, 'fields'):
                     field_type = struct_def.fields.get(func_name)
                     if field_type and (field_type == "fn" or field_type.startswith("fn(")):
-                        # É um campo fn: trata como chamada indireta,
-                        # extraindo o valor do campo e chamando.
                         sig = None
                         if field_type.startswith("fn("):
                             sig = parse_fn_type(field_type)
                         if sig is not None:
                             param_types, ret_type = sig
                             n_expected = len(param_types)
-                            n_got = len(node.args) - 1  # excluindo o obj
+                            n_got = len(node.args) - 1
                             if n_got != n_expected:
                                 raise LuminaError(
                                     f"Campo '{func_name}' espera {n_expected} "
@@ -146,7 +145,6 @@ class CallsMixin:
                                         getattr(node, 'col', 0), self.source_code,
                                     )
                             return ret_type if ret_type != "void" else None
-                        # fn sem assinatura: só visita args e devolve None
                         for arg in node.args[1:]:
                             self.visit(arg)
                         return None
@@ -171,7 +169,6 @@ class CallsMixin:
                         getattr(node, 'col', 0), self.source_code,
                     )
             elif obj_type != "Unknown":
-                # NOVO: tenta nome completo (Box_int__get), depois base (Box_get).
                 from ...common.mangle import mangle_method
                 base_name = obj_type.split('<')[0]
                 candidates = []
@@ -192,7 +189,6 @@ class CallsMixin:
             var_type = info.get('type') if info else None
 
             if var_type == 'fn':
-                # fn sem assinatura — sem checagem
                 for arg in node.args:
                     self.visit(arg)
                 return None
@@ -263,22 +259,22 @@ class CallsMixin:
                 type_params = getattr(fn_def, 'type_params', None) or []
 
                 if type_params:
-                    # Infere type_map unificando (param_type, arg_type)
+                    # FIX 8: visitta cada arg UMA vez e reusa o tipo na
+                    # validação. Antes, `self.visit(arg_node)` era chamado
+                    # 2× (unificação + validação), duplicando efeitos
+                    # colaterais como heap_allocs/freed_vars.
+                    arg_types = [self.visit(a) for a in node.args]
+
                     type_map = {}
-                    for arg_node, param in zip(node.args, fn_def.params):
-                        arg_type = self.visit(arg_node)
+                    for arg_type, param in zip(arg_types, fn_def.params):
                         if arg_type is None:
                             continue
                         unify_type(param.type_ann, arg_type, type_map)
 
-                    # Valida com tipo substituído
-                    for arg_node, param in zip(node.args, fn_def.params):
-                        arg_type = self.visit(arg_node)
+                    for arg_type, param in zip(arg_types, fn_def.params):
                         if arg_type is None:
                             continue
                         expected = substitute_generic(param.type_ann, type_map)
-                        # Se ainda tem type params não resolvidos, aceita
-                        # (não dá para validar sem contexto)
                         if expected != param.type_ann and expected.isupper():
                             continue
                         if not is_assignable(expected, arg_type):
@@ -289,7 +285,6 @@ class CallsMixin:
                                 getattr(node, 'col', 0), self.source_code,
                             )
                 else:
-                    # Comportamento antigo (sem type params)
                     for arg_node, param in zip(node.args, fn_def.params):
                         arg_type = self.visit(arg_node)
                         p_name, p_type = param.name, param.type_ann
@@ -303,7 +298,6 @@ class CallsMixin:
                             )
 
             # Rastreia variáveis liberadas com `free()`.
-            # Usado pelo escape analysis para NÃO colocar no stack.
             if func_name == "free" and node.args:
                 arg0 = node.args[0]
                 if isinstance(arg0, VariableExpr):

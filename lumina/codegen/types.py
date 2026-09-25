@@ -1,5 +1,6 @@
 from llvmlite import ir
 from ..common.mangle import mangle_type
+from ..errors import LuminaError
 from ..semantic.types import substitute_generic
 
 
@@ -24,7 +25,6 @@ class TypesCodegen:
         elif type_name in self.struct_defs and getattr(
             self.struct_defs[type_name], 'type_params', None
         ):
-            # Nome genérico bare (ex: "Option") → default int args.
             base_decl = self.struct_defs[type_name]
             default_args = ["int"] * len(base_decl.type_params)
             full = f"{type_name}<{','.join(default_args)}>"
@@ -39,10 +39,7 @@ class TypesCodegen:
         return self.i64_ty
 
     def get_llvm_param_type(self, type_name):
-        # NOVO: força monomorphização primeiro (popula `struct_types`),
-        # evitando inconsistência entre a 1ª e a 2ª chamada.
         llvm_ty = self.get_llvm_type(type_name)
-        # Structs são passadas por ponteiro em parâmetros.
         if isinstance(llvm_ty, ir.IdentifiedStructType):
             return llvm_ty.as_pointer()
         return llvm_ty
@@ -61,20 +58,23 @@ class TypesCodegen:
         type_args = [a.strip() for a in args_str.split(',')]
 
         if base_name not in self.struct_defs:
-            raise Exception(f"Struct base '{base_name}' não encontrada.")
+            raise LuminaError(
+                message=f"Struct base '{base_name}' não encontrada.",
+                filename=getattr(self, 'current_filename', '<codegen>'),
+                line=0, col=0, source_code='',
+            )
         base_decl = self.struct_defs[base_name]
         if not base_decl.type_params:
-            raise Exception(f"Struct '{base_name}' não é Genérica.")
+            raise LuminaError(
+                message=f"Struct '{base_name}' não é Genérica.",
+                filename=getattr(self, 'current_filename', '<codegen>'),
+                line=0, col=0, source_code='',
+            )
 
         type_map = dict(zip(base_decl.type_params, type_args))
-
-        # Nome LLVM mangled: "Box<int>" → "Box_int_"
         mangled = type_name.replace('<', '_').replace('>', '_').replace(',', '_')
         new_ty = self.module.context.get_identified_type(mangled)
 
-        # Registra sob as DUAS chaves:
-        #   - canônica ("Box<int>")  → usada pelo parser/semantic
-        #   - mangled  ("Box_int_")  → usada pelo codegen (via .pointee.name)
         self.struct_types[type_name] = new_ty
         self.struct_types[mangled] = new_ty
 
@@ -84,9 +84,6 @@ class TypesCodegen:
         fields_map = {name: i for i, name in enumerate(base_decl.fields.keys())}
         self.struct_fields[type_name] = fields_map
         self.struct_fields[mangled] = fields_map
-        # NOVO: registra sob as DUAS chaves. `_construct_enum` consulta
-        # pela canônica (`Custom<int>`), enquanto `_find_enum_variant` e
-        # `codegen_method_call` usam a mangled via `.pointee.name`.
         self.struct_defs[type_name] = base_decl
         self.struct_defs[mangled] = base_decl
 
@@ -96,9 +93,7 @@ class TypesCodegen:
         """Cria/retorna a especialização LLVM de um enum genérico.
 
         Layout: [i32 tag, payload_0, payload_1, ...] onde cada payload_i
-        tem o tipo concreto do arg correspondente. Se variantes têm payloads
-        de tipos diferentes no mesmo slot, o tipo do slot é o do primeiro
-        payload encontrado (o LLVM exige tipos homogêneos por campo).
+        tem o tipo concreto do arg correspondente.
         """
         if type_name in self.struct_types:
             return self.struct_types[type_name]
@@ -108,10 +103,18 @@ class TypesCodegen:
         type_args = [a.strip() for a in args_str.split(',')]
 
         if base_name not in self.struct_defs:
-            raise Exception(f"Enum base '{base_name}' não encontrado.")
+            raise LuminaError(
+                message=f"Enum base '{base_name}' não encontrado.",
+                filename=getattr(self, 'current_filename', '<codegen>'),
+                line=0, col=0, source_code='',
+            )
         base_decl = self.struct_defs[base_name]
         if not getattr(base_decl, 'type_params', None):
-            raise Exception(f"Enum '{base_name}' não é genérico.")
+            raise LuminaError(
+                message=f"Enum '{base_name}' não é genérico.",
+                filename=getattr(self, 'current_filename', '<codegen>'),
+                line=0, col=0, source_code='',
+            )
 
         type_map = dict(zip(base_decl.type_params, type_args))
         mangled = mangle_type(type_name)
@@ -123,7 +126,7 @@ class TypesCodegen:
         max_p = self._enum_max_payloads(base_decl)
         fields = [ir.IntType(32)]
         for i in range(max_p):
-            payload_ty = ir.IntType(64)  # default
+            payload_ty = ir.IntType(64)
             for v in base_decl.variants:
                 v_payloads = v[1] if len(v) > 1 else []
                 if isinstance(v_payloads, list) and i < len(v_payloads):
@@ -141,10 +144,12 @@ class TypesCodegen:
             fields_map["payload"] = 1
         self.struct_fields[type_name] = fields_map
         self.struct_fields[mangled] = fields_map
-        # NOVO: registra sob as DUAS chaves. `_construct_enum` consulta
-        # pela canônica (`Custom<int>`), enquanto `_find_enum_variant` e
-        # `codegen_method_call` usam a mangled via `.pointee.name`.
         self.struct_defs[type_name] = base_decl
         self.struct_defs[mangled] = base_decl
+
+        # FIX: invalida cache de variantes, pois acabamos de adicionar
+        # uma nova chave em `struct_defs`.
+        if hasattr(self, '_invalidate_variant_cache'):
+            self._invalidate_variant_cache()
 
         return new_ty

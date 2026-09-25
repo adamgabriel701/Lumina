@@ -4,7 +4,7 @@ from ...ast import (
     StructLiteralField, LambdaExpr, TupleExpr,
 )
 from ..context import push_context
-from ..constants import I64_BYTES, CLOSURE_BLOCK_SIZE   # ← NOVO
+from ..constants import I64_BYTES, CLOSURE_BLOCK_SIZE
 
 
 class AggregatesMixin:
@@ -35,27 +35,56 @@ class AggregatesMixin:
 
         return val
 
+    # ==================================================================
+    # FIX (Fase 8): `visit_ArrayExpr` agora retorna `T*` (ponteiro
+    # para o primeiro elemento), não `[T;N]*` (ponteiro para o array).
+    #
+    # Isso unifica a representação com `alloc(N)` — que já retornava
+    # `i64*` — e permite que arrays de f64/str preservem o tipo sem
+    # exigir GEP duplo na indexação.
+    #
+    # Tipos suportados:
+    #   [1, 2, 3]         → i64*  (stride 8)
+    #   [1.5, 2.5]        → f64*  (stride 8, preserva float)
+    #   ["a", "b"]        → i8**  (stride 8, preserva ponteiro)
+    #   [true, false]     → i1*   (stride 1)
+    #   []                → i64*  (vazio)
+    # ==================================================================
     def visit_ArrayExpr(self, node):
-        elem_ty = self.i64_ty
         if len(node.elements) > 0:
             first_val = self.visit(node.elements[0])
-            elem_ty = first_val.type
-            if not isinstance(elem_ty, ir.IntType):
+            if isinstance(first_val.type, ir.IntType):
+                # i1, i8, i32, i64 → mantém tipo (stride 1, 1, 4, 8)
+                elem_ty = first_val.type
+            elif first_val.type == self.f64_ty:
+                elem_ty = self.f64_ty
+            elif isinstance(first_val.type, ir.PointerType):
+                elem_ty = first_val.type
+            else:
                 elem_ty = self.i64_ty
+        else:
+            elem_ty = self.i64_ty
 
         array_ty = ir.ArrayType(elem_ty, len(node.elements))
-        ptr = self.builder.alloca(array_ty, name="array_lit")
+        alloca = self.builder.alloca(array_ty, name="array_lit")
 
+        # Pega ponteiro para o primeiro elemento (T*).
+        zero32 = ir.Constant(self.i32_ty, 0)
+        first_elem_ptr = self.builder.gep(
+            alloca, [zero32, zero32], name="array_first"
+        )
+
+        # Escreve os elementos via GEP simples sobre T*.
+        # Para i1/i8, o stride é 1/1. Para i64/f64/ptr, stride 8.
         for i, el in enumerate(node.elements):
             el_ptr = self.builder.gep(
-                ptr,
-                [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, i)],
+                first_elem_ptr, [ir.Constant(self.i64_ty, i)],
                 name=f"arr_el_{i}",
             )
             val = self.visit(el)
             val = self._coerce_for_store(val, elem_ty, name_hint=f"arr_{i}")
             self.builder.store(val, el_ptr)
-        return ptr
+        return first_elem_ptr
 
     def visit_TupleExpr(self, node):
         """`(a, b, c)` — LiteralStructType heterogêneo."""
@@ -107,38 +136,12 @@ class AggregatesMixin:
     # Lambdas
     # ==================================================================
     def visit_LambdaExpr(self, node):
-        """Toda lambda é uma closure `{fn_ptr, env_ptr}`.
-
-        Mesmo sem capturas, o env é uma struct vazia e o chamador
-        sempre desempacka via `_call_closure`. Isso unifica o ABI de
-        `fn` (fat pointer) e destrava closures com captura passadas
-        como callbacks.
-        """
         return self._emit_lambda_closure(node)
 
     def _emit_lambda_closure(self, node):
-        """Lambda com capturas.
-
-        Emite:
-          1. Env struct (LiteralStructType) alocado no heap.
-          2. Função `i64 __closure_N(i8* env, i64 a1, ..., i64 aN)`.
-          3. Bloco closure `{i8* fn, i8* env}` alocado no heap.
-        Retorna ponteiro para o bloco closure (i8*).
-
-        Refatoração (Fase 1):
-          Antes, 6 campos (`builder`, `symbol_table`, `var_types`,
-          `defer_stack`, `closure_vars`, `current_func_name` +
-          `current_body_bb`) eram salvos/restaurados manualmente, sem
-          cobrir `_safe_mode` e sem garantia em caso de exceção. Agora
-          usa `push_context`, que restaura TUDO (inclusive em exception).
-        """
         free = list(node.free_vars)
-
-        # Captura o conjunto de closure_vars do escopo EXTERNO antes de
-        # entrar no novo contexto (push_context restaura este estado).
         outer_closure_vars = set(self.closure_vars)
 
-        # 1) Tipos dos campos do env + ponteiros externos para os valores
         env_field_tys = []
         env_field_ptrs = []
         for name in free:
@@ -152,7 +155,6 @@ class AggregatesMixin:
 
         env_ty = ir.LiteralStructType(env_field_tys)
 
-        # 2) Aloca env
         n = len(env_field_tys)
         env_size = max(CLOSURE_BLOCK_SIZE, I64_BYTES * n)
         env_raw = self.builder.call(
@@ -165,7 +167,6 @@ class AggregatesMixin:
             name=f"closure_env_typed_{self.lambda_counter}",
         )
 
-        # 3) Copia os valores capturados (usa symbol_table do ESCOPO EXTERNO)
         for i, name in enumerate(free):
             outer_ptr = env_field_ptrs[i]
             if outer_ptr is None:
@@ -178,7 +179,6 @@ class AggregatesMixin:
             )
             self.builder.store(val, field_ptr)
 
-        # 4) Emite a função
         func_name = f"__closure_{self.lambda_counter}"
         self.lambda_counter += 1
 
@@ -186,13 +186,11 @@ class AggregatesMixin:
         func_ty = ir.FunctionType(self.i64_ty, param_tys)
         func = ir.Function(self.module, func_ty, name=func_name)
 
-        # Registra antes de emitir o corpo (permite recursão)
         self.functions_table[func_name] = (func, func_ty)
 
         block = func.append_basic_block(name="entry")
         inner_builder = ir.IRBuilder(block)
 
-        # Herda `_safe_mode` do escopo externo (comportamento anterior)
         inherit_safe = getattr(self, '_safe_mode', False)
 
         with push_context(
@@ -209,10 +207,9 @@ class AggregatesMixin:
             _current_scc_ids=None,
             _current_scc_id_slot=None,
             _current_scc_dispatch_bb=None,
-            _fn_entry_block=block,              # PATCH
-            _fn_return_type=self.i64_ty,        # PATCH
+            _fn_entry_block=block,
+            _fn_return_type=self.i64_ty,
         ):
-            # 4a) Bind env → symbol_table
             env_i8p = func.args[0]
             env_typed_inner = self.builder.bitcast(
                 env_i8p, env_ty.as_pointer(), name="env_typed_inner",
@@ -232,7 +229,6 @@ class AggregatesMixin:
                 if name in outer_closure_vars:
                     self.closure_vars.add(name)
 
-            # 4b) Bind params (i64 → tipo real)
             for i, p in enumerate(node.params):
                 p_name = p.name if hasattr(p, 'name') else p[0]
                 p_type = p.type_ann if hasattr(p, 'type_ann') else p[1]
@@ -250,7 +246,6 @@ class AggregatesMixin:
                 self.symbol_table[p_name] = slot
                 self.var_types[p_name] = p_type
 
-            # 4c) Body
             from ...ast.expressions import Expr as ExprBase
             for stmt in node.body:
                 if isinstance(stmt, ExprBase):
@@ -267,7 +262,6 @@ class AggregatesMixin:
             if not self.builder.block.is_terminated:
                 self.builder.ret(ir.Constant(self.i64_ty, 0))
 
-        # 5) Bloco closure {fn, env} — emitido no ESCOPO EXTERNO
         closure_raw = self.builder.call(
             self.malloc,
             [ir.Constant(self.i64_ty, CLOSURE_BLOCK_SIZE)],

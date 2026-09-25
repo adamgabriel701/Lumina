@@ -112,10 +112,6 @@ class BuiltinsMixin:
             return self.builder.call(self.atoi, [s], name="atoi_call")
 
         if func_name == "black_box":
-            # Barreira anti-DCE. Emite `asm sideeffect "", "=r,0"(v)` — a
-            # sintaxe padrão do `std::hint::black_box` do Rust. O LLVM não
-            # pode provar que o resultado é igual ao input porque a inline
-            # asm é opaca, então o valor (e tudo que o produziu) fica vivo.
             v = self.visit(node.args[0])
             if v.type != self.i64_ty:
                 if isinstance(v.type, ir.PointerType):
@@ -214,25 +210,91 @@ class BuiltinsMixin:
                 self.module, getchar_ty, name="getchar",
             )
             raw = self.builder.call(getchar_fn, [], name="getchar_call")
-            # getchar() do libc retorna i32 (int do C, com EOF = -1).
-            # Lumina's `int` é i64, então sign-extend para casar com
-            # o tipo de retorno declarado (`-> int`). `sext` preserva
-            # o -1 do EOF.
             return self.builder.sext(raw, self.i64_ty, name="getchar_sext")
 
+        # ==================================================================
+        # FIX P: `argv(i)` com bounds-check.
+        #
+        # Antes: `elem_ptr = gep(argv, [idx])`, `load` cego. Se o programa
+        # rodava sem argumentos (argc=1), `argv(1)` lia `argv[1] = NULL`
+        # e retornava NULL. Chamadas subsequentes como `len(argv(1))`
+        # faziam `strlen(NULL)` → SIGSEGV.
+        #
+        # Isso afetava TODOS os benchmarks parametrizados por argv
+        # (`fib.lm`, `primes.lm`, etc.) quando rodados sem argumentos.
+        #
+        # Agora: 3 guards em runtime. Se qualquer for verdadeiro, retorna
+        # "" (empty string) em vez de NULL:
+        #   1. `argv == NULL` — main ainda não rodou (JIT, REPL edge case)
+        #   2. `idx < 0`       — índice negativo é sempre inválido
+        #   3. `idx >= argc`   — fora do alcance (inclui o NULL terminador)
+        #
+        # Retornar "" em vez de NULL é importante porque `len("")` funciona
+        # (retorna 0), enquanto `len(NULL)` é UB.
+        # ==================================================================
         if func_name == "argv":
-            # argv(i) → i-ésimo argumento da linha de comando (str).
-            # `__lumina_argv` é uma global i8** populada no entry de main.
-            # Fora de main (ou no JIT antes de main rodar), retorna NULL —
-            # `atoi(NULL)` já retorna 0, então é seguro.
             idx = self.visit(node.args[0])
             if idx.type != self.i64_ty:
                 idx = self.builder.sext(idx, self.i64_ty, name="argv_sext")
+
+            # Fallback seguro: string vazia. Uma por call site — o linker
+            # deduplica se rodar via clang; via lumina-ld, o custo é
+            # alguns bytes a mais por `argv(i)`.
+            empty_str = self.create_global_string("")
+
             argv_gv = self.module.globals.get("__lumina_argv")
             if argv_gv is None:
-                return ir.Constant(self.voidptr_ty, None)
+                # Sem `main` registrado: não há como argv estar setado.
+                return empty_str
+
             argv_val = self.builder.load(argv_gv, name="argv_load")
+            argv_ptr_ty = self.i8_ty.as_pointer().as_pointer()
+
+            # Guard 1: argv == NULL.
+            null_ptr = ir.Constant(argv_ptr_ty, None)
+            is_null = self.builder.icmp_signed(
+                "==", argv_val, null_ptr, name="argv_isnull",
+            )
+
+            # Guard 2: idx < 0.
+            zero = ir.Constant(self.i64_ty, 0)
+            is_neg = self.builder.icmp_signed(
+                "<", idx, zero, name="argv_isneg",
+            )
+
+            invalid = self.builder.or_(is_null, is_neg, name="argv_invalid")
+
+            # Guard 3: idx >= argc (só se `__lumina_argc` estiver
+            # disponível — só existe se `main` foi registrado).
+            argc_gv = self.module.globals.get("__lumina_argc")
+            if argc_gv is not None:
+                argc_i32 = self.builder.load(argc_gv, name="argc_load")
+                argc_i64 = self.builder.sext(argc_i32, self.i64_ty, name="argc_sext")
+                is_oob = self.builder.icmp_signed(
+                    ">=", idx, argc_i64, name="argv_oob",
+                )
+                invalid = self.builder.or_(
+                    invalid, is_oob, name="argv_invalid2",
+                )
+
+            empty_bb = self.builder.append_basic_block(name="argv_empty")
+            ok_bb    = self.builder.append_basic_block(name="argv_ok")
+            end_bb   = self.builder.append_basic_block(name="argv_end")
+
+            self.builder.cbranch(invalid, empty_bb, ok_bb)
+
+            self.builder.position_at_end(empty_bb)
+            self.builder.branch(end_bb)
+
+            self.builder.position_at_end(ok_bb)
             elem_ptr = self.builder.gep(argv_val, [idx], name="argv_elem_ptr")
-            return self.builder.load(elem_ptr, name="argv_elem")
+            real_result = self.builder.load(elem_ptr, name="argv_elem")
+            self.builder.branch(end_bb)
+
+            self.builder.position_at_end(end_bb)
+            phi = self.builder.phi(self.voidptr_ty, name="argv_result")
+            phi.add_incoming(empty_str, empty_bb)
+            phi.add_incoming(real_result, ok_bb)
+            return phi
 
         return None

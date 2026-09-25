@@ -17,6 +17,8 @@ from ..ast import (
     BinaryExpr, CallExpr, IfStmt, BoolExpr, NumberExpr, StringExpr,
     UnaryExpr,
 )
+from ..common.attrs import normalize_attrs   # FIX 6
+from ..errors import LuminaError              # FIX 11
 
 
 class DerivesMixin:
@@ -24,14 +26,40 @@ class DerivesMixin:
     def _expand_derives(self, declarations):
         """Expande @derive(Eq, Debug, Default, Clone, Display) em
         métodos sintetizados (ImplBlocks) e funções livres.
+
+        FIX 11: `@derive` em enum não é suportado (ainda). Antes era
+        silenciosamente ignorado — o usuário escrevia `@derive(Eq)`
+        num enum e nada acontecia. Agora é erro explícito.
         """
         new_decls = []
         for decl in declarations:
-            attrs = getattr(decl, 'attrs', None)
+            # FIX 6: aceita List[str] e List[Tuple[str, List]].
+            attrs = normalize_attrs(getattr(decl, 'attrs', None))
             if not attrs:
                 continue
-            if not hasattr(decl, 'fields'):
-                continue  # só struct
+
+            # FIX 11: enum + @derive → erro explícito.
+            is_enum = hasattr(decl, 'variants')
+            is_struct = hasattr(decl, 'fields')
+            if is_enum and not is_struct:
+                for name, _args in attrs:
+                    if name == 'derive':
+                        raise LuminaError(
+                            message=(
+                                f"@derive em enum '{decl.name}' ainda não é "
+                                f"suportado. Implemente os métodos "
+                                f"manualmente (impl {decl.name}: ...)."
+                            ),
+                            filename=getattr(self, 'filename', '<semantic>'),
+                            line=getattr(decl, 'line', 0) or 0,
+                            col=getattr(decl, 'col', 0) or 0,
+                            source_code=getattr(self, 'source_code', '') or '',
+                        )
+                continue
+
+            # Só struct a partir daqui.
+            if not is_struct:
+                continue
 
             struct_name = decl.name
             methods = []   # métodos → ImplBlock
@@ -45,10 +73,8 @@ class DerivesMixin:
                 for deriv in attr_args:
                     derives.add(deriv)
 
-            # NOTA: `PartialEq` gera __eq__ E __ne__ (equivalente ao `==`
-            # e `!=`). `Eq` gera apenas __eq__ (Rust-style: Eq é um
-            # marcador que requer PartialEq, mas em Lumina simplificamos
-            # para "só igualdade").
+            # `PartialEq` gera __eq__ E __ne__ (equivalente ao `==`
+            # e `!=`). `Eq` gera apenas __eq__.
             if 'Eq' in derives or 'PartialEq' in derives:
                 methods.append(self._gen_eq(struct_name, decl))
             if 'PartialEq' in derives:
@@ -67,16 +93,10 @@ class DerivesMixin:
         declarations.extend(new_decls)
 
     def _gen_eq(self, struct_name, struct_decl):
-        """Gera: fn {Struct}___eq__(a, b) -> bool
-
-        Nome mangled porque o codegen procura `{Struct}___eq__`.
-        Retorna `bool` (i1) para que `print(p1 == p2)` mostre
-        `true`/`false`.
-        """
+        """Gera: fn {Struct}___eq__(a, b) -> bool"""
         a_var = VariableExpr('a', 0, 0)
         b_var = VariableExpr('b', 0, 0)
 
-        # Compara cada campo: a.f1 == b.f1 and a.f2 == b.f2 and ...
         conditions = []
         for fname in struct_decl.fields.keys():
             a_field = MemberExpr(a_var, fname)
@@ -84,7 +104,7 @@ class DerivesMixin:
             conditions.append(BinaryExpr('==', a_field, b_field))
 
         if not conditions:
-            cond = BoolExpr(True)  # struct vazia: sempre igual
+            cond = BoolExpr(True)
         elif len(conditions) == 1:
             cond = conditions[0]
         else:
@@ -106,23 +126,17 @@ class DerivesMixin:
         )
 
     def _gen_ne(self, struct_name, struct_decl):
-        """Gera: fn {Struct}___ne__(a, b) -> bool
-
-        Uso: `a != b`
-        """
+        """Gera: fn {Struct}___ne__(a, b) -> bool"""
         a_var = VariableExpr('a', 0, 0)
         b_var = VariableExpr('b', 0, 0)
 
-        # Chama __eq__(a, b)
         eq_callee = VariableExpr(f'{struct_name}___eq__', 0, 0)
         eq_call = CallExpr(eq_callee, [a_var, b_var])
 
-        # if not __eq__(a, b): return True
         not_eq = UnaryExpr('not', eq_call)
         then_body = [ReturnStmt([BoolExpr(True)])]
         if_stmt = IfStmt(not_eq, then_body, None)
 
-        # return False
         return_stmt = ReturnStmt([BoolExpr(False)])
 
         mangled_name = f"{struct_name}___ne__"
@@ -135,10 +149,7 @@ class DerivesMixin:
         )
 
     def _gen_debug(self, struct_name, struct_decl):
-        """Gera: fn {Struct}___debug__(p: Struct) -> str
-
-        Nome já mangled porque o codegen procura `{Struct}___debug__`.
-        """
+        """Gera: fn {Struct}___debug__(p: Struct) -> str"""
         p_var = VariableExpr('p', 0, 0)
         parts = [StringExpr(f"{struct_name} {{ ")]
 
@@ -151,7 +162,6 @@ class DerivesMixin:
 
         parts.append(StringExpr(" }"))
 
-        # Concatenação: "P1" + v1 + "P2" + v2 ...
         expr = parts[0]
         for p in parts[1:]:
             expr = BinaryExpr('+', expr, p)
@@ -166,12 +176,7 @@ class DerivesMixin:
         )
 
     def _gen_clone(self, struct_name, struct_decl):
-        """Gera: fn {Struct}_clone(self) -> {Struct}
-
-        Uso: `let copia = p.clone()`
-        Nome mangled porque o `codegen_method_call` procura por
-        `Struct_clone`.
-        """
+        """Gera: fn {Struct}_clone(self) -> {Struct}"""
         result_var = 'result'
         result_decl = VarDecl(result_var, struct_name, None, True)
 
@@ -179,7 +184,6 @@ class DerivesMixin:
         self_var = VariableExpr('self', 0, 0)
         result_ref = VariableExpr(result_var, 0, 0)
 
-        # result.f1 = self.f1 ; result.f2 = self.f2 ; ...
         for fname in struct_decl.fields.keys():
             lhs = MemberExpr(result_ref, fname)
             rhs = MemberExpr(self_var, fname)
@@ -188,14 +192,11 @@ class DerivesMixin:
         body.append(ReturnStmt([VariableExpr(result_var, 0, 0)]))
 
         mangled_name = f"{struct_name}_clone"
-        return Function(mangled_name, [Param('self', struct_name)], struct_name, body)
+        return Function(mangled_name, [Param('self', struct_name)],
+                        struct_name, body)
 
     def _gen_default(self, struct_name, struct_decl):
-        """Gera: fn new_{Struct}() -> {Struct} com todos os campos
-        zerados (0 / 0.0 / false / "" / null).
-
-        Uso: `let p = new_Ponto()`
-        """
+        """Gera: fn new_{Struct}() -> {Struct} com todos os campos zerados."""
         result_var = 'result'
         result_decl = VarDecl(result_var, struct_name, None, True)
 
@@ -205,7 +206,6 @@ class DerivesMixin:
         for fname, ftype in struct_decl.fields.items():
             lhs = MemberExpr(result_ref, fname)
 
-            # Valor zero por tipo
             if ftype == "float":
                 rhs = NumberExpr("0.0", is_float=True)
             elif ftype == "bool":

@@ -8,7 +8,7 @@ O formato segue, de forma geral, as convenções do [Keep a Changelog](https://k
 
 ---
 
-## [Unreleased]
+## [0.6.0] — 2026-09-25
 
 > Desenvolvimento posterior ao milestone `v0.5.0-linker`.
 
@@ -128,6 +128,83 @@ fn(T1, T2) -> R
 * Novo `linker/investigate_segfaults.sh` — gdb backtrace automático de segfaults.
 * Novo `linker/skip.txt` — skip list externalizada (antes hardcoded em `triagem.sh`).
 
+#### Arrays tipados (elemento preserva tipo)
+
+* `visit_ArrayExpr` agora infere o tipo do elemento pelo primeiro elemento:
+  * `[1, 2, 3]`          → `[i64;3]`
+  * `[1.5, 2.5, 3.5]`    → `[f64;3]` — `v[0]` retorna `float`, não bits do `f64`
+  * `["a", "b"]`         → `[i8*;2]` — `v[0]` retorna `str`, não ponteiro formatado como `int`
+* `for x in [1.5, 2.5]` itera `f64`.
+* `mut v = ["a", "b"]; v[1] = "c"` valida tipo do elemento em compile-time.
+* `let s = v[1..]` de `[f64;N]` copia para `f64*`, preservando precisão.
+* Novo mapa `SemanticAnalyzer.array_elem_types` rastreia o tipo do elemento
+  de variáveis de array literal e é consultado por `visit_IndexExpr`.
+* `_try_stack_alloc` popula `array_lengths[name]`, permitindo `arr[a..]`
+  para arrays stack-allocated.
+
+#### Infraestrutura de atributos
+
+* Novo módulo `lumina/common/attrs.py` — fonte única de verdade para
+  parsing e normalização de `@attr` em todo o compilador.
+* API: `normalize_attrs`, `attr_names`, `has_attr`, `get_attr_args`.
+* `codegen/context.py` re-exporta `normalize_attrs` para compatibilidade.
+
+#### Coerção bit-exact de payloads de enum
+
+* Novo helper `_coerce_enum_payload_store` em `expressions/methods.py`:
+  * `float ↔ i64` via `bitcast` (não `fptosi`, que truncaria)
+  * `str ↔ i64` via `ptrtoint`/`inttoptr`
+  * `int ↔ int` via `sext`/`zext`/`trunc`
+* Novo helper `_coerce_enum_payload_load` em `statements/match.py` faz
+  a conversão inversa ao fazer binding de payloads.
+* `_find_enum_variant` ganhou `_invalidate_variant_cache` para quando
+  `struct_defs` é modificado por monomorphização.
+
+#### Literais binários e octais
+
+* Lexer agora aceita:
+  * `0b...` / `0B...` — binário (`let x = 0b1100` → 12)
+  * `0o...` / `0O...` — octal (`let x = 0o17` → 15)
+* O loop de dígitos é restrito ao alfabeto válido do prefixo
+  (`0b` aceita só `01`, `0o` aceita `0-7`, `0x` aceita `0-9a-f`),
+  evitando consumir identificadores adjacentes.
+* Antes, `0b1100` era lido como `NUMBER(0)` seguido de `IDENT(b1100)`.
+
+#### `CompoundAssignStmt` — `x op= y` com avaliação única
+
+* Novo nó de AST para operadores compostos (`+=`, `-=`, `*=`, `/=`,
+  `&=`, `|=`, `^=`).
+* Antes, o parser desaçucarava para `AssignStmt(target, BinaryExpr(op,
+  target, value))`, avaliando o lvalue **duas vezes**. Para
+  `arr[f()] += v`, isso chamava `f()` duas vezes.
+* O codegen agora resolve o endereço do alvo uma vez (`_resolve_lvalue`),
+  carrega, aplica o operador e escreve de volta.
+
+#### Cases com corpo vazio (fallthrough)
+
+* `match` agora aceita cases vazios que mesclam patterns:
+
+  ```lumina
+  match n:
+      case 1:
+      case 2:
+          print("um ou dois")
+  ```
+
+* O parser detecta corpo vazio e mescla o pattern do case seguinte até
+  encontrar um case com corpo. Guards e bindings são rejeitados (um
+  binding sem corpo não tem semântica).
+
+#### `ForStmt.index_var` — separação do índice
+
+* Novo campo `index_var` em `ForStmt`. Antes, o parser codificava
+  `for i, x in arr:` como `var_name = "i,x"` — string com vírgula,
+  frágil e impossível de validar em compile-time.
+* Agora:
+  * `for i, x in arr` → `var_name = "x"`, `index_var = "i"`
+  * `for x in arr`    → `var_name = "x"`, `index_var = None`
+* Compatível com o código existente (default `None`).
+
 ### 🔧 Alterado
 
 #### Pipeline de compilação
@@ -146,6 +223,7 @@ fn(T1, T2) -> R
 #### `match`
 * Melhorias no parser e na análise semântica de expressões `match`.
 * Expansão para padrões envolvendo structs.
+* Cases com corpo vazio agora mesclam patterns (fallthrough).
 
 #### Codegen
 * Correções em diferentes caminhos de geração de código LLVM.
@@ -157,6 +235,29 @@ fn(T1, T2) -> R
 * Expansão e correção de componentes do runtime.
 * Melhor integração entre o runtime e o linker próprio.
 * Documentação interna sobre o alocador linear em `rt.c`: `free()` é no-op por design; churn de alocação vaza memória sob `--linker=self`.
+
+#### Representação de arrays unificada
+
+* `visit_ArrayExpr` muda o contrato público: retorna `T*` (ponteiro para
+  1º elemento) em vez de `[T;N]*` (ponteiro para array). Unifica a
+  representação com `alloc(N)` e elimina a necessidade de GEP duplo na
+  indexação.
+* Consumidores internos ajustados: `visit_IndexExpr`, `_load_index`,
+  `_visit_for_iterable`, `visit_SliceExpr`, `visit_VarDecl`.
+
+#### Normalização de attrs
+
+* `Function.attrs` passa a ser `List[Tuple[str, List]]` (era `List[str]`),
+  igual a `StructDecl.attrs`. O parser para de projetar.
+* `SemanticAnalyzer.analyze`, `DerivesMixin._expand_derives` e
+  `RegistrationMixin._apply_llvm_attrs` passam a usar `normalize_attrs`.
+
+#### Slice bounds usam `_to_i64_int`
+
+* Novo helper `_to_i64_int` em `members.py` centraliza a conversão
+  `iN → i64`, usando `zext` para `i1` (bool) e `sext` para outros
+  inteiros. Antes, `sext` era usado em `i1`, transformando
+  `n == 4` (i1 = 1) em `i64 -1`.
 
 ### 🐛 Corrigido
 
@@ -210,6 +311,155 @@ fn(T1, T2) -> R
 * Melhorias na triagem automática dos exemplos.
 * `bootstrap_lexer`, `database`, `json_parser` resgatados da skip list do linker.
 
+#### Semantic — inferência e type checking
+
+* `visit_UnaryExpr` retornava `None`, quebrando a inferência de
+  `let x = -5` (`x` ficava sem tipo e o codegen assumia `int` por default)
+  e `let y = not b`. Agora retorna `int`/`float`/`bool` conforme o operador.
+* `_infer_var_decl_type` não cobria `UnaryExpr`; `let x = -5.5` inferia
+  `int` e truncava o valor. Adicionado branch explícito.
+* `_resolve_kwargs` descartava `kwargs` silenciosamente quando a função
+  era desconhecida (builtin, método de std). Agora levanta `LuminaError`
+  com mensagem acionável — `print(x: 1)` falha em vez de compilar errado.
+* `_expand_type_aliases` era uma travessia ad-hoc que não cobria
+  `LambdaExpr`, `CastExpr` nem `MacroCallStmt`. Reescrita como travessia
+  genérica sobre dataclasses da AST. `type MyInt = int` dentro de
+  `fn(x: MyInt)` ou `y as MyInt` agora funciona.
+* `_analyze_match_stmt` tipava todos os bindings como `int` (hardcoded),
+  quebrando `case Has(s): s + "!"` quando o payload era `str`. Agora
+  consulta `enum_def.variants` e substitui type params de enums genéricos
+  via `substitute_generic`.
+* Struct patterns (`case Ponto { x, y }`) declaravam `x` e `y` com o
+  tipo da struct inteira em vez do tipo do campo correspondente —
+  `x + y` falhava com "Operador '+' não definido para 'Ponto'".
+* `expand_type_alias` retornava silenciosamente em `_depth > 32`. Agora
+  levanta `LuminaError` com hint sobre ciclos (`type A = B; type B = A`).
+* `_analyze_assign` não validava tipo em `arr[i] = v` para arrays de
+  `ptr`. Agora infere do `array_elem_types` quando disponível.
+
+#### Semantic — normalização de attrs
+
+* `Function.attrs` era `List[str]` e `StructDecl.attrs` era
+  `List[Tuple[str, List]]`. Cada consumidor tinha que adivinhar o
+  formato (`if 'macro' in attrs` quebrava silenciosamente). Unificado
+  em `List[Tuple[str, List]]` via novo `lumina/common/attrs.py`.
+* `@derive` em enum era silenciosamente ignorado. Agora é erro
+  explícito com mensagem acionável.
+* `and`/`or` rejeitava operandos `int` no semantic, mas o codegen
+  aceitava. Unificado: `int` é tratado como bool (0 = false).
+* Guard de duplicata em `_resolve_trait_defaults` ganhou mensagem
+  distinguindo trait-default de impl explícito, com hint para o caso
+  em que ambos estão presentes.
+
+#### Codegen — arrays tipados
+
+* `visit_ArrayExpr` retornava `[T;N]*` (ponteiro para array), exigindo
+  GEP duplo na indexação. Agora retorna `T*` (ponteiro para 1º
+  elemento), unificando a representação com `alloc(N)`.
+* `_load_index` forçava todo valor lido para `i64` via
+  `_normalize_loaded`, corrompendo `[1.5, 2.5][0]` (retornava bits do
+  `f64`) e `["a","b"][0]` (retornava ponteiro formatado como `int`).
+* `_visit_for_iterable` hardcodava `i64` como element type — `for x in
+  [1.5, 2.5]` iterava bits em vez de floats.
+* `visit_VarDecl` bitcastava `T*` para `i64*` no slot, apagando o tipo
+  do elemento. Corrigido com ordem explícita de branches: `alloc` e
+  `alloc_bytes` primeiro (tipos fixos), depois structs, depois arrays
+  literais, depois fallback.
+* `visit_SliceExpr` copiava para buffer `i64*` fixo, mesmo para
+  `[f64;N]` e `[i8*;N]`. Agora o buffer segue o tipo do elemento do
+  source.
+
+#### Codegen — enums com payload `str`/`float`
+
+* `_construct_enum` usava `_coerce_for_store`, que faz `fptosi` para
+  `float` — perdendo precisão. `Val(3.5)` virava `Val(3.0)`.
+* `_emit_bindings` carregava o payload como `i64` cru sem converter
+  para o tipo declarado. `case Has(s): s + "!"` formatava o ponteiro
+  como número (ex: `105542705766414!`).
+* Novo helper `_coerce_enum_payload_store` faz `bitcast` (não
+  `fptosi`) entre `f64` e `i64`, `ptrtoint`/`inttoptr` entre ponteiro
+  e `i64`, preservando bits exatos.
+* Bug adicional: para enums genéricos (`Box<T>`), `declared = "T"` era
+  type param não-resolvido — `get_llvm_type("T")` retornava `i64`, mas
+  o slot de `Box_str_` era `i8*`. `store i8* to i64*` quebrava. Fix:
+  type param não-resolvido → usar o slot type diretamente.
+
+#### Codegen — builtins
+
+* `argv(i)` fazia `load` cego de `__lumina_argv[i]`. Sem argumentos,
+  `argv(1)` retornava `NULL` e `len(argv(1))` fazia `strlen(NULL)` →
+  SIGSEGV. Isso afetava **todos os benchmarks parametrizados por argv**
+  (`fib.lm`, `primes.lm`, etc.) quando rodados sem argumentos. Agora
+  faz bounds-check em runtime e retorna `""` quando `argv == NULL`,
+  `idx < 0` ou `idx >= argc`.
+
+#### Codegen — infraestrutura
+
+* `_llvm_ty_to_str` retornava `"unknown"` para `VoidType`, `IntType(32)`,
+  `ArrayType`, `LiteralStructType` e `IdentifiedStructType`. Adicionados.
+* `_make_fn_wrapper` crashava em runtime para funções variádicas.
+  Agora levanta `LuminaError` com mensagem clara.
+* `codegen_method_call` usava `raise Exception("...")` genérico em vez
+  de `LuminaError` — sem linha/coluna, sem cor no terminal. Corrigido.
+* `self.functions_table[real_method_name]` fazia `KeyError` cru em
+  cache inconsistente. Agora usa `.get` com erro explícito.
+* Removido cache `_fn_closure_blocks` que gerava IR inválido
+  (dominance violation) quando a mesma função nomeada era usada como
+  valor em blocos irmãos. Ex: `std/sort.lm` usa `_cmp_asc` em dois
+  branches — o `%_cmp_asc_closure` era definido em A e reusado em B,
+  e o LLVM rejeitava o IR.
+
+#### Codegen — `visit_NumberExpr`
+
+* Refatoração para suportar `0b`/`0o` introduziu regressão silenciosa:
+  `int("3.14")` levanta `ValueError` em Python, e o `except` devolvia
+  `0.0`. Todo float virava zero. Corrigido com checagem explícita de
+  `is_float` antes do parsing, e base explícita por prefixo.
+
+#### Codegen — slice bounds com `i1`
+
+* `visit_SliceExpr` usava `sext` para converter bounds para `i64`.
+  Para `n == 4` (i1 = 1), `sext i1 1 → i64` produz `-1` (todos os
+  bits 1). Isso transformava `length = 1` em `length = -1`, levando
+  a `malloc(-8)` → NULL → SIGSEGV em `s[0]`. Novo helper
+  `_to_i64_int` usa `zext` para `i1`.
+
+#### Codegen — dead code
+
+* Segundo bloco `if node.op in ('and', 'or')` em
+  `lumina/codegen/expressions/operators.py::visit_BinaryExpr` era
+  inalcançável — o primeiro bloco já faz short-circuit e retorna via
+  `phi`. Removido com comentário explicativo.
+
+#### Parser — blocos de comentário `/* */` em qualquer coluna
+
+* `_handle_indent` só ignorava `#` no início de linha. `/* */` em
+  coluna diferente do código ao redor disparava INDENT/DEDENT espúrio,
+  quebrando o parse:
+
+  ```lumina
+  fn main() -> int:
+      let x = 10
+  /* bloco em col 0 */
+      let y = 20
+  ```
+
+  Agora `/*` é tratado do mesmo jeito que `#`.
+
+#### Parser — `trait` e `impl` sem corpo
+
+* `trait Marker:` sem corpo (marker trait) falhava com "Esperado
+  INDENT". `impl Trait for S:` sem corpo (só métodos default) idem.
+  Agora ambos aceitam corpo vazio, consumindo newlines/comentários
+  antes de decidir se há bloco.
+
+#### Parser — slice bound com comparação
+
+* `arr[a..b == c]` falhava em `expect(RBRACKET)` porque bounds usavam
+  `parse_additive` diretamente. Novo `_parse_slice_bound` cobre
+  additive e comparações binárias, cobrindo o caso raro mas real de
+  bounds computados.
+
 ### 🧪 Testes
 
 A suíte de testes foi ampliada continuamente durante o desenvolvimento.
@@ -218,7 +468,7 @@ Estado atual informado pelo projeto:
 
 ```text
 pytest tests/ -q
-441 passed
+523 passed
 ```
 
 Verificações adicionais:
@@ -232,7 +482,7 @@ Execução dos exemplos:
 
 ```text
 ./scripts/check_examples.sh --run
-54 PASS / 17 SKIP / 0 FAIL
+55 PASS / 16 SKIP / 0 FAIL
 ```
 
 Triagem do linker próprio:
@@ -243,14 +493,38 @@ PASS=59 FAIL-COMPILE=0 FAIL-LINK=0 FAIL-RUN=0 SKIP=12
 ```
 
 **Paridade completa**: o modo `--linker=self` produz o mesmo resultado que o clang
-nos 54 exemplos (PASS/SKIP/FAIL idênticos).
+nos exemplos (PASS/SKIP/FAIL idênticos).
 
 Os números de exemplos ignorados diferem entre os scripts porque as duas verificações
 possuem escopos diferentes.
 
 #### Testes adicionados neste ciclo
+
 * `test_gc.py::test_default_build_uses_gc_malloc` — **deduplicado** (aparecia 2x).
 * `test_tco_mutual.py::test_scc_member_calls_generic` — regressão do bug `var_types`.
+* `test_semantic_hardening.py` — 11 testes (enum str payload, unary inference,
+  type alias em lambda/cast, kwargs em builtin, `and`/`or` com int,
+  arr assign type check).
+* `test_match_payload_str.py` — 3 testes (str/int/float payloads).
+* `test_codegen_hardening.py` — 5 testes (`_llvm_ty_to_str`, varargs, arrays).
+* `test_codegen_quickwins.py` — 9 testes (`argv` bounds-check, array slice).
+* `test_typed_arrays.py` — 15 testes (arrays de `f64` e `str`).
+* `test_fn_in_branches.py` — 3 testes (regressão do cache `_fn_closure_blocks`).
+* `test_parser_lexer_edge_cases.py` — 11 testes (block comment em coluna
+  diferente, trait/impl sem corpo).
+* `test_parser_fixes_10b.py` — 16 testes (`CompoundAssignStmt`,
+  empty case fallthrough, slice bound com comparação, `ForStmt.index_var`).
+* `test_binary_literals.py` — 7 testes (`0b`, `0o`, `0x`, compound assign
+  bitwise, shift).
+
+### 🗑️ Removido
+
+* Dead code: segundo bloco `if node.op in ('and', 'or')` em
+  `lumina/codegen/expressions/operators.py::visit_BinaryExpr`.
+* Cache `_fn_closure_blocks` em `lumina/codegen/helpers.py`
+  (introduzia bug de dominância sem ganho relevante).
+* `lumina_bundle.txt` (bundle antigo, vazio, mantido por engano).
+* Arquivo `output.ll` de build anterior.
 
 ### 📚 Documentação
 
@@ -270,15 +544,31 @@ docs/internals/linking.md
 * Documentada a integração do linker com a CLI.
 * Documentado o runtime freestanding.
 * Documentados pontos de extensão e debugging do linker.
+* Nova seção **Arrays** em `docs/guia/linguagem.md`, cobrindo:
+  * array literal com inferência de tipo do elemento
+  * alocação dinâmica (`alloc` / `alloc_bytes`)
+  * indexação, atribuição, iteração, slicing
+  * limitações conhecidas (arrays passados como `ptr` perdem o tipo)
+* Nova seção **Literais numéricos** em `docs/guia/linguagem.md`
+  cobrindo `0b`, `0o`, `0x`, decimais e floats.
+* Nova seção **Operadores `op=`** documentando avaliação única do lvalue.
+* Nova seção **Cases com corpo vazio** em `docs/guia/linguagem.md`.
+* `@derive` em enum agora documentado como erro explícito.
 * README atualizado com:
   * status do compilador;
   * linker próprio;
   * runtime freestanding;
+  * arrays tipados;
+  * literais binários/octais;
+  * operadores compostos;
   * testes;
   * exemplos;
   * benchmarks;
   * limitações;
   * arquitetura do projeto.
+
+[Unreleased]: https://github.com/adamgabriel701/Lumina/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/adamgabriel701/Lumina/compare/v0.5.0-linker...v0.6.0
 
 ---
 

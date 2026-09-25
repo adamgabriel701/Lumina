@@ -6,8 +6,8 @@
 [![LLVM](https://img.shields.io/badge/LLVM-14%2B-blue.svg)](https://llvm.org/)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg?logo=python\&logoColor=white)](https://www.python.org/)
 [![Status](https://img.shields.io/badge/Status-Active-success.svg)](#-status)
-[![Tests](https://img.shields.io/badge/tests-441%20passed-brightgreen.svg)](docs/engineering/tests.md)
-[![Examples](https://img.shields.io/badge/examples-54%20pass%20%2F%2017%20skip-success.svg)](examples/)
+[![Tests](https://img.shields.io/badge/tests-523%20passed-brightgreen.svg)](docs/engineering/tests.md)
+[![Examples](https://img.shields.io/badge/examples-55%20pass%20%2F%2016%20skip-success.svg)](examples/)
 [![Benchmarks](https://img.shields.io/badge/benchmarks-5%20suites-blue.svg)](benchmarks/results/)
 [![Cross-compile](https://img.shields.io/badge/cross--compile-arm64%20%7C%20armv7%20%7C%20risc--v%20%7C%20wasm-blueviolet.svg)](#-cross-compilation)
 [![Linker](https://img.shields.io/badge/linker-lumina--ld-orange.svg)](docs/internals/linking.md)
@@ -26,7 +26,8 @@ A linguagem possui:
 * pattern matching;
 * closures;
 * macros e `comptime`;
-* TCO;
+* TCO (self e mutual recursion);
+* arrays tipados (int, float, str);
 * Boehm GC + `--no-gc`;
 * escape analysis;
 * FFI;
@@ -286,31 +287,62 @@ Mais detalhes em [`docs/internals.md`](docs/internals.md).
   * multi-pattern;
   * wildcard;
   * destructuring;
-  * self-binding.
+  * self-binding;
+  * **cases com corpo vazio** (fallthrough):
+    ```lumina
+    match n:
+        case 1:
+        case 2:
+            print("um ou dois")
+    ```
 * **Generics com monomorphization**.
 * Generics aninhados.
 * **Traits com métodos default**.
 * Especialização para tipos concretos.
-* **Type aliases**, inclusive genéricos.
+* **Type aliases**, inclusive genéricos e encadeados.
 * **Tipos de função** como `fn(int) -> int`.
 * **Tuplas** com destructuring heterogêneo.
 * Distinção entre `nil` e `none`.
 
-Exemplo:
+## Arrays tipados
+
+Lumina infere o **tipo do elemento** pelo primeiro elemento do array literal:
 
 ```lumina
-type Pair<T>:
-    first: T
-    second: T
-
-fn swap<T>(p: Pair<T>) -> Pair<T>:
-    return Pair(
-        first = p.second,
-        second = p.first
-    )
+let v = [10, 20, 30]           # [i64; 3]  — int
+let precos = [1.5, 2.5, 3.5]   # [f64; 3]  — float
+let nomes = ["Ana", "Bob"]     # [i8*; 2]  — str
 ```
 
----
+Indexação preserva o tipo:
+
+```lumina
+print(precos[1])    # float (não bits do f64)
+print(nomes[0])     # str   (não ponteiro formatado como int)
+```
+
+Sliding:
+
+```lumina
+let s = v[1..3]     # fatia [1, 3)
+let t = v[1..]      # até o fim (usa array_lengths)
+let u = v[..]       # cópia completa
+```
+
+Slicing preserva o tipo do elemento: `[f64;N] → f64*`, `[str;N] → i8**`.
+
+## Literais numéricos
+
+Lumina aceita quatro bases:
+
+```lumina
+let a = 42          # decimal
+let b = 0xFF        # hex
+let c = 0b1100      # binário
+let d = 0o17        # octal
+let e = 3.14        # float
+let f = 1e10        # float com expoente
+```
 
 ## Memória e segurança
 
@@ -322,8 +354,6 @@ fn swap<T>(p: Pair<T>) -> Pair<T>:
 * `nil` como ponteiro nulo real.
 * `free`.
 * Compatibilidade com FFI.
-
----
 
 ## Concorrência
 
@@ -339,8 +369,6 @@ Lumina possui suporte para:
 * `O_NONBLOCK`.
 
 Alguns desses componentes continuam sendo **experimentais** e possuem exemplos marcados como `SKIP` na suíte de exemplos.
-
----
 
 ## Metaprogramação
 
@@ -375,6 +403,23 @@ comptime:
 ```
 
 Constant folding é realizado durante a compilação quando aplicável.
+
+## Operadores `op=`
+
+Formas compostas de atribuição com avaliação única do lvalue:
+
+```lumina
+mut x = 10
+x += 5      # x = x + 5
+x -= 3      # x = x - 3
+x *= 2      # x = x * 2
+x /= 4      # x = x / 4
+x &= 0b1100 # x = x & 0b1100
+x |= 0o7    # x = x | 0o7
+x ^= 0xFF   # x = x ^ 0xFF
+```
+
+O lvalue é resolvido **uma única vez** — `arr[f()] += v` chama `f()` uma vez, não duas.
 
 ---
 
@@ -608,8 +653,8 @@ A verificação automatizada pode ser executada com:
 Resultado atual:
 
 ```text
-54 PASS
-17 SKIP
+55 PASS
+16 SKIP
 0 FAIL
 ```
 
@@ -625,9 +670,9 @@ O compilador possui pipeline end-to-end funcional, uma suíte extensa de testes 
 
 | Métrica           |                      Resultado |
 | ----------------- | -----------------------------: |
-| Testes `pytest`   |                 **441 passed** |
+| Testes `pytest`   |                 **523 passed** |
 | Suite standalone  |                      **28/28** |
-| Exemplos          | **54 PASS / 17 SKIP / 0 FAIL** |
+| Exemplos          | **55 PASS / 16 SKIP / 0 FAIL** |
 | Triagem do linker | **59 PASS / 12 SKIP / 0 FAIL** |
 
 ### Pytest
@@ -639,7 +684,7 @@ pytest tests/ -q
 Resultado:
 
 ```text
-441 passed in 129.89s (0:02:09)
+523 passed in 151.37s (0:02:31)
 ```
 
 ### Suite standalone
@@ -663,7 +708,7 @@ Resultado:
 Resultado:
 
 ```text
-54 PASS / 17 SKIP / 0 FAIL
+55 PASS / 16 SKIP / 0 FAIL
 ```
 
 ### Linker
@@ -683,7 +728,7 @@ SKIP=12
 ```
 
 O modo `--linker=self` produz o mesmo conjunto PASS/SKIP/FAIL que o
-clang nos 54 exemplos. Os 12 SKIP da triagem são: servidores que não
+clang nos exemplos. Os 12 SKIP da triagem são: servidores que não
 terminam sozinhos, dependências externas (raylib, C++, WASM), pthreads
 (fora do escopo do runtime freestanding) e `util.lm` (módulo auxiliar
 sem `main`).
@@ -960,7 +1005,7 @@ pytest tests/ -q
 Resultado atual:
 
 ```text
-441 passed in 129.89s
+523 passed in 151.37s
 ```
 
 Suite adicional:
@@ -984,7 +1029,7 @@ Exemplos end-to-end:
 Resultado:
 
 ```text
-54 PASS / 17 SKIP / 0 FAIL
+55 PASS / 16 SKIP / 0 FAIL
 ```
 
 Triagem do linker:
@@ -1029,9 +1074,17 @@ Entre as correções recentes estão problemas envolvendo:
 * traits default;
 * closures;
 * codegen de `ret void`;
-* parâmetros via `argv`;
+* parâmetros via `argv` (bounds check em runtime);
 * proteção contra dead-code elimination em benchmarks;
-* init runtime de globais `mut X = <não-literal>`.
+* init runtime de globais `mut X = <não-literal>`;
+* payloads de enum com `str`/`float` (coerção bit-exact);
+* arrays tipados (`f64` e `str` — preservação do tipo de elemento);
+* `arr[f()] += v` chamando `f()` duas vezes;
+* `i1 → i64` em slice bounds (`sext` produzia `-1` para `true`);
+* cases vazios em `match` (fallthrough);
+* `trait Marker:` sem corpo;
+* bloco `/* */` em coluna diferente do código ao redor;
+* literais binários (`0b`) e octais (`0o`).
 
 ---
 
@@ -1040,11 +1093,11 @@ Entre as correções recentes estão problemas envolvendo:
 | Documento                                                          | Conteúdo                           |
 | ------------------------------------------------------------------ | ---------------------------------- |
 | [`docs/README.md`](docs/README.md)                                 | Índice da documentação             |
-| [`docs/guia-rapido.md`](docs/guia-rapido.md)                       | Instalação e primeiros passos      |
-| [`docs/linguagem.md`](docs/linguagem.md)                           | Referência da linguagem            |
-| [`docs/stdlib.md`](docs/stdlib.md)                                 | Standard Library                   |
-| [`docs/ferramental.md`](docs/ferramental.md)                       | CLI, LSP, formatter, linter e REPL |
-| [`docs/internals.md`](docs/internals.md)                           | Pipeline e internals               |
+| [`docs/getting-started/guia-rapido.md`](docs/getting-started/guia-rapido.md) | Instalação e primeiros passos      |
+| [`docs/guia/linguagem.md`](docs/guia/linguagem.md)                 | Referência da linguagem            |
+| [`docs/guia/stdlib.md`](docs/guia/stdlib.md)                       | Standard Library                   |
+| [`docs/guia/ferramental.md`](docs/guia/ferramental.md)             | CLI, LSP, formatter, linter e REPL |
+| [`docs/internals/arquitetura.md`](docs/internals/arquitetura.md)   | Pipeline e internals               |
 | [`docs/internals/linking.md`](docs/internals/linking.md)           | Linker próprio e runtime           |
 | [`docs/contributing.md`](docs/contributing.md)                     | Desenvolvimento e contribuição     |
 | [`docs/engineering/bugs.md`](docs/engineering/bugs.md)             | Bugs e regressões                  |
@@ -1134,14 +1187,20 @@ Lumina/
 * [x] Multi-pattern
 * [x] Guards
 * [x] Destructuring
+* [x] Cases com corpo vazio (fallthrough)
 * [x] Enums multi-payload
 * [x] Enums genéricos
+* [x] Payloads de enum com `str`/`float`
 * [x] Type aliases
 * [x] Tuplas
 * [x] Closures com captura
 * [x] Tipos de função
 * [x] `impl Box<T>`
 * [x] `impl Trait for Box<int>`
+* [x] Arrays tipados (`int`, `float`, `str`)
+* [x] Slice de array com `end` implícito
+* [x] Literais binários, octais e hex
+* [x] `x op= y` com avaliação única do lvalue
 * [x] Boehm GC
 * [x] Escape analysis
 * [x] `--no-gc`
@@ -1153,8 +1212,8 @@ Lumina/
 * [x] `comptime`
 * [x] `for x in arr`
 * [x] `for i, x in arr`
-* [x] Tail Call Optimization
-* [x] Mutual recursion
+* [x] Tail Call Optimization (self)
+* [x] Mutual recursion (SCC dispatcher)
 * [x] Formatter
 * [x] Linter
 * [x] `lumina doc`
@@ -1164,7 +1223,7 @@ Lumina/
 * [x] Cross-compilation
 * [x] WebAssembly
 * [x] `black_box(x)`
-* [x] `argv(i)`
+* [x] `argv(i)` com bounds check
 * [x] `atoi`
 * [x] Benchmarks comparáveis
 * [x] Linker próprio
@@ -1189,6 +1248,7 @@ Lumina/
 * [ ] Suporte a pthreads no linker próprio
 * [ ] Linker próprio para AArch64
 * [ ] Linker próprio para RISC-V
+* [ ] `for x in arr` sobre `ptr` recebido como parâmetro (preservar tipo do elemento)
 
 O roadmap é evolutivo; itens marcados como concluídos representam funcionalidades presentes no estado atual do projeto, enquanto itens em aberto não fazem parte do contrato de estabilidade atual.
 
@@ -1241,9 +1301,9 @@ Package registry     ███░░░░░░░░░░░░░░░░�
 A suíte atual fornece uma base de regressão significativa:
 
 ```text
-441 pytest tests
+523 pytest tests
 28/28 standalone verifications
-54 example PASS
+55 example PASS
 0 example FAIL
 0 linker compile failures
 0 linker link failures

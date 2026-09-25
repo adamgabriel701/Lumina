@@ -26,9 +26,13 @@ class OperatorsMixin:
             return "bool"
 
         if node.op in ('and', 'or'):
-            if left_type != "bool" or right_type != "bool":
+            # `int` é aceito como bool (0 = false, != 0 = true),
+            # consistente com `_require_bool` usado em if/while/assert.
+            valid = {"bool", "int", None}
+            if left_type not in valid or right_type not in valid:
                 raise LuminaError(
-                    f"Operador lógico '{node.op}' requer operandos 'bool'",
+                    f"Operador lógico '{node.op}' requer operandos 'bool' "
+                    f"ou 'int', obteve '{left_type}' e '{right_type}'.",
                     self.filename, getattr(node, 'line', 0),
                     getattr(node, 'col', 0), self.source_code,
                 )
@@ -52,9 +56,24 @@ class OperatorsMixin:
                     )
         return left_type
 
+    # FIX: `visit_UnaryExpr` retornava `None`, quebrando a inferência
+    # de `let x = -5` (x ficava sem tipo) e `let y = not b` (idem).
+    # Agora retorna o tipo do valor, com o operador `not` forçando bool.
     def visit_UnaryExpr(self, node):
-        self.visit(node.val)
-        return None
+        val_type = self.visit(node.val)
+
+        if node.op == 'not':
+            return "bool"
+
+        if node.op == '-':
+            # `-int` → int, `-float` → float. Se o operando já é
+            # `bool` ou desconhecido, propaga como está.
+            if val_type in ("int", "float", "bool"):
+                return val_type
+            return val_type  # pode ser None — sem info
+
+        # Operador unário desconhecido: propaga o tipo do operando.
+        return val_type
 
     def visit_AddressOfExpr(self, node):
         if isinstance(node.val, VariableExpr) and node.val.name in self.functions:

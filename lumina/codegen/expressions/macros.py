@@ -257,6 +257,7 @@ class MacrosMixin:
                 self._substitute_in_expr(stmt.end, mapping) if stmt.end else None,
                 self._substitute_in_expr(stmt.iterable, mapping) if stmt.iterable else None,
                 [self._substitute_in_stmt(s, mapping) for s in stmt.body],
+                index_var=stmt.index_var,   # ← preserva
             )
 
         if isinstance(stmt, DeferStmt):

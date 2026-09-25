@@ -190,4 +190,4 @@ def test_gc_handles_many_allocations():
 
 # PATCH: removida a duplicata de `test_default_build_uses_gc_malloc`
 # que existia no final do arquivo. O pytest rodava o mesmo teste 2x,
-# inflando a contagem total. Esta versão tem 5 testes (não 6).
+# inflando a contagem total. Esta versão tem 6 testes.

@@ -198,13 +198,18 @@ def _format_node_impl(node, indent_level=0):
         return s
 
     elif isinstance(node, ForStmt):
+        # Reconstrói o cabeçalho: `for i, x in ...` ou `for x in ...`
+        var_repr = node.var_name
+        if node.index_var is not None:
+            var_repr = f"{node.index_var}, {node.var_name}"
+
         if node.iterable:
             iter_val = format_node(node.iterable, 0)
-            s = f"{indent}for {node.var_name} in {iter_val}:\n"
+            s = f"{indent}for {var_repr} in {iter_val}:\n"
         else:
             start = format_node(node.start, 0)
             end = format_node(node.end, 0)
-            s = f"{indent}for {node.var_name} in {start}..{end}:\n"
+            s = f"{indent}for {var_repr} in {start}..{end}:\n"
         for stmt in node.body:
             s += format_node(stmt, indent_level + 1)
         return s

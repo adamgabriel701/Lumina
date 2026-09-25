@@ -1,12 +1,16 @@
 from llvmlite import ir
-from ...ast import CallExpr, ArrayExpr, LambdaExpr, VariableExpr, NumberExpr
+from ...ast import (
+    CallExpr, ArrayExpr, LambdaExpr, VariableExpr, NumberExpr,
+    MemberExpr, IndexExpr,
+    CompoundAssignStmt,   # NOVO
+)
 from ...errors import LuminaError
-from ..constants import I64_BYTES, STACK_ALLOC_LIMIT   # ← NOVO
+from ..constants import I64_BYTES, STACK_ALLOC_LIMIT
+
 
 class VarDeclMixin:
 
     def _zero_and_store_struct(self, ptr, struct_ty, name):
-        """Aloca storage pra uma struct sem valor inicial e zera todos os campos."""
         zero_fields = []
         for ft in struct_ty.elements:
             if isinstance(ft, ir.PointerType):
@@ -57,26 +61,9 @@ class VarDeclMixin:
         self.builder.store(storage, ptr)
 
     def _try_stack_alloc(self, node):
-        """
-        Promove `alloc(N)` com N literal para `alloca` no stack,
-        SE e SOMENTE SE:
-          - `node.value` é uma CallExpr para `alloc`/`alloc_bytes`
-          - N é inteiro positivo (n > 0)
-          - N <= LIMIT (limite de stack por var)
-          - A variável não está em `escapes` nem em `freed_vars`
-
-        NÃO é escape analysis real: não propaga por campos de struct,
-        capturas de closure, retornos ou chamadas interprocedurais.
-        O nome sugere cobertura maior do que a real; considerar renomear
-        para `_try_stack_alloc_literal` numa refatoração futura.
-        """
-        # Guard: VarDecl sem inicializador (`let p: Ponto`).
         if node.value is None:
             return None
 
-        # Guard: só CallExpr com `callee.name` conhecido.
-        # Nested getattr evita AttributeError em BinaryExpr,
-        # NumberExpr, StructLiteralExpr, LambdaExpr, PropagateExpr, etc.
         callee = getattr(getattr(node.value, 'callee', None), 'name', None)
         if callee not in ('alloc', 'alloc_bytes'):
             return None
@@ -97,7 +84,6 @@ class VarDeclMixin:
         except (ValueError, AttributeError):
             return None
 
-        # Guard: n <= 0 é UB em LLVM (alloca de tamanho zero).
         if n <= 0:
             raise LuminaError(
                 message=(
@@ -116,8 +102,7 @@ class VarDeclMixin:
 
         elem_ty = self.i64_ty if callee == 'alloc' else self.i8_ty
         arr_ty = ir.ArrayType(elem_ty, n)
-        
-        # Usa o alloca normal
+
         arr_ptr = self.builder.alloca(arr_ty, name=node.name + "_stack")
 
         zero = ir.Constant(self.i32_ty, 0)
@@ -126,20 +111,17 @@ class VarDeclMixin:
         )
 
         slot_ty = elem_ty.as_pointer()
-        # Usa o alloca normal
         slot = self.builder.alloca(slot_ty, name=node.name)
-        
+
         self.builder.store(first_elem, slot)
         self.symbol_table[node.name] = slot
         self.var_types[node.name] = "ptr"
+        self.array_lengths[node.name] = n
+
         return slot
 
     def visit_VarDecl(self, node):
-        # Escape analysis: alloc(N) com N constante e sem escape vira alloca.
         if self._try_stack_alloc(node):
-            # Mesmo no caso stack, registra tamanho de array literal
-            # (para `for x in arr`, embora `alloc` não seja um array literal,
-            # mantém o comportamento consistente).
             return
 
         val = self.visit(node.value) if node.value else None
@@ -157,6 +139,9 @@ class VarDeclMixin:
             or ("<" in var_type and var_type.split("<")[0] in self.struct_defs)
         )
 
+        # Ordem importa: `alloc`/`alloc_bytes` têm tipos fixos e vêm
+        # PRIMEIRO. Depois structs, depois arrays literais (que preservam
+        # o tipo do elemento, Fase 8), depois fallback.
         if is_alloc_call:
             llvm_ty = self.i64_ty.as_pointer()
         elif is_alloc_bytes_call:
@@ -164,25 +149,19 @@ class VarDeclMixin:
         elif is_struct_like:
             struct_ty = self.get_llvm_type(var_type)
             llvm_ty = struct_ty.as_pointer()
-        else:
-            llvm_ty = self.get_llvm_type(var_type)
-
-        # Se o valor já é um ponteiro para struct identificada, use esse
-        # tipo como tipo do slot. Cobre:
-        #   - structs comuns: `let p = Ponto { ... }` (Ponto*)
-        #   - enums genéricos com nome base: `let c = Wrap(42)` (Custom_int_*)
-        #   - enums genéricos com args diferentes dos defaults:
-        #     `let b = Has("hello")` → Box_str_* (não Box_int_*)
-        #   - `let x: ptr = some_struct` (mantém o ponteiro)
-        if (val is not None
+        elif (val is not None
                 and isinstance(val.type, ir.PointerType)
                 and isinstance(val.type.pointee, ir.IdentifiedStructType)):
             llvm_ty = val.type
-
         elif val is not None and isinstance(val.type, ir.IdentifiedStructType):
             llvm_ty = val.type
+        elif (val is not None
+                and isinstance(val.type, ir.PointerType)
+                and not isinstance(val.type.pointee, ir.ArrayType)):
+            llvm_ty = val.type
+        else:
+            llvm_ty = self.get_llvm_type(var_type)
 
-        # Usa o alloca normal
         ptr = self.builder.alloca(llvm_ty, name=node.name)
         self.symbol_table[node.name] = ptr
         self.var_types[node.name] = var_type
@@ -192,12 +171,12 @@ class VarDeclMixin:
                 val = self.builder.bitcast(val, self.i64_ty.as_pointer(), name="alloc_bitcast")
                 self.builder.store(val, ptr)
             elif isinstance(val.type, ir.PointerType) and isinstance(ptr.type.pointee, ir.PointerType):
-                val = self.builder.bitcast(val, ptr.type.pointee, name="ptr_cast")
+                if val.type != ptr.type.pointee:
+                    val = self.builder.bitcast(val, ptr.type.pointee, name="ptr_cast")
                 self.builder.store(val, ptr)
             elif val.type == ptr.type.pointee:
                 self.builder.store(val, ptr)
             elif isinstance(val.type, ir.IdentifiedStructType) and ptr.type.pointee == val.type.as_pointer():
-                # Usa o alloca normal
                 tmp = self.builder.alloca(val.type, name="struct_tmp")
                 self.builder.store(val, tmp)
                 self.builder.store(tmp, ptr)
@@ -205,7 +184,6 @@ class VarDeclMixin:
                 res = self.builder.call(self.atoi, [val], name="str_to_int_call")
                 self.builder.store(res, ptr)
             elif ptr.type.pointee == self.voidptr_ty and val.type == self.i64_ty:
-                # Usa o alloca normal
                 int_buf = self.builder.alloca(ir.ArrayType(self.i8_ty, 32), name="int_to_str_buf")
                 int_buf_ptr = self.builder.bitcast(int_buf, self.voidptr_ty, name="int_str_ptr")
                 fmt_str = self.create_global_string("%ld")
@@ -221,7 +199,6 @@ class VarDeclMixin:
                 target_ty = ptr.type.pointee
                 if isinstance(val.type, ir.IntType) and isinstance(target_ty, ir.IntType):
                     if val.type.width < target_ty.width:
-                        # i1 (bool) → zext; outros → sext
                         if val.type.width == 1:
                             val = self.builder.zext(val, target_ty, name="zext_cast")
                         else:
@@ -257,16 +234,11 @@ class VarDeclMixin:
             except Exception:
                 pass
 
-        # NOVO: registra closures. Uma variável é "closure" se veio de
-        # uma lambda com free_vars, ou se herdou de outra closure.
         if isinstance(node.value, LambdaExpr) and getattr(node.value, 'free_vars', None):
             self.closure_vars.add(node.name)
         elif isinstance(node.value, VariableExpr) and node.value.name in self.closure_vars:
             self.closure_vars.add(node.name)
 
-        # NOVO: registra tamanho para `for x in arr` quando o array vem
-        # de `alloc(N)` com N literal. Sem isso, `let arr = alloc(5);
-        # for x in arr` cai em loop vazio.
         if isinstance(node.value, CallExpr):
             callee_name_v = getattr(node.value.callee, 'name', None)
             if callee_name_v in ('alloc', 'alloc_bytes') and node.value.args:
@@ -283,3 +255,116 @@ class VarDeclMixin:
 
         if is_alloc_call or is_alloc_bytes_call:
             self.heap_allocs.add(node.name)
+
+    # ==================================================================
+    # CompoundAssignStmt (P-10-2)
+    # ==================================================================
+    def _resolve_lvalue(self, target):
+        """Retorna `(ptr, llvm_ty)` para o lvalue, ou `(None, None)`.
+
+        Resolve o endereço do alvo UMA vez. Usado por
+        `visit_CompoundAssignStmt` (e poderia ser usado por
+        `visit_AssignStmt`).
+        """
+        # VariableExpr (local ou global)
+        if isinstance(target, VariableExpr):
+            gv = getattr(self, 'global_mut_vars', {}).get(target.name)
+            if gv is not None:
+                return gv, gv.type.pointee
+            ptr = self.symbol_table.get(target.name)
+            if ptr is None:
+                return None, None
+            return ptr, ptr.type.pointee
+
+        # obj.field
+        if isinstance(target, MemberExpr):
+            obj_val = self.visit(target.obj)
+            if not (isinstance(obj_val.type, ir.PointerType)
+                    and isinstance(obj_val.type.pointee, ir.IdentifiedStructType)):
+                return None, None
+            struct_name = obj_val.type.pointee.name
+            field_idx = self.struct_fields.get(struct_name, {}).get(target.member)
+            if field_idx is None:
+                return None, None
+            ptr = self.builder.gep(
+                obj_val,
+                [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, field_idx)],
+                name=f"{target.member}_ptr",
+            )
+            return ptr, ptr.type.pointee
+
+        # arr[idx]
+        if isinstance(target, IndexExpr):
+            arr_val = self.visit(target.array)
+            idx_val = self.visit(target.index)
+            if not isinstance(arr_val.type, ir.PointerType):
+                return None, None
+            if isinstance(arr_val.type.pointee, ir.ArrayType):
+                ptr = self.builder.gep(
+                    arr_val,
+                    [ir.Constant(self.i32_ty, 0), idx_val],
+                    name="idx_ptr",
+                )
+            else:
+                ptr = self.builder.gep(arr_val, [idx_val], name="idx_ptr")
+            return ptr, ptr.type.pointee
+
+        return None, None
+
+    def _apply_binop(self, op, lhs, rhs):
+        """Aplica `lhs op rhs` com coerção de tipos padrão Lumina."""
+        # Coerção int → int
+        if isinstance(lhs.type, ir.IntType) and isinstance(rhs.type, ir.IntType):
+            if lhs.type.width != rhs.type.width:
+                if lhs.type.width < rhs.type.width:
+                    lhs = self.builder.sext(lhs, rhs.type, name="compound_sext_l")
+                else:
+                    rhs = self.builder.sext(rhs, lhs.type, name="compound_sext_r")
+        # Coerção int → float
+        elif lhs.type == self.f64_ty or rhs.type == self.f64_ty:
+            if lhs.type != self.f64_ty:
+                lhs = self.builder.sitofp(lhs, self.f64_ty, name="compound_itof_l")
+            if rhs.type != self.f64_ty:
+                rhs = self.builder.sitofp(rhs, self.f64_ty, name="compound_itof_r")
+
+        if lhs.type == self.f64_ty:
+            ops = {
+                '+': self.builder.fadd,
+                '-': self.builder.fsub,
+                '*': self.builder.fmul,
+                '/': self.builder.fdiv,
+            }
+        else:
+            ops = {
+                '+': self.builder.add,
+                '-': self.builder.sub,
+                '*': self.builder.mul,
+                '/': self.builder.sdiv,
+                '&': self.builder.and_,
+                '|': self.builder.or_,
+                '^': self.builder.xor,
+            }
+
+        fn = ops.get(op)
+        if fn is None:
+            return lhs
+        return fn(lhs, rhs, name=f"compound_{op}")
+
+    def visit_CompoundAssignStmt(self, node):
+        """`x op= y`.
+
+        FIX (P-10-2): resolve o endereço do lvalue UMA vez, carrega,
+        aplica o operador e escreve de volta. Antes, o parser
+        desaçucarava para `x = x op y`, avaliando o alvo duas vezes —
+        para `arr[f()] += v`, `f()` era chamada 2x.
+        """
+        ptr, target_ty = self._resolve_lvalue(node.target)
+        if ptr is None:
+            return
+
+        old_val = self.builder.load(ptr, name="compound_old")
+        rhs = self.visit(node.value)
+
+        result = self._apply_binop(node.op, old_val, rhs)
+        result = self._coerce_val_to(result, target_ty, name="compound")
+        self.builder.store(result, ptr)

@@ -16,13 +16,11 @@ class OperatorsMixin:
         Cobre i1 (bool), i8 (char), i32, etc. Também converte ponteiros
         em i64 quando o outro lado é int (permitido por design).
         """
-        # ptr ↔ int
         if isinstance(left.type, ir.PointerType) and right.type == self.i64_ty:
             left = self.builder.ptrtoint(left, self.i64_ty, name="bin_ptrtoint_l")
         elif left.type == self.i64_ty and isinstance(right.type, ir.PointerType):
             right = self.builder.ptrtoint(right, self.i64_ty, name="bin_ptrtoint_r")
 
-        # int de larguras diferentes
         if (isinstance(left.type, ir.IntType) and isinstance(right.type, ir.IntType)
                 and left.type != right.type):
             target = self.i64_ty
@@ -111,6 +109,11 @@ class OperatorsMixin:
     # ------------------------------------------------------------------
     def visit_BinaryExpr(self, node):
         # Short-circuit: avalia `left` e decide se avalia `right`.
+        #
+        # FIX: este é o ÚNICO branch de `and`/`or`. Antes havia um
+        # segundo bloco mais abaixo com o comentário "sem short-circuit
+        # por enquanto" — era código morto, inalcançável (o `return`
+        # deste bloco já sai). Foi removido.
         if node.op in ('and', 'or'):
             left = self.visit(node.left)
             if not (isinstance(left.type, ir.IntType) and left.type.width == 1):
@@ -149,27 +152,12 @@ class OperatorsMixin:
         if left is None or right is None:
             return ir.Constant(self.i64_ty, 0)
 
-        # Lógicos (and/or). Sem short-circuit por enquanto — ambos os
-        # lados já foram avaliados. Suficiente para condições simples.
-        if node.op in ('and', 'or'):
-            if not (isinstance(left.type, ir.IntType) and left.type.width == 1):
-                left = self.builder.icmp_signed(
-                    "!=", left, ir.Constant(left.type, 0), name="to_bool_l"
-                )
-            if not (isinstance(right.type, ir.IntType) and right.type.width == 1):
-                right = self.builder.icmp_signed(
-                    "!=", right, ir.Constant(right.type, 0), name="to_bool_r"
-                )
-            if node.op == 'and':
-                return self.builder.and_(left, right, name="and")
-            return self.builder.or_(left, right, name="or")
-
         # Concatenação de strings com '+' (quando já são str+str)
         concat = self._try_string_concat(node, left, right)
         if concat is not None:
             return concat
 
-        # Overload de operador em struct (NOVO)
+        # Overload de operador em struct
         struct_result = self._try_struct_operator(node, left, right)
         if struct_result is not None:
             return struct_result
@@ -194,8 +182,7 @@ class OperatorsMixin:
             self.builder.call(self.snprintf, [buf_ptr, ir.Constant(self.i64_ty, 64), fmt, left], name="num_to_str_call")
             left = buf_ptr
 
-        # Matemática
-        # NOVO: concat após coerção
+        # Tenta concat após coerção (ex: `"count: " + 42`)
         concat = self._try_string_concat(node, left, right)
         if concat is not None:
             return concat
@@ -205,7 +192,6 @@ class OperatorsMixin:
             if left.type == self.voidptr_ty or right.type == self.voidptr_ty:
                 return ir.Constant(self.i64_ty, 0)
 
-            # NOVO: normaliza ints e ponteiros antes de operar
             left, right = self._normalize_ints(left, right)
 
             if left.type == self.f64_ty or right.type == self.f64_ty:
@@ -237,8 +223,6 @@ class OperatorsMixin:
                 return ir.Constant(self.i64_ty, 0)
             left, right = self._normalize_ints(left, right)
             if left.type != right.type:
-                # Força ambos para i64 (o normalize já faz o comum, mas
-                # se ainda houver mismatch, trunca/estende)
                 if isinstance(left.type, ir.IntType) and isinstance(right.type, ir.IntType):
                     if left.type.width < right.type.width:
                         left = self.builder.sext(left, right.type, name="bw_ext_l")
@@ -253,7 +237,6 @@ class OperatorsMixin:
             if node.op == '<<':
                 return self.builder.shl(left, right, name="shl")
             if node.op == '>>':
-                # Shift aritmético (signed) — o `>>` em Lumina preserva sinal
                 return self.builder.ashr(left, right, name="ashr")
 
         # Comparações
@@ -266,15 +249,9 @@ class OperatorsMixin:
                 elif left.type == self.i64_ty and isinstance(right.type, ir.PointerType):
                     right = self.builder.ptrtoint(right, self.i64_ty, name="cmp_ptrtoint_r")
                 elif isinstance(left.type, ir.PointerType) and isinstance(right.type, ir.PointerType):
-                    # ptr de tipos diferentes (ex: Usuario* vs i8* de `nil`)
-                    # → bitcast de um para o tipo do outro
                     right = self.builder.bitcast(right, left.type, name="cmp_ptr_bitcast")
 
             # Comparar strings (i8*) por conteúdo via strcmp.
-            # RUNTIME GUARD: se um dos lados for NULL em runtime,
-            # `strcmp(x, NULL)` é UB. Emitimos branch:
-            #   if (a == NULL || b == NULL): cmp = (a == b)  # ponteiro
-            #   else: cmp = (strcmp(a, b) == 0)
             if node.op in ('==', '!=') and left.type == self.voidptr_ty and right.type == self.voidptr_ty:
                 null_ptr = ir.Constant(self.voidptr_ty, None)
                 a_null = self.builder.icmp_signed("==", left, null_ptr, name="a_null")
@@ -322,10 +299,6 @@ class OperatorsMixin:
         if node.op == '-':
             return self.builder.neg(val, name="neg") if val.type == self.i64_ty else self.builder.fneg(val, name="fneg")
         elif node.op == 'not':
-            # `not x` é negação lógica:
-            #   - se `x` é bool (i1):      xor x, 1
-            #   - se `x` é iN (N>1):       icmp eq x, 0  (x é falso se == 0)
-            #   - se `x` é ptr:            icmp eq x, null
             if isinstance(val.type, ir.IntType) and val.type.width == 1:
                 one = ir.Constant(ir.IntType(1), 1)
                 return self.builder.xor(val, one, name="not_bool")
@@ -351,7 +324,6 @@ class OperatorsMixin:
             return self.builder.ptrtoint(val, self.i64_ty, name="ptr_to_int")
         elif val.type == self.i64_ty and isinstance(target_ty, ir.PointerType):
             return self.builder.inttoptr(val, target_ty, name="int_to_ptr")
-        # NOVO: casts entre ints de larguras diferentes
         elif isinstance(val.type, ir.IntType) and isinstance(target_ty, ir.IntType):
             if val.type.width < target_ty.width:
                 if val.type.width == 1:
@@ -365,9 +337,6 @@ class OperatorsMixin:
             ptr = self.symbol_table.get(node.val.name)
             if ptr:
                 return ptr
-            # `&fn_name` devolve o fn ptr CRU (sem env) — necessário para
-            # FFI (`pthread_create(t, 0, &worker, arg)`). O `fn_name` sozinho
-            # (sem `&`) vira um fat pointer.
             if node.val.name in self.functions_table:
                 func, _ = self.functions_table[node.val.name]
                 return self.builder.bitcast(
@@ -430,18 +399,7 @@ class OperatorsMixin:
         return payload_val
 
     def visit_ChainedComparisonExpr(self, node):
-        """
-        `a < b < c < d` avalia cada operando UMA vez.
-
-        Estratégia:
-          1. Avalia cada operando, guarda em alloca temporário.
-          2. Registra temporários no symbol_table sob nomes únicos.
-          3. Sintetiza `BinaryExpr` para cada par consecutivo e delega
-             ao `visit_BinaryExpr` existente (reusa toda a lógica de
-             int/float/str/ptr, strcmp para strings, etc).
-          4. Combina os resultados com `and_` (bit-a-bit; comparações
-             não têm efeitos colaterais depois de avaliadas).
-        """
+        """`a < b < c < d` avalia cada operando UMA vez."""
         counter = getattr(self, '_chain_counter', 0)
         self._chain_counter = counter + 1
 

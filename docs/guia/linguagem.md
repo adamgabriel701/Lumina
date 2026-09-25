@@ -7,6 +7,7 @@ Referência completa da sintaxe e semântica. Para tutoriais, veja [Guia Rápido
 ## Índice
 
 - [Tipos e Inferência](#tipos-e-inferência)
+- [Arrays](#arrays)
 - [Variáveis](#variáveis)
 - [Operadores](#operadores)
 - [Controle de Fluxo](#controle-de-fluxo)
@@ -51,7 +52,7 @@ let x = 10               # int
 let y = 3.14             # float
 let s = "hello"          # str
 let b = true             # bool
-let nums = [1, 2, 3]     # ptr
+let nums = [1, 2, 3]     # ptr (array de int)
 let t = (1, "a")         # tuple → ptr (LiteralStructType)
 let r = Ok(42)           # Result<int, int> (inferido)
 ```
@@ -62,6 +63,104 @@ Promoção implícita:
 let x: float = 10        # int → float OK
 let y: int = 3.14        # ERRO (truncaria)
 ```
+
+---
+
+## Arrays
+
+Lumina tem duas formas de criar arrays:
+
+### Array literal
+
+```lumina
+let v = [10, 20, 30]            # [i64;3]  — int
+let precos = [1.5, 2.5, 3.5]    # [f64;3]  — float
+let nomes = ["Ana", "Bob"]      # [i8*;2]  — str
+```
+
+O tipo do elemento é **inferido pelo primeiro elemento**. Não é
+possível misturar tipos no mesmo array:
+
+```lumina
+let bad = [1, 2.5, 3]           # ERRO: 2.5 não cabe em i64
+```
+
+### Alocação dinâmica
+
+```lumina
+mut v = alloc(10)         # 10 × i64 (80 bytes)
+mut buf = alloc_bytes(64) # 64 × i8  (64 bytes)
+```
+
+Ambos retornam um ponteiro para o primeiro elemento (`i64*` e `i8*`
+respectivamente).
+
+### Indexação
+
+```lumina
+print(v[0])       # int
+print(precos[1])  # float
+print(nomes[0])   # str
+
+# Atribuição (precisa de `mut`)
+mut w = [1, 2, 3]
+w[1] = 42
+```
+
+### Iteração
+
+```lumina
+for x in v:
+    print(x)
+
+for i, x in v:    # índice + valor
+    print(i, x)
+```
+
+`for i, x in v` declara `i` como `int` e `x` com o tipo do elemento.
+
+### Slicing
+
+```lumina
+let s = v[1..3]     # elementos [1, 3)
+let t = v[1..]      # do índice 1 até o fim
+let u = v[..2]      # do início até índice 2
+let w = v[..]       # cópia completa
+```
+
+O resultado é uma **cópia** em um novo buffer. O tipo do elemento é
+preservado: slice de `[f64;N]` retorna `f64*`, slice de `[str;N]`
+retorna `i8**`.
+
+### Arrays em funções
+
+Arrays literais preservam o tipo do elemento quando usados
+diretamente:
+
+```lumina
+fn soma_float(v: float) -> float:
+    return v[0] + v[1] + v[2]
+
+fn main() -> int:
+    let precos = [1.5, 2.5, 3.5]
+    let total = soma_float(precos)
+    print(total)
+    return 0
+```
+
+**Limitação conhecida:** arrays passados como `ptr` (o tipo genérico)
+para funções perdem a informação do tipo do elemento. Uma função
+`fn soma(arr: ptr)` trata `arr[i]` como `int`, mesmo se o chamador
+passou `[f64;N]`. Use tipos específicos (`fn soma_f64(v: f64)`) ou
+converta explicitamente.
+
+### Limitações conhecidas
+
+* `alloc(N)` sempre produz `i64*`. Para arrays de outros tipos,
+  use array literal ou `alloc_bytes` (que produz `i8*`).
+* Não há verificação de bounds em runtime. `v[100]` num array de 3
+  elementos é comportamento indefinido (leitura fora da memória).
+* Não há `push`, `pop` ou resize. Para isso, use `std/vector`.
 
 ---
 
@@ -437,6 +536,9 @@ match p:
     case Dois(a, b): print(a, b)
     case Zero:       print(0, 0)
 ```
+
+Payloads preservam tipo: `case Has(s): s + "!"` funciona quando o
+payload é `str`, e `case Val(v): v * 2.0` quando é `float`.
 
 ### Guard
 
@@ -827,6 +929,8 @@ let p2 = p1.clone()
 print(p1 == p2)             # true
 print(p1.__debug__())       # Ponto { x: 1, y: 2 }
 ```
+
+`@derive` em `enum` ainda não é suportado (erro em compile-time).
 
 ---
 

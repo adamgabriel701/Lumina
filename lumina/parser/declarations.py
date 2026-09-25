@@ -58,7 +58,8 @@ class DeclarationParser(StatementParser):
         return ExternDecl(name, params, return_type, is_wasm)
 
     def parse_struct(self):
-        # Atributos já foram lidos em `parse()` e estão em `_pending_attrs`.
+        # Atributos já foram lidos em `parse()` e estão em `_pending_attrs`
+        # como `List[Tuple[str, List]]` — mesmo formato de `Function.attrs`.
         attrs = getattr(self, '_pending_attrs', []) or []
 
         self.consume(TokenType.STRUCT)
@@ -120,68 +121,87 @@ class DeclarationParser(StatementParser):
         self.match(TokenType.DEDENT)
         return EnumDecl(name, variants, type_params)
 
+    # ==================================================================
+    # FIX (Fase 10): `parse_trait` aceita corpo vazio.
+    #
+    # Sintaxe comum:
+    #     trait Marker:
+    #
+    #     struct S: x: int
+    #     impl Marker for S:
+    #
+    # Antes, o parser exigia INDENT logo após o `:\n`, quebrando o parse.
+    # Agora: consome NEWLINEs e COMMENTs iniciais, e só entra no bloco
+    # se o próximo token for INDENT.
+    #
+    # O mesmo padrão é usado em `parse_impl`.
+    # ==================================================================
     def parse_trait(self):
         self.consume(TokenType.TRAIT)
         name = self.expect(TokenType.IDENT).value
         self.expect(TokenType.COLON)
         self.expect(TokenType.NEWLINE)
-        while self.check(TokenType.NEWLINE):
-            self.consume()
-        self.expect(TokenType.INDENT)
-        methods = []
-        while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
-            self._skip_newlines_and_comments()
-            if self.check(TokenType.DEDENT) or self.check(TokenType.EOF):
-                break
-            leading = self._take_comments()
-            if self.check(TokenType.FN):
-                self.consume()
-                m_name = self.expect(TokenType.IDENT).value
-                self.expect(TokenType.LPAREN)
-                params = []
-                if not self.check(TokenType.RPAREN):
-                    while True:
-                        p_name = self.expect(TokenType.IDENT).value
-                        self.expect(TokenType.COLON)
-                        p_type = self.parse_type()
-                        params.append(Param(p_name, p_type))
-                        if self.match(TokenType.COMMA):
-                            continue
-                        else:
-                            break
-                self.expect(TokenType.RPAREN)
-                return_type = "void"
-                if self.match(TokenType.ARROW):
-                    return_type = self.parse_type()
-                body = []
-                if self.check(TokenType.COLON):
-                    self.consume()
-                    self.expect(TokenType.NEWLINE)
-                    while self.check(TokenType.NEWLINE):
-                        self.consume()
-                    self.expect(TokenType.INDENT)
-                    while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
-                        if self.match(TokenType.NEWLINE):
-                            continue
-                        stmt = self.parse_statement()
-                        if stmt is not None:
-                            body.append(stmt)
-                    self.expect(TokenType.DEDENT)
-                else:
-                    self.match(TokenType.NEWLINE)
 
-                _fn = Function(m_name, params, return_type, body)
-                if leading:
-                    _fn.leading_comments = leading
-                methods.append(_fn)
-            else:
-                t = self.current_token()
-                raise LuminaError(
-                    f"Token inesperado em 'trait': {t.type.name} ('{t.value}'). "
-                    f"Esperado 'fn' ou 'newline'.",
-                    self.filename, t.line, t.col, self.source_code,
-                )
-        self.expect(TokenType.DEDENT)
+        # Consome newlines/comentários entre `:` e o corpo. Se o próximo
+        # token for INDENT, o trait tem corpo; senão, é vazio (marker).
+        self._skip_newlines_and_comments()
+
+        methods = []
+        if self.check(TokenType.INDENT):
+            self.consume()
+            while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
+                self._skip_newlines_and_comments()
+                if self.check(TokenType.DEDENT) or self.check(TokenType.EOF):
+                    break
+                leading = self._take_comments()
+                if self.check(TokenType.FN):
+                    self.consume()
+                    m_name = self.expect(TokenType.IDENT).value
+                    self.expect(TokenType.LPAREN)
+                    params = []
+                    if not self.check(TokenType.RPAREN):
+                        while True:
+                            p_name = self.expect(TokenType.IDENT).value
+                            self.expect(TokenType.COLON)
+                            p_type = self.parse_type()
+                            params.append(Param(p_name, p_type))
+                            if self.match(TokenType.COMMA):
+                                continue
+                            else:
+                                break
+                    self.expect(TokenType.RPAREN)
+                    return_type = "void"
+                    if self.match(TokenType.ARROW):
+                        return_type = self.parse_type()
+                    body = []
+                    if self.check(TokenType.COLON):
+                        self.consume()
+                        self.expect(TokenType.NEWLINE)
+                        while self.check(TokenType.NEWLINE):
+                            self.consume()
+                        self.expect(TokenType.INDENT)
+                        while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
+                            if self.match(TokenType.NEWLINE):
+                                continue
+                            stmt = self.parse_statement()
+                            if stmt is not None:
+                                body.append(stmt)
+                        self.expect(TokenType.DEDENT)
+                    else:
+                        self.match(TokenType.NEWLINE)
+
+                    _fn = Function(m_name, params, return_type, body)
+                    if leading:
+                        _fn.leading_comments = leading
+                    methods.append(_fn)
+                else:
+                    t = self.current_token()
+                    raise LuminaError(
+                        f"Token inesperado em 'trait': {t.type.name} ('{t.value}'). "
+                        f"Esperado 'fn' ou 'newline'.",
+                        self.filename, t.line, t.col, self.source_code,
+                    )
+            self.expect(TokenType.DEDENT)
         return TraitDecl(name, methods)
 
     def parse_impl(self):
@@ -201,7 +221,7 @@ class DeclarationParser(StatementParser):
             self.consume()
             struct_name = self.parse_type()
 
-        # NOVO: normaliza `impl Box<T>:` → nome base `Box` (fallback).
+        # Normaliza `impl Box<T>:` → nome base `Box` (fallback).
         # `impl Getter for Box<int>:` mantém `Box<int>` (especialização).
         # Regra: se TODOS os args do target são type params (letras únicas
         # maiúsculas separadas por vírgula), stripamos o `<...>`.
@@ -215,50 +235,55 @@ class DeclarationParser(StatementParser):
 
         self.expect(TokenType.COLON)
         self.expect(TokenType.NEWLINE)
-        while self.check(TokenType.NEWLINE):
-            self.consume()
-        self.expect(TokenType.INDENT)
+
+        # FIX (Fase 10): aceita corpo vazio. Cobre `impl Trait for S:`
+        # quando o trait só tem métodos default.
+        self._skip_newlines_and_comments()
+
         methods = []
-        while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
-            self._skip_newlines_and_comments()
-            if self.check(TokenType.DEDENT) or self.check(TokenType.EOF):
-                break
-            leading = self._take_comments()
-            if self.check(TokenType.FN):
-                func = self.parse_function()
+        if self.check(TokenType.INDENT):
+            self.consume()
+            while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
+                self._skip_newlines_and_comments()
+                if self.check(TokenType.DEDENT) or self.check(TokenType.EOF):
+                    break
+                leading = self._take_comments()
+                if self.check(TokenType.FN):
+                    func = self.parse_function()
 
-                original_name = func.name
-                # Mangling canônico: `Box<int>` → `Box_int_`, então
-                # `Box_int__greet`. Métodos com `<T>` genérico ficam sem
-                # sufixo de args (`Box_greet`), servindo de base fallback.
-                func.name = mangle_method(struct_name, original_name)
+                    original_name = func.name
+                    # Mangling canônico: `Box<int>` → `Box_int_`, então
+                    # `Box_int__greet`. Métodos com `<T>` genérico ficam sem
+                    # sufixo de args (`Box_greet`), servindo de base fallback.
+                    func.name = mangle_method(struct_name, original_name)
 
-                is_operator = (
-                    original_name.startswith('__') and original_name.endswith('__')
-                )
-                if not is_operator:
-                    # `self` recebe o tipo completo (Box<int>) para que o
-                    # codegen use o LLVM type correto.
-                    self_type = struct_name if "<" in struct_name else struct_name
-                    func.params.insert(0, Param('self', self_type))
+                    is_operator = (
+                        original_name.startswith('__') and original_name.endswith('__')
+                    )
+                    if not is_operator:
+                        self_type = struct_name if "<" in struct_name else struct_name
+                        func.params.insert(0, Param('self', self_type))
 
-                if leading:
-                    func.leading_comments = leading
-                methods.append(func)
-            else:
-                t = self.current_token()
-                raise LuminaError(
-                    f"Token inesperado em 'impl': {t.type.name} ('{t.value}'). "
-                    f"Esperado 'fn' ou 'newline'.",
-                    self.filename, t.line, t.col, self.source_code,
-                )
-        self.expect(TokenType.DEDENT)
+                    if leading:
+                        func.leading_comments = leading
+                    methods.append(func)
+                else:
+                    t = self.current_token()
+                    raise LuminaError(
+                        f"Token inesperado em 'impl': {t.type.name} ('{t.value}'). "
+                        f"Esperado 'fn' ou 'newline'.",
+                        self.filename, t.line, t.col, self.source_code,
+                    )
+            self.expect(TokenType.DEDENT)
         return ImplBlock(struct_name, methods, trait_name)
 
     def parse_function(self):
+        # `attrs` mantém o formato `List[Tuple[str, List]]` (igual ao
+        # `_pending_attrs`). Antes, projetávamos para `List[str]`,
+        # criando dois formatos coexistentes no código.
         pending = getattr(self, '_pending_attrs', []) or []
-        attrs = [name for (name, _args) in pending]
-        is_exported = 'export' in attrs
+        attrs = list(pending)
+        is_exported = any(name == 'export' for name, _args in attrs)
 
         self.expect(TokenType.FN)
         name_token = self.expect(TokenType.IDENT)
@@ -297,4 +322,5 @@ class DeclarationParser(StatementParser):
             if stmt is not None:
                 body.append(stmt)
         self.expect(TokenType.DEDENT)
-        return Function(name, params, return_type, body, type_params, line, col, is_exported, attrs)
+        return Function(name, params, return_type, body, type_params,
+                        line, col, is_exported, attrs)

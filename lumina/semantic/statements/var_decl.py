@@ -5,14 +5,12 @@ from ...ast import (
     StructLiteralExpr, ArrayExpr, AddressOfExpr, PropagateExpr,
     LambdaExpr, NoneExpr, ComptimeExpr, NilExpr, TupleExpr,
     DerefExpr, SliceExpr, IndexExpr,
+    UnaryExpr,
+    CompoundAssignStmt,   # NOVO
 )
 from ...builtins import BUILTIN_RET
 from ...errors import LuminaError
-
-# PATCH: o import anterior era `from ...semantic.types import parse_fn_type`,
-# que sobe 3 níveis (até `lumina/`) e refaz o caminho `semantic.types`.
-# Funciona por acaso. O correto é `..types` (2 níveis: até `lumina/semantic/`).
-from ..types import parse_fn_type
+from ..types import parse_fn_type, is_assignable
 
 
 class VarDeclMixin:
@@ -43,6 +41,11 @@ class VarDeclMixin:
         if node.value:
             value_type = self.visit(node.value)
 
+        if isinstance(node.value, ArrayExpr) and node.value.elements:
+            first_t = self.visit(node.value.elements[0])
+            if first_t:
+                self.array_elem_types[node.name] = first_t
+
         if node.var_type is not None and value_type is not None:
             self._require_assignable(
                 node.var_type, value_type,
@@ -54,13 +57,6 @@ class VarDeclMixin:
         self.declare_var(node.name, node.var_type, node.is_mutable)
 
     def _infer_var_decl_type(self, node):
-        """Infere `node.var_type` para `VarDecl` sem anotação.
-
-        Cobre: MemberExpr, BinaryExpr, NoneExpr, NilExpr, ComptimeExpr,
-        StringExpr, NumberExpr, BoolExpr, StructLiteralExpr, LambdaExpr,
-        ArrayExpr, TupleExpr, AddressOfExpr, DerefExpr, PropagateExpr,
-        SliceExpr, IndexExpr, CallExpr.
-        """
         if isinstance(node.value, MemberExpr):
             field_type = self.visit(node.value)
             if field_type:
@@ -74,6 +70,11 @@ class VarDeclMixin:
 
         elif isinstance(node.value, NilExpr):
             node.var_type = "ptr"
+
+        elif isinstance(node.value, UnaryExpr):
+            inferred = self.visit(node.value)
+            if inferred:
+                node.var_type = inferred
 
         elif isinstance(node.value, ComptimeExpr):
             folded = self._constant_fold(node.value.expr)
@@ -132,13 +133,11 @@ class VarDeclMixin:
             node.var_type = "int"
 
         elif isinstance(node.value, SliceExpr):
-            # Preserva o tipo da fonte: slice de str → str,
-            # slice de array → ptr. Sem isso, `s[a..b]` vira "ptr"
-            # (i64*) e `s[a..b] == outra_str` compara endereços.
             node.var_type = self.visit(node.value)
 
         elif isinstance(node.value, IndexExpr):
-            node.var_type = "int"
+            inferred = self.visit(node.value)
+            node.var_type = inferred if inferred else "int"
 
         elif isinstance(node.value, CallExpr):
             node.var_type = self._infer_call_expr_type(node.value)
@@ -151,7 +150,6 @@ class VarDeclMixin:
         elif isinstance(_callee, VariableExpr):
             func_name = _callee.name
 
-        # Chamada via variável fn-typed: deriva retorno da assinatura.
         if not call_node.is_method and func_name:
             info = self.get_var_info(func_name)
             if info and info.get('type'):
@@ -207,68 +205,112 @@ class VarDeclMixin:
             self.declare_var(name, "int", node.is_mutable)
 
     # ------------------------------------------------------------------
-    # AssignStmt
+    # Helpers de resolução de alvo (compartilhados por AssignStmt e
+    # CompoundAssignStmt).
     # ------------------------------------------------------------------
-    def _analyze_assign(self, node):
-        target_type = None
+    def _analyze_assign_target(self, target):
+        """Resolve o tipo Lumina do alvo de uma atribuição.
 
-        if isinstance(node.target, MemberExpr):
-            self.check_escape(node.target.obj)
-            if isinstance(node.target.obj, VariableExpr):
-                info = self.get_var_info(node.target.obj.name)
+        Faz os checks de mutabilidade/escopo e retorna o tipo do alvo
+        (ou None). NÃO visita o value.
+        """
+        if isinstance(target, MemberExpr):
+            self.check_escape(target.obj)
+            if isinstance(target.obj, VariableExpr):
+                info = self.get_var_info(target.obj.name)
                 if not info:
                     raise LuminaError(
-                        f"Variável '{node.target.obj.name}' não declarada.",
+                        f"Variável '{target.obj.name}' não declarada.",
                         self.filename, 0, 0, self.source_code,
                     )
                 if not info['mutable']:
                     raise LuminaError(
                         f"Não pode modificar variável imutável "
-                        f"'{node.target.obj.name}'.",
+                        f"'{target.obj.name}'.",
                         self.filename, 0, 0, self.source_code,
                     )
                 base_type = (info['type'].split('<')[0]
                              if info['type'] else "Unknown")
                 if base_type not in self.struct_defs:
                     raise LuminaError(
-                        f"Variável '{node.target.obj.name}' não é uma Struct.",
+                        f"Variável '{target.obj.name}' não é uma Struct.",
                         self.filename, 0, 0, self.source_code,
                     )
                 struct_def = self.struct_defs[base_type]
-                if node.target.member not in struct_def.fields:
+                if target.member not in struct_def.fields:
                     raise LuminaError(
-                        f"Campo '{node.target.member}' não existe na Struct "
+                        f"Campo '{target.member}' não existe na Struct "
                         f"'{info['type']}'.",
                         self.filename, 0, 0, self.source_code,
                     )
-                target_type = struct_def.fields[node.target.member]
+                return struct_def.fields[target.member]
             else:
-                self.visit(node.target.obj)
+                self.visit(target.obj)
+            return None
 
-        elif isinstance(node.target, DerefExpr):
-            pass
+        if isinstance(target, DerefExpr):
+            return None
 
-        elif isinstance(node.target, IndexExpr):
-            self.check_escape(node.target.array)
+        if isinstance(target, IndexExpr):
+            self.check_escape(target.array)
+            arr_type = self.visit(target.array)
+            self.visit(target.index)
 
-        else:
-            self.check_escape(node.value)
-            info = self.get_var_info(node.target.name)
-            if not info:
-                raise LuminaError(
-                    f"Variável '{node.target.name}' não declarada.",
-                    self.filename, 0, 0, self.source_code,
-                )
-            if not info['mutable']:
-                raise LuminaError(
-                    f"Não pode reatribuir à variável imutável "
-                    f"'{node.target.name}'.",
-                    self.filename, 0, 0, self.source_code,
-                )
-            target_type = info['type']
+            if arr_type == "str":
+                return "int"
+            if arr_type == "ptr":
+                if isinstance(target.array, VariableExpr):
+                    et = getattr(self, 'array_elem_types', {}).get(
+                        target.array.name
+                    )
+                    return et if et else "int"
+                return "int"
+            if arr_type and "<" in arr_type:
+                return None
+            return None
+
+        # VariableExpr
+        self.check_escape(target)
+        info = self.get_var_info(target.name)
+        if not info:
+            raise LuminaError(
+                f"Variável '{target.name}' não declarada.",
+                self.filename, 0, 0, self.source_code,
+            )
+        if not info['mutable']:
+            raise LuminaError(
+                f"Não pode reatribuir à variável imutável "
+                f"'{target.name}'.",
+                self.filename, 0, 0, self.source_code,
+            )
+        return info['type']
+
+    # ------------------------------------------------------------------
+    # AssignStmt
+    # ------------------------------------------------------------------
+    def _analyze_assign(self, node):
+        target_type = self._analyze_assign_target(node.target)
 
         self.check_escape(node.value)
         value_type = self.visit(node.value)
 
         if target_type is not None and value_type is not None:
             self._require_assignable(target_type, value_type, context="atribuição")
+
+    # ------------------------------------------------------------------
+    # CompoundAssignStmt (P-10-2)
+    # ------------------------------------------------------------------
+    def _analyze_compound_assign(self, node):
+        """`x op= y`.
+
+        Target analisado UMA vez (diferente do caminho antigo que
+        desaçucarava para `x = x op y`, avaliando o lvalue duas vezes).
+        """
+        target_type = self._analyze_assign_target(node.target)
+
+        value_type = self.visit(node.value)
+
+        if target_type is not None and value_type is not None:
+            self._require_assignable(
+                target_type, value_type, context="atribuição composta",
+            )

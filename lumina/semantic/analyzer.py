@@ -1,21 +1,12 @@
-"""Orquestrador da análise semântica.
-
-O trabalho pesado está dividido em:
-  - `ExpressionAnalyzer` (em `expressions/`) — type checking de expressões
-  - `StatementAnalyzer` (em `statements/`) — type checking de statements
-  - `DerivesMixin` (em `derives.py`) — expansão de `@derive(...)`
-  - `TraitResolutionMixin` (em `trait_resolution.py`) — métodos default
-
-A classe `SemanticAnalyzer` apenas orquestra a ordem das passadas e
-mantém o registro global de macros (`@macro`) para validar invocações
-`nome!(args)`.
-"""
+"""Orquestrador da análise semântica."""
 from ..builtins import BUILTIN_FUNCTIONS
+from ..common.attrs import normalize_attrs
 from lumina.ast.statements import ErrorNode
 from ..ast import (
     Function, ExternDecl, StructDecl, EnumDecl, ImplBlock,
     VarDecl, VariableExpr, TraitDecl, MatchStmt, TypeAlias,
     IfStmt, WhileStmt, ForStmt, DeferStmt, BenchStmt,
+    LambdaExpr, CastExpr, MacroCallStmt,
 )
 from ..errors import LuminaError
 from .expressions import ExpressionAnalyzer
@@ -48,8 +39,18 @@ class SemanticAnalyzer(
         self.builtin_functions = BUILTIN_FUNCTIONS
 
         self.freed_vars = set()
-        self.macros = {}   # name → Function (com attr 'macro')
+        self.macros = {}
         self.type_aliases = {}
+
+        # FIX (Fase 8): mapeia nome de variável → tipo Lumina do
+        # elemento. Populado em `_analyze_var_decl` quando o valor é
+        # um `ArrayExpr`. Consultar em `visit_IndexExpr` para inferir
+        # o tipo do elemento.
+        #
+        # Cobre apenas variáveis locais e top-level. Não propaga por
+        # parâmetros, retornos ou campos de struct — esses casos
+        # continuam retornando `None` (comportamento anterior).
+        self.array_elem_types = {}
 
     # ------------------------------------------------------------------
     # Análise principal
@@ -59,7 +60,7 @@ class SemanticAnalyzer(
         self._resolve_trait_defaults(declarations)
 
         # Passada 0: coletar e expandir type aliases.
-        self.type_aliases = {}  # name -> (params_list, target_type)
+        self.type_aliases = {}
         for decl in declarations:
             if isinstance(decl, TypeAlias):
                 params = list(getattr(decl, 'type_params', None) or [])
@@ -68,15 +69,14 @@ class SemanticAnalyzer(
         if self.type_aliases:
             self._expand_type_aliases(declarations)
 
-        # Passada 0: coletar macros. Necessário para validar invocações
-        # `nome!(args)` (MacroCallStmt) e permitir que a análise dos
-        # corpos de macros aconteça como funções normais.
+        # Passada 0: coletar macros.
         self.macros = {}
         for decl in declarations:
             if isinstance(decl, Function):
-                attrs = getattr(decl, 'attrs', None) or []
-                if 'macro' in attrs:
-                    self.macros[decl.name] = decl
+                for name, _args in normalize_attrs(getattr(decl, 'attrs', None)):
+                    if name == 'macro':
+                        self.macros[decl.name] = decl
+                        break
 
         # Passada 1: registrar símbolos.
         for decl in declarations:
@@ -186,82 +186,91 @@ class SemanticAnalyzer(
         return None
 
     def _expand_type_aliases(self, declarations):
-        """Reescreve todos os tipos do AST expandindo type aliases.
-
-        Roda em todas as declarações top-level e recursa nos corpos
-        de função para pegar VarDecls locais (`let x: Alias = ...`).
-        """
+        """Reescreve TODOS os tipos do AST expandindo type aliases."""
         aliases = self.type_aliases
 
         def expand(t):
+            if not isinstance(t, str):
+                return t
             return expand_type_alias(t, aliases)
 
-        def expand_params(params):
-            for p in params:
-                p.type_ann = expand(p.type_ann)
+        def walk(node, seen=None):
+            if node is None:
+                return
+            if seen is None:
+                seen = set()
+            node_id = id(node)
+            if node_id in seen:
+                return
+            seen.add(node_id)
 
-        def walk_stmts(stmts):
-            """Percorre statements expandindo tipos em VarDecl,
-            DestructureStmt (nada a fazer), e recursando em blocos."""
-            for s in stmts:
-                if s is None:
-                    continue
-                if isinstance(s, VarDecl) and s.var_type is not None:
-                    s.var_type = expand(s.var_type)
-                elif isinstance(s, IfStmt):
-                    walk_stmts(s.then_body)
-                    if s.else_body:
-                        walk_stmts(s.else_body)
-                elif isinstance(s, WhileStmt):
-                    walk_stmts(s.body)
-                elif isinstance(s, ForStmt):
-                    walk_stmts(s.body)
-                elif isinstance(s, MatchStmt):
-                    for c in s.cases:
-                        if len(c) >= 4 and isinstance(c[3], list):
-                            walk_stmts(c[3])
-                    if s.default:
-                        walk_stmts(s.default)
-                elif isinstance(s, DeferStmt):
-                    walk_stmts(s.body)
-                elif isinstance(s, BenchStmt):
-                    walk_stmts(s.body)
+            if isinstance(node, (list, tuple)):
+                for item in node:
+                    walk(item, seen)
+                return
 
-        for decl in declarations:
-            if isinstance(decl, Function):
-                expand_params(decl.params)
-                decl.return_type = expand(decl.return_type)
-                walk_stmts(decl.body)
-            elif isinstance(decl, ExternDecl):
-                new_params = []
-                for p in decl.params:
-                    if isinstance(p, tuple) and len(p) >= 2:
-                        new_params.append((p[0], expand(p[1])))
-                    else:
-                        new_params.append(p)
-                decl.params = new_params
-                decl.return_type = expand(decl.return_type)
-            elif isinstance(decl, StructDecl):
-                for fname, ftype in list(decl.fields.items()):
-                    decl.fields[fname] = expand(ftype)
-            elif isinstance(decl, EnumDecl):
+            if isinstance(node, LambdaExpr):
+                for p in node.params:
+                    p.type_ann = expand(p.type_ann)
+                node.return_type = expand(node.return_type)
+                walk(node.body, seen)
+                return
+
+            if isinstance(node, CastExpr):
+                node.target_type = expand(node.target_type)
+                walk(node.expr, seen)
+                return
+
+            if isinstance(node, VarDecl):
+                if node.var_type is not None:
+                    node.var_type = expand(node.var_type)
+                walk(node.value, seen)
+                return
+
+            if isinstance(node, StructDecl):
+                for fname in list(node.fields.keys()):
+                    node.fields[fname] = expand(node.fields[fname])
+                return
+
+            if isinstance(node, EnumDecl):
                 new_variants = []
-                for vname, payloads in decl.variants:
+                for vname, payloads in node.variants:
                     if isinstance(payloads, list):
-                        new_variants.append((vname, [expand(t) for t in payloads]))
+                        new_variants.append(
+                            (vname, [expand(t) for t in payloads])
+                        )
                     elif payloads:
                         new_variants.append((vname, expand(payloads)))
                     else:
                         new_variants.append((vname, payloads))
-                decl.variants = new_variants
-            elif isinstance(decl, (TraitDecl, ImplBlock)):
-                for m in decl.methods:
-                    expand_params(m.params)
-                    m.return_type = expand(m.return_type)
-                    walk_stmts(m.body)
-            elif isinstance(decl, VarDecl):
-                if decl.var_type is not None:
-                    decl.var_type = expand(decl.var_type)
+                node.variants = new_variants
+                return
+
+            if isinstance(node, (Function, ExternDecl, TraitDecl, ImplBlock)):
+                params = getattr(node, 'params', None)
+                if params is not None:
+                    for p in params:
+                        if hasattr(p, 'type_ann'):
+                            p.type_ann = expand(p.type_ann)
+                ret = getattr(node, 'return_type', None)
+                if ret is not None:
+                    node.return_type = expand(ret)
+                methods = getattr(node, 'methods', None)
+                if methods is not None:
+                    walk(methods, seen)
+                body = getattr(node, 'body', None)
+                if body is not None:
+                    walk(body, seen)
+                return
+
+            if hasattr(node, '__dataclass_fields__'):
+                for fname in node.__dataclass_fields__:
+                    if fname in ('line', 'col'):
+                        continue
+                    walk(getattr(node, fname, None), seen)
+
+        for decl in declarations:
+            walk(decl)
 
     def check_escape(self, node):
         if isinstance(node, VariableExpr) and node.name in self.heap_allocs:

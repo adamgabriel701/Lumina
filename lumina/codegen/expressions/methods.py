@@ -1,18 +1,9 @@
-"""Method calls, construtor de enums e lookup de variante.
-
-`codegen_method_call` resolve `obj.metodo(args)` procurando primeiro
-`{Struct}_{metodo}` e caindo para `{Base}_{metodo}` quando a struct é
-genérica monomorphizada (`Box_int_` → `Box`).
-
-`_construct_enum` constrói uma instância de enum no heap.
-`_find_enum_variant` procura o enum que contém uma variante.
-"""
+"""Method calls, construtor de enums e lookup de variante."""
 from llvmlite import ir
 
-# PATCH: importa o mangler canônico (antes havia um `_mangle_name`
-# duplicado dentro desta classe, idêntico a `mangle_type`).
 from ...common.mangle import mangle_type
-from ..constants import I64_BYTES, MIN_ENUM_SIZE   # ← NOVO
+from ...errors import LuminaError
+from ..constants import I64_BYTES, MIN_ENUM_SIZE
 
 
 class MethodCallsMixin:
@@ -22,7 +13,6 @@ class MethodCallsMixin:
         obj_val = self.visit(obj_node)
 
         # `obj.campo_fn(args)` — o "método" é um campo fn-typed.
-        # Carrega o valor do campo e faz indirect call via _call_closure.
         if (isinstance(obj_val.type, ir.PointerType)
                 and isinstance(obj_val.type.pointee, ir.IdentifiedStructType)):
             struct_name = obj_val.type.pointee.name
@@ -35,11 +25,9 @@ class MethodCallsMixin:
                     name=f"field_{method_name}_ptr",
                 )
                 field_ty = elem_ptr.type.pointee
-                # Só trata como campo fn se for voidptr (fat pointer)
                 if field_ty == self.voidptr_ty:
                     closure_val = self.builder.load(elem_ptr, name=f"field_{method_name}_load")
 
-                    # Desempacota {fn_ptr, env_ptr} e chama
                     closure_i8pp = self.builder.bitcast(
                         closure_val, self.voidptr_ty.as_pointer(),
                         name=f"field_{method_name}_c8pp",
@@ -51,7 +39,7 @@ class MethodCallsMixin:
                     )
                     env_raw = self.builder.load(env_slot, name=f"field_{method_name}_env")
 
-                    n = len(node.args) - 1  # excluindo obj
+                    n = len(node.args) - 1
                     fn_ty = ir.FunctionType(
                         self.i64_ty, [self.voidptr_ty] + [self.i64_ty] * n,
                     )
@@ -79,11 +67,8 @@ class MethodCallsMixin:
         if isinstance(obj_val.type, ir.PointerType) and isinstance(
             obj_val.type.pointee, ir.IdentifiedStructType,
         ):
-            struct_name = obj_val.type.pointee.name  # ex: "Box_int_"
+            struct_name = obj_val.type.pointee.name
 
-            # Candidatos: nome exato primeiro, depois base.
-            # Ex: `struct_name = "Box_int_"`, `method = "greet"`:
-            #   candidates = ["Box_int__greet", "Box_greet"]
             candidates = [f"{struct_name}_{method_name}"]
             base = struct_name
             if "_" in base:
@@ -100,9 +85,22 @@ class MethodCallsMixin:
                     break
 
             if real_method_name is not None:
-                func, func_type = self.functions_table[real_method_name]
-                # Se caímos no método do base, `self` do método é `Box*` mas
-                # `obj_val` é `Box_int_*`. Bitcast.
+                entry = self.functions_table.get(real_method_name)
+                if entry is None:
+                    # Defensivo: cache inconsistente. Erro claro em vez
+                    # de KeyError cru.
+                    raise LuminaError(
+                        message=(
+                            f"Entrada de cache inconsistente para "
+                            f"'{real_method_name}'. Recompile sem cache."
+                        ),
+                        filename=getattr(self, 'current_filename', '<codegen>'),
+                        line=getattr(node, 'line', 0) or 0,
+                        col=getattr(node, 'col', 0) or 0,
+                        source_code='',
+                    )
+                func, func_type = entry
+
                 if used_base and len(func_type.args) >= 1:
                     expected_self = func_type.args[0]
                     if obj_val.type != expected_self:
@@ -195,29 +193,35 @@ class MethodCallsMixin:
                 self.builder.store(ir.Constant(self.i8_ty, 0), null_ptr)
                 return buf
 
-        raise Exception(f"Método '{method_name}' não encontrado no Codegen.")
+        # FIX: erro com contexto (LuminaError) em vez de Exception genérico.
+        raise LuminaError(
+            message=f"Método '{method_name}' não encontrado no Codegen.",
+            filename=getattr(self, 'current_filename', '<codegen>'),
+            line=getattr(node, 'line', 0) or 0,
+            col=getattr(node, 'col', 0) or 0,
+            source_code=getattr(self, 'source_code', '') or '',
+        )
+
+    # ==================================================================
+    # Cache de variantes de enum
+    # ==================================================================
+    def _invalidate_variant_cache(self):
+        """Descarta o cache `_variant_cache`.
+
+        Chamado quando `struct_defs` é modificado (ex:
+        `get_or_create_monomorphized_enum` registra uma chave nova).
+        Antes, o cache só era populado uma vez — se um enum genérico
+        era monomorphizado DEPOIS do primeiro lookup, a variante nova
+        não era vista.
+        """
+        if hasattr(self, '_variant_cache'):
+            del self._variant_cache
 
     def _find_enum_variant(self, variant_name):
         """Retorna `(enum_base_name, variant_idx)` para a variante, ou None.
 
-        PATCH: adiciona cache e normaliza para o nome **base**.
-
-        Antes, a função varria `self.struct_defs.items()` a cada chamada.
-        Como `get_or_create_monomorphized_enum` registra a mesma `base_decl`
-        sob 2 chaves extras (`Box<int>`, `Box_int_`), a iteração era:
-          - O(n_enums + n_monomorphizações) em vez de O(n_enums)
-          - Não-determinística quanto ao nome retornado. Se a chave
-            `"Custom<int>"` fosse encontrada antes de `"Custom"`, o
-            chamador (`codegen_user_call`) construía
-            `f"{enum_name}<{args}>"` = `"Custom<int><str>"` → quebra.
-
-        A iteração agora filtra `enum_name == enum_def.name`, garantindo
-        que só a **base** entra no cache. As especializações são derivadas
-        pelo chamador via `_infer_enum_type_args`.
-
-        Cache é populado na primeira chamada e nunca invalidado — todos
-        os enums são registrados em `generate_module` (passo 1) antes de
-        qualquer lookup acontecer em corpos de função (passo 3b).
+        Cache é populado uma vez e invalidado quando o cache semântico
+        muda (via `_invalidate_variant_cache`).
         """
         cache = getattr(self, '_variant_cache', None)
         if cache is None:
@@ -225,9 +229,6 @@ class MethodCallsMixin:
             for enum_name, enum_def in self.struct_defs.items():
                 if not hasattr(enum_def, 'variants'):
                     continue
-                # Só a chave canônica base: `enum_def.name` é o nome
-                # declarado (`"Box"`), não as especializações
-                # (`"Box<int>"`, `"Box_int_"`).
                 if enum_name != enum_def.name:
                     continue
                 for i, variant in enumerate(enum_def.variants):
@@ -235,24 +236,60 @@ class MethodCallsMixin:
             self._variant_cache = cache
         return cache.get(variant_name)
 
+    # ==================================================================
+    # Coerção de payloads de enum
+    # ==================================================================
+    def _coerce_enum_payload_store(self, val, slot_ty, name_hint):
+        """Converte `val` para armazenar em `slot_ty`, preservando bits.
+
+        Diferente de `_coerce_for_store`, NÃO usa `sitofp`/`fptosi` —
+        bitcast é obrigatório para preservar o valor exato.
+        """
+        if val.type == slot_ty:
+            return val
+
+        if isinstance(val.type, ir.IntType) and isinstance(slot_ty, ir.IntType):
+            if val.type.width < slot_ty.width:
+                if val.type.width == 1:
+                    return self.builder.zext(val, slot_ty, name=f"{name_hint}_zext")
+                return self.builder.sext(val, slot_ty, name=f"{name_hint}_sext")
+            return self.builder.trunc(val, slot_ty, name=f"{name_hint}_trunc")
+
+        if isinstance(val.type, ir.PointerType) and slot_ty == self.i64_ty:
+            return self.builder.ptrtoint(val, slot_ty, name=f"{name_hint}_ptoi")
+
+        if val.type == self.i64_ty and isinstance(slot_ty, ir.PointerType):
+            return self.builder.inttoptr(val, slot_ty, name=f"{name_hint}_itop")
+
+        if val.type == self.f64_ty and slot_ty == self.i64_ty:
+            return self.builder.bitcast(val, slot_ty, name=f"{name_hint}_bitcast")
+        if val.type == self.i64_ty and slot_ty == self.f64_ty:
+            return self.builder.bitcast(val, slot_ty, name=f"{name_hint}_bitcast")
+
+        if isinstance(val.type, ir.PointerType) and isinstance(slot_ty, ir.PointerType):
+            return self.builder.bitcast(val, slot_ty, name=f"{name_hint}_bitcast")
+
+        try:
+            return self.builder.bitcast(val, slot_ty, name=f"{name_hint}_fallback")
+        except Exception:
+            return val
+
     def _construct_enum(self, enum_name, variant_idx, arg_nodes):
-        # Monomorphiza on-demand se for genérico.
         if "<" in enum_name and enum_name not in self.struct_types:
             self.get_or_create_monomorphized_enum(enum_name)
+            # FIX: nova chave em struct_defs pode conter variantes novas.
+            self._invalidate_variant_cache()
 
         struct_ty = self.struct_types[enum_name]
         struct_def = self.struct_defs[enum_name]
         max_p = self._enum_max_payloads(struct_def)
 
-        # Tipos concretos dos slots (elements[0] é o tag).
         payload_tys = list(struct_ty.elements[1:]) if struct_ty.elements else []
 
         struct_size = I64_BYTES + max_p * I64_BYTES
         if struct_size < MIN_ENUM_SIZE:
             struct_size = MIN_ENUM_SIZE
 
-        # PATCH: usa o mangler canônico. Antes chamava `self._mangle_name`,
-        # que era uma cópia local de `mangle_type`.
         mangled = mangle_type(enum_name)
 
         enum_ptr = self.builder.call(
@@ -279,7 +316,9 @@ class MethodCallsMixin:
             target_ty = payload_tys[i] if i < len(payload_tys) else self.i64_ty
             if i < len(arg_nodes):
                 val = self.visit(arg_nodes[i])
-                val = self._coerce_for_store(val, target_ty, name_hint=f"payload_{i}")
+                val = self._coerce_enum_payload_store(
+                    val, target_ty, name_hint=f"payload_{i}",
+                )
                 self.builder.store(val, payload_ptr)
             else:
                 self.builder.store(self._zero_for_type(target_ty), payload_ptr)

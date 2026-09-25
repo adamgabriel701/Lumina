@@ -5,10 +5,8 @@ Passos:
   2. Copia métodos default do trait para cada `ImplBlock` que não os
      sobrescreveu.
   3. Detecta conflito: dois ImplBlocks produzindo o mesmo
-     `Struct_metodo` (ex: dois traits com o mesmo método default no
-     mesmo struct, ou um impl explícito + um trait default homônimos).
-     Sem este guard, o segundo silenciosamente sobrescreveria o
-     primeiro em `function_defs`.
+     `Struct_metodo`. Sem este guard, o segundo silenciosamente
+     sobrescreveria o primeiro em `function_defs`.
 """
 from ..ast import Function, Param, ImplBlock, TraitDecl
 from ..common.mangle import mangle_method, mangle_type
@@ -69,20 +67,18 @@ class TraitResolutionMixin:
 
         # Passo 3: guard de duplicata.
         #
-        # Depois do passo 2, dois ImplBlocks podem ter gerado métodos
-        # com o mesmo nome mangled (mesmo `Struct_metodo`). Exemplos:
+        # FIX 12: mensagem mais acionável, distinguindo trait-default
+        # de impl explícito. Caso real:
         #
-        #   trait A:
+        #   trait Greet:
         #       fn hello() -> int: return 1
-        #   trait B:
-        #       fn hello() -> int: return 2
         #   struct S: x: int
-        #   impl A for S: pass
-        #   impl B for S: pass
+        #   impl Greet for S: pass        # gera S_hello default
+        #   impl S:
+        #       fn hello() -> int: return 2
         #
         # Sem o guard, `S_hello` seria definido duas vezes e o segundo
-        # silenciosamente sobrescreveria o primeiro — bug difícil de
-        # rastrear porque o compilador reporta sucesso.
+        # silenciosamente sobrescreveria o primeiro.
         seen_methods = {}  # mangled_name → (struct_name, trait_name_or_None)
         for decl in declarations:
             if not isinstance(decl, ImplBlock):
@@ -100,12 +96,23 @@ class TraitResolutionMixin:
                         f"impl {trait_name} for {decl.struct_name}"
                         if trait_name else f"impl {decl.struct_name}"
                     )
+
+                    # Hint específico quando um lado é trait-default e o
+                    # outro é impl explícito.
+                    hint = ""
+                    if (prev_trait is None) != (trait_name is None):
+                        hint = (
+                            " Um dos métodos vem de trait default e o outro "
+                            "de um impl explícito. Se o impl explícito é "
+                            "intencional, declare o método explicitamente "
+                            "no outro impl também para desambiguar."
+                        )
+
                     raise LuminaError(
                         message=(
                             f"Método duplicado '{key}': definido em "
-                            f"'{prev_desc}' e novamente em '{curr_desc}'. "
-                            f"Trait defaults não são mesclados implicitamente "
-                            f"— implemente o método explicitamente em cada impl."
+                            f"'{prev_desc}' e novamente em '{curr_desc}'."
+                            f"{hint}"
                         ),
                         filename=getattr(decl, 'filename', '<semantic>'),
                         line=getattr(m, 'line', 0) or 0,

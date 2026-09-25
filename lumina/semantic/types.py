@@ -16,6 +16,7 @@ def _is_type_param(t: str) -> bool:
     """Um type param genérico é uma letra maiúscula sozinha (T, U, V, ...)."""
     return bool(t) and len(t) == 1 and t.isupper()
 
+
 def _split_top_level(s):
     """Split por vírgula ignorando vírgulas dentro de parênteses ou <>."""
     result = []
@@ -56,7 +57,7 @@ def parse_fn_type(type_str):
     if not type_str.startswith("fn("):
         return None
 
-    rest = type_str[3:]  # pula "fn("
+    rest = type_str[3:]
     depth = 1
     end = -1
     for i, c in enumerate(rest):
@@ -102,47 +103,35 @@ def is_assignable(target: str, value: str) -> bool:
     if target == value:
         return True
 
-    # Type param genérico aceita qualquer tipo concreto.
     if _is_type_param(target):
         return True
-    # NOVO: valor também pode ser type param (dentro de `impl Box<T>`).
-    # Sem isso, `return self.data` (T) em método de struct genérica
-    # falha quando o método declara `-> int`.
     if _is_type_param(value):
         return True
 
-    # NOVO (A): Option (sem args) ↔ Option<X>
     if target.startswith("Option") and value == "Option":
         return True
     if value.startswith("Option") and target == "Option":
         return True
 
-    # NOVO: Option (do literal `none`) funciona como null pointer.
-    # Cobre `v.data = none` onde `data: ptr`.
     if value == "Option" and target in ("ptr", "fn", "str"):
         return True
 
-    # Promoção numérica
     if target == "float" and value == "int":
         return True
 
-    # int ↔ ptr
     if target == "ptr" and value in ("int", "ptr"):
         return True
     if target == "int" and value == "ptr":
         return True
 
-    # fn ↔ str ↔ ptr (todos são i8* no codegen)
     if target in ("str", "ptr", "fn") and value in ("str", "ptr", "fn"):
         return True
 
-    # fn-typed: fat pointer compatível com qualquer `fn` sem assinatura
     if target == "fn" and value and value.startswith("fn("):
         return True
     if value == "fn" and target and target.startswith("fn("):
         return True
 
-    # Duas assinaturas tipadas: mesma aridade + params + ret
     t_sig = parse_fn_type(target) if target else None
     v_sig = parse_fn_type(value) if value else None
     if t_sig is not None and v_sig is not None:
@@ -150,18 +139,15 @@ def is_assignable(target: str, value: str) -> bool:
         v_params, v_ret = v_sig
         if len(t_params) != len(v_params):
             return False
-        # Return "void" aceita qualquer retorno
         if t_ret != "void" and v_ret != "void" and t_ret != v_ret:
             return False
         return all(is_assignable(tp, vp) for tp, vp in zip(t_params, v_params))
 
-    # Arrays decaem para ponteiros
     if target == "ptr" and value == "array":
         return True
     if target == "array" and value == "ptr":
         return True
 
-    # `none` (Option::None) é compatível com Option, ptr, fn, str e structs
     if value in ("none", "None", "null"):
         return (
             target in ("ptr", "fn", "str", "Option")
@@ -169,14 +155,12 @@ def is_assignable(target: str, value: str) -> bool:
             or _base(target) not in PRIMITIVES
         )
 
-    # `nil` (null pointer C-style) NÃO é Option; só ptr/str/fn/struct
     if value == "nil":
         return (
             target in ("ptr", "fn", "str")
             or _base(target) not in PRIMITIVES
         )
 
-    # Generics: mesma base + mesmos args (ou um lado sem args)
     if "<" in target or "<" in value:
         if _base(target) != _base(value):
             return False
@@ -201,6 +185,7 @@ def check_assignable(target: str, value: str, err_ctx) -> None:
         filename, line, col, source,
     )
 
+
 # ============================================================
 # Helpers de genéricos aninhados
 # ============================================================
@@ -214,11 +199,9 @@ def parse_generic(type_str):
     if not type_str or "<" not in type_str:
         return type_str, []
     base, _, rest = type_str.partition("<")
-    # Remove o último '>' só se casar
     if not rest.endswith(">"):
         return type_str, []
     args_str = rest[:-1]
-    # Split por vírgula no nível zero (evita split dentro de <...>)
     args = []
     depth = 0
     current = ""
@@ -262,18 +245,10 @@ def unify_type(declared, actual, type_map):
     preenchendo `type_map`.
 
     Retorna True se unificou com sucesso.
-
-    Regras:
-      - `declared == actual` → OK, nada a mapear
-      - `declared` é um type param (T, U, V...) → mapeia
-      - `declared` genérico (`Box<T>`) e `actual` genérico (`Box<int>`):
-        mesma base + unifica arg por arg
-      - `declared` sem args mas `actual` com args: aceita (covariante)
     """
     if declared == actual:
         return True
 
-    # Type param: letra maiúscula sozinha
     if declared and len(declared) == 1 and declared.isupper():
         existing = type_map.get(declared)
         if existing is None:
@@ -288,13 +263,22 @@ def unify_type(declared, actual, type_map):
         return False
 
     if not d_args:
-        # `declared` sem args aceita qualquer arg concreto
         return True
 
     if len(d_args) != len(a_args):
         return False
 
     return all(unify_type(d, a, type_map) for d, a in zip(d_args, a_args))
+
+
+# FIX 10: limite explícito para expansão de aliases. Antes, retornar
+# silenciosamente no limite escondia ciclos como:
+#     type A = B
+#     type B = A
+# que causavam comportamento indefinido em consumidores. Agora levanta
+# LuminaError com mensagem acionável.
+_ALIAS_MAX_DEPTH = 32
+
 
 def expand_type_alias(type_str, aliases, _depth=0):
     """Expande aliases recursivamente em `type_str`.
@@ -303,24 +287,31 @@ def expand_type_alias(type_str, aliases, _depth=0):
     vazio, o alias é simples. Caso contrário, é genérico: `Nome<args>`
     substitui os params no `target_type` antes de recursar.
 
-    - Se `type_str` bate com um alias simples, expande o alvo.
-    - Se bate com `Alias<args>`, substitui os params no alvo e expande.
-    - Se é `fn(T1) -> R`, expande params e retorno.
-    - Se tem `<...>`, expande args.
-    - Caso contrário, retorna inalterado.
+    FIX 10: ao exceder `_ALIAS_MAX_DEPTH`, levanta LuminaError.
     """
-    if not type_str or _depth > 32:
+    if not type_str:
         return type_str
 
-    # Tenta primeiro 'Nome<args>' ou 'Nome'
+    if _depth > _ALIAS_MAX_DEPTH:
+        from ..errors import LuminaError
+        raise LuminaError(
+            message=(
+                f"Cadeia de type aliases excede {_ALIAS_MAX_DEPTH} níveis "
+                f"começando em '{type_str}'. Provável ciclo (ex: "
+                f"`type A = B` + `type B = A`)."
+            ),
+            filename="<semantic>",
+            line=0,
+            col=0,
+            source_code="",
+        )
+
     base, args = parse_generic(type_str)
 
     if base in aliases:
         params, target = aliases[base]
         if params:
-            # Alias genérico: precisa dos args
             if not args:
-                # Sem args → erro do chamador; retorna como está
                 return type_str
             if len(args) != len(params):
                 return type_str
@@ -328,12 +319,10 @@ def expand_type_alias(type_str, aliases, _depth=0):
             expanded = substitute_generic(target, subst)
             return expand_type_alias(expanded, aliases, _depth + 1)
         else:
-            # Alias simples: sem args esperados
             if args:
-                return type_str  # arg inesperado; deixa como está
+                return type_str
             return expand_type_alias(target, aliases, _depth + 1)
 
-    # Não é alias: expande componentes internos
     sig = parse_fn_type(type_str)
     if sig is not None:
         params, ret = sig

@@ -12,6 +12,10 @@ restauração, perdendo `@safe` em funções genéricas.
 """
 from contextlib import contextmanager
 
+# Re-export: fonte única em `lumina/common/attrs.py`. Importadores
+# antigos (`from .context import normalize_attrs`) continuam funcionando.
+from ..common.attrs import normalize_attrs   # noqa: F401
+
 
 _CONTEXT_FIELDS = (
     "builder",
@@ -66,27 +70,5 @@ def push_context(codegen, **overrides):
         for field, value in saved.items():
             setattr(codegen, field, value)
 
-def normalize_attrs(attrs):
-    """
-    Normaliza `Function.attrs` para `List[Tuple[str, List]]`.
 
-    O parser emite `List[Tuple[str, List]]` (ex: `[('safe', []),
-    ('inline', [])]`), mas este helper também aceita `List[str]`
-    (ex: `['safe', 'inline']`), tornando os call sites imunes a
-    mudança de formato.
-
-    Uso:
-        for name, args in normalize_attrs(fn.attrs):
-            ...
-    """
-    if not attrs:
-        return []
-    result = []
-    for a in attrs:
-        if isinstance(a, str):
-            result.append((a, []))
-        elif isinstance(a, (tuple, list)) and len(a) >= 1:
-            name = a[0]
-            args = a[1] if len(a) > 1 else []
-            result.append((name, args))
-    return result
+__all__ = ["push_context", "normalize_attrs", "_CONTEXT_FIELDS"]

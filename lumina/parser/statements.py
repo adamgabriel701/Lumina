@@ -4,6 +4,7 @@ from ..ast import (
     VarDecl, DestructureStmt, AssignStmt, ReturnStmt, IfStmt, WhileStmt,
     ForStmt, BreakStmt, ContinueStmt, DeferStmt, AssertStmt, BenchStmt,
     Function, BinaryExpr, MacroCallStmt,
+    CompoundAssignStmt,   # NOVO (P-10-2)
 )
 
 
@@ -11,12 +12,6 @@ class StatementParser(PatternParser):
     """Statements e estruturas de controle."""
 
     def parse_statement(self):
-        """Wrapper: coleta comentários antes de cada statement e os anexa
-        ao nó resultante como `leading_comments`.
-
-        Retorna None se, após consumir comentários/newlines, o token atual
-        for DEDENT ou EOF (não há statement pra parsear).
-        """
         self._skip_newlines_and_comments()
 
         if (not self.current_token()
@@ -95,6 +90,8 @@ class StatementParser(PatternParser):
                 self.match(TokenType.NEWLINE)
                 return AssignStmt(expr, value)
 
+            # FIX (P-10-2): retorna CompoundAssignStmt em vez de
+            # AssignStmt(target, BinaryExpr(op, target, value)).
             compound = self._parse_compound_assign(expr)
             if compound is not None:
                 self.match(TokenType.NEWLINE)
@@ -104,13 +101,9 @@ class StatementParser(PatternParser):
             return expr
 
     def _parse_macro_call_stmt(self):
-        """Parseia `nome!(arg1, arg2, ...)` em posição de statement.
-
-        Consome IDENT, BANG, LPAREN, args, RPAREN, e opcionalmente NEWLINE.
-        """
-        name_token = self.consume()   # IDENT
-        self.consume()                # BANG
-        self.consume()                # LPAREN
+        name_token = self.consume()
+        self.consume()
+        self.consume()
         args = []
         if not self.check(TokenType.RPAREN):
             while True:
@@ -124,6 +117,17 @@ class StatementParser(PatternParser):
         )
 
     def _parse_compound_assign(self, target_expr):
+        """`x op= y` → CompoundAssignStmt(x, op, y).
+
+        FIX (P-10-2): antes, retornava
+        `AssignStmt(target, BinaryExpr(op, target, value))`, que
+        avalia `target` duas vezes (uma no lvalue, outra dentro do
+        value). Para `arr[i()] += 1`, isso chamava `i()` duas vezes.
+
+        Com CompoundAssignStmt, o codegen resolve o endereço do
+        lvalue UMA vez, carrega o valor atual, aplica o operador e
+        escreve de volta.
+        """
         compound_ops = {
             TokenType.PLUS_ASSIGN:  "+",
             TokenType.MINUS_ASSIGN: "-",
@@ -139,9 +143,7 @@ class StatementParser(PatternParser):
 
         op_token = self.consume()
         value = self.parse_expression()
-        binary_op = compound_ops[op_token.type]
-        binary = BinaryExpr(binary_op, target_expr, value)
-        return AssignStmt(target_expr, binary)
+        return CompoundAssignStmt(target_expr, compound_ops[op_token.type], value)
 
     def parse_let(self):
         if self.check(TokenType.MUT):
@@ -250,6 +252,18 @@ class StatementParser(PatternParser):
         self.expect(TokenType.DEDENT)
         return WhileStmt(condition, body)
 
+    # ==================================================================
+    # FIX (P-10-5): `parse_for` usa `index_var` em vez de codificar
+    # `var_name = "i,x"`.
+    #
+    # Antes:
+    #     for i, x in arr  →  var_name = "i,x"
+    #     for x in arr     →  var_name = "x"
+    #
+    # Agora:
+    #     for i, x in arr  →  var_name = "x", index_var = "i"
+    #     for x in arr     →  var_name = "x", index_var = None
+    # ==================================================================
     def parse_for(self):
         self.consume(TokenType.FOR)
         first = self.expect(TokenType.IDENT).value
@@ -285,7 +299,8 @@ class StatementParser(PatternParser):
         self.expect(TokenType.DEDENT)
 
         if second is not None:
-            return ForStmt(f"{first},{second}", start, end, iterable, body)
+            # `for idx, val in arr:` → idx = first, val = second
+            return ForStmt(second, start, end, iterable, body, index_var=first)
         return ForStmt(first, start, end, iterable, body)
 
     def parse_defer(self):

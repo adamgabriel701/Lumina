@@ -4,6 +4,7 @@ Também contém a aplicação de atributos LLVM (`@inline`, `@cold`, ...)
 e o helper `_llvm_ty_to_str` usado por outros mixins.
 """
 from llvmlite import ir
+from ..common.attrs import normalize_attrs
 from ..common.mangle import mangle_type
 from ..errors import LuminaError
 
@@ -83,10 +84,8 @@ class RegistrationMixin:
         if func_name in self.functions_table:
             return
 
-        # NOVO: `fn main() -> int:` sem params ganha a assinatura C real
-        # `i32 (i32, i8**)`. Sem isso, argv não tem como chegar em Lumina.
-        # Globais `__lumina_argc`/`__lumina_argv` são populadas no entry
-        # de main (ver function_body.py).
+        # `fn main() -> int:` sem params ganha a assinatura C real
+        # `i32 (i32, i8**)` para permitir acesso a argv.
         if (func_name == "main"
                 and len(node.params) == 0
                 and node.return_type in ("int", "void")):
@@ -112,7 +111,7 @@ class RegistrationMixin:
         ret_ty = self.get_llvm_param_type(node.return_type)
         param_types = []
         for p in node.params:
-            p_name, p_type, p_default = p.name, p.type_ann, p.default
+            p_type = p.type_ann
             p_ty = self.get_llvm_param_type(p_type)
             param_types.append(p_ty)
 
@@ -129,21 +128,13 @@ class RegistrationMixin:
         """
         Aplica atributos LLVM a `func`.
 
-        Aceita `attrs` em `List[str]` (`['safe', 'inline']`) ou
-        `List[Tuple[str, List]]` (`[('safe', []), ('inline', [])]`).
-        Chama `normalize_attrs` para padronizar antes de processar.
-
-        Mapeamento:
+        Aceita `attrs` em `List[str]` ou `List[Tuple[str, List]]` —
+        `normalize_attrs` padroniza. Mapeamento:
           @inline    → alwaysinline
           @noinline  → noinline
           @cold      → cold
           @hot       → inlinehint (aproximação — ver nota)
-
-        Conflito:
-          @inline + @noinline → erro em compile-time.
         """
-        from .context import normalize_attrs
-
         attrs_norm = normalize_attrs(attrs)
         names = {name for name, _args in attrs_norm}
 
@@ -151,8 +142,7 @@ class RegistrationMixin:
             raise LuminaError(
                 message=(
                     f"Atributos conflitantes em '{func.name}': "
-                    f"@inline e @noinline são mutuamente exclusivos "
-                    f"(conflitante)."
+                    f"@inline e @noinline são mutuamente exclusivos."
                 ),
                 filename=getattr(self, 'current_filename', '<compiler>'),
                 line=0, col=0,
@@ -171,15 +161,39 @@ class RegistrationMixin:
             if llvm_attr:
                 func.attributes.add(llvm_attr)
 
+    # ==================================================================
+    # Conversão LLVM → Lumina
+    # ==================================================================
     def _llvm_ty_to_str(self, t):
+        """Mapeia um tipo LLVM de volta para o nome Lumina.
+
+        Usado por `var_types` (para inferência em chamadas de genéricos)
+        e por `MatchStmtMixin._emit_bindings` (para registrar binding
+        types em enums genéricos).
+        """
+        # Ordem importa: i1 antes de IntType genérico, voidptr antes de PointerType.
         if t == self.i64_ty:
+            return "int"
+        if isinstance(t, ir.IntType) and t.width == 1:
+            return "bool"
+        if isinstance(t, ir.IntType) and t.width == 32:
+            # i32 aparece em params de FFI (argc, etc.). Tratamos como int.
             return "int"
         if t == self.f64_ty:
             return "float"
         if t == self.voidptr_ty:
             return "str"
-        if isinstance(t, ir.IntType) and t.width == 1:
-            return "bool"
+        if isinstance(t, ir.VoidType):
+            return "void"
         if isinstance(t, ir.PointerType):
+            return "ptr"
+        # Arrays decaem para ponteiro na assinatura das funções.
+        if isinstance(t, ir.ArrayType):
+            return "ptr"
+        # Tuplas são `LiteralStructType` — passadas por ponteiro.
+        if isinstance(t, ir.LiteralStructType):
+            return "ptr"
+        # Structs identificadas também são passadas por ponteiro.
+        if isinstance(t, ir.IdentifiedStructType):
             return "ptr"
         return "unknown"

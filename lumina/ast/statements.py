@@ -15,7 +15,7 @@ class Stmt:
 @dataclass
 class StructDecl(Stmt):
     name: str
-    fields: Dict[str, str]  # Nome do campo -> Tipo
+    fields: Dict[str, str]
     type_params: Optional[List[str]] = None
     line: int = 0
     col: int = 0
@@ -24,7 +24,6 @@ class StructDecl(Stmt):
 @dataclass
 class EnumDecl(Stmt):
     name: str
-    # variants: List[(nome, [tipos])]
     variants: List[tuple]
     type_params: Optional[List[str]] = None
     line: int = 0
@@ -107,6 +106,22 @@ class AssignStmt(Stmt):
     value: Expr
 
 
+# FIX (Fase 10b / P-10-2): `x op= y` era desaçucarado para
+# `x = x op y` no parser, o que avalia `x` DUAS vezes. Quando `x`
+# é `arr[i]` e `i` tem efeitos colaterais (ex: `arr[f()]`), `f()`
+# era chamada duas vezes — uma no target, outra dentro do value.
+#
+# Novo nó preserva a forma `op=` até o codegen, que resolve o
+# endereço do lvalue UMA vez, carrega, computa e escreve de volta.
+#
+# Sintaxe coberta: `+=`, `-=`, `*=`, `/=`, `&=`, `|=`, `^=`.
+@dataclass
+class CompoundAssignStmt(Stmt):
+    target: Expr
+    op: str          # '+', '-', '*', '/', '&', '|', '^'
+    value: Expr
+
+
 @dataclass
 class ReturnStmt(Stmt):
     values: List[Expr]
@@ -127,6 +142,15 @@ class WhileStmt(Stmt):
     body: List[Any]
 
 
+# FIX (Fase 10b / P-10-5): o parser codificava `for i, x in arr:`
+# como `var_name = "i,x"` — uma string com vírgula. Funcionava por
+# acaso, mas era frágil (`.split(",")` no codegen, `.strip()` para
+# remover espaços, impossível de validar em compile-time).
+#
+# `index_var` é o novo campo: `for i, x in arr` → `var_name="x"`,
+# `index_var="i"`. `for x in arr` → `var_name="x"`, `index_var=None`.
+#
+# É backwards-compatible para construções existentes (default=None).
 @dataclass
 class ForStmt(Stmt):
     var_name: str
@@ -134,6 +158,7 @@ class ForStmt(Stmt):
     end: Optional[Expr]
     iterable: Optional[Expr]
     body: List[Any]
+    index_var: Optional[str] = None   # NOVO
 
 
 @dataclass
@@ -175,7 +200,6 @@ class BenchStmt(Stmt):
 
 @dataclass
 class ErrorNode(Stmt):
-    """Nó especial para erros de parsing, permitindo o parser continuar"""
     message: str
     line: int = 0
     col: int = 0
@@ -183,27 +207,14 @@ class ErrorNode(Stmt):
 
 @dataclass
 class MacroCallStmt(Stmt):
-    """Invocação de macro em posição de statement.
-
-    Sintaxe: `nome!(arg1, arg2, ...)`. Diferente de `nome(args)` (que
-    é uma chamada de função/expressão), esta forma inlina o corpo
-    inteiro da macro no call site, permitindo corpos multi-statement.
-
-    A macro é resolvida em compile-time pelo codegen; a substituição
-    de parâmetros é feita em `_substitute_in_stmt` e `_substitute_in_expr`.
-    """
     name: str
     args: List[Expr]
     line: int = 0
     col: int = 0
 
+
 @dataclass
 class TypeAlias(Stmt):
-    """`type Nome<T1, T2> = <tipo>` — alias de tipo (opcionalmente genérico).
-
-    Se `type_params` é None/vazio, é um alias simples. Senão, o `target_type`
-    pode usar os parâmetros, e `Nome<int, str>` expande substituindo-os.
-    """
     name: str
     target_type: str
     type_params: Optional[List[str]] = None

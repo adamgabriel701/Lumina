@@ -5,32 +5,14 @@ from ..ast import (
     ArrayExpr, IndexExpr, SliceExpr, MemberExpr, AddressOfExpr, DerefExpr,
     UnaryExpr, PropagateExpr, ComptimeExpr, StructLiteralExpr, CastExpr,
     LambdaExpr, StructLiteralField, Param, InterpolatedStringExpr, NoneExpr,
-    NilExpr, TupleExpr, ChainedComparisonExpr,   # ← NOVO
+    NilExpr, TupleExpr, ChainedComparisonExpr,
 )
 from ..errors import LuminaError
 
 
 class ExpressionParser(ParserBase):
-    """Precedência (do mais baixo ao mais alto):
-
-    expression → logical → bitwise_or → bitwise_xor → bitwise_and
-    → comparison → shift → range → additive → term → factor → postfix
-
-    Os níveis `bitwise_*` e `shift` foram adicionados para suportar
-    `a | b`, `a & b`, `a ^ b`, `a << n`, `a >> n` em expressões comuns
-    (não só em tipos). Isso destrava vários exemplos e std/async_fs.lm.
-    """
 
     def _parse_call_args(self):
-        """Parseia lista de args até (mas não incluindo) ')'.
-
-        Retorna `(args, kwargs)`:
-          - `args`: List[Expr] — posicionais
-          - `kwargs`: List[(name, Expr)] — nomeados
-
-        Regra: uma vez que um nomeado aparece, todos os seguintes
-        devem ser nomeados (evita ambiguidade).
-        """
         args = []
         kwargs = []
         if not self.check(TokenType.RPAREN):
@@ -39,7 +21,7 @@ class ExpressionParser(ParserBase):
                         and self.peek(1)
                         and self.peek(1).type == TokenType.COLON):
                     name = self.consume().value
-                    self.consume()  # COLON
+                    self.consume()
                     kwargs.append((name, self.parse_expression()))
                 else:
                     if kwargs:
@@ -59,8 +41,8 @@ class ExpressionParser(ParserBase):
             next_tok = self.peek(1)
             if not next_tok or next_tok.type != TokenType.GT:
                 break
-            self.consume()  # PIPE
-            self.consume()  # GT
+            self.consume()
+            self.consume()
             func_name = self.expect(TokenType.IDENT).value
             callee = VariableExpr(func_name, 0, 0)
             node = CallExpr(callee, [node])
@@ -77,7 +59,6 @@ class ExpressionParser(ParserBase):
     def parse_bitwise_or(self):
         node = self.parse_bitwise_xor()
         while self.check(TokenType.PIPE):
-            # Só consome `|` se NÃO for `|>` (que é tratado em parse_expression)
             next_tok = self.peek(1)
             if next_tok and next_tok.type == TokenType.GT:
                 break
@@ -97,7 +78,6 @@ class ExpressionParser(ParserBase):
     def parse_bitwise_and(self):
         node = self.parse_comparison()
         while self.check(TokenType.AMP):
-            # Só consome `&` se NÃO for `&&` (tratado em parse_logical)
             next_tok = self.peek(1)
             if next_tok and next_tok.type == TokenType.AMP:
                 break
@@ -107,18 +87,6 @@ class ExpressionParser(ParserBase):
         return node
 
     def parse_comparison(self):
-        """
-        Comparações. Suporta cadeia de qualquer tamanho:
-            a < b
-            a < b < c
-            a < b < c < d
-            a in b in c   (também encadeia)
-
-        Produz `BinaryExpr` para 2 operandos, `ChainedComparisonExpr`
-        para 3+. O codegen de `ChainedComparisonExpr` garante que cada
-        operando intermediário é avaliado UMA única vez (semântica
-        Python-like), evitando efeitos colaterais duplicados.
-        """
         node = self.parse_shift()
         cmp_ops = [
             TokenType.EQ, TokenType.NEQ, TokenType.LT,
@@ -181,7 +149,6 @@ class ExpressionParser(ParserBase):
                 filename=self.filename, line=0, col=0, source_code=self.source_code,
             )
 
-        # NOVO: comptime(expr) ou comptime expr
         if self.check(TokenType.COMPTIME):
             self.consume()
             if self.check(TokenType.LPAREN):
@@ -317,7 +284,6 @@ class ExpressionParser(ParserBase):
         if self.match(TokenType.LPAREN):
             node = self.parse_expression()
             if self.check(TokenType.COMMA):
-                # Tuple literal: `(a, b, c)` ou `(a,)`
                 elements = [node]
                 while self.match(TokenType.COMMA):
                     if self.check(TokenType.RPAREN):
@@ -345,9 +311,8 @@ class ExpressionParser(ParserBase):
             elif (self.check(TokenType.QUESTION)
                   and self.peek(1)
                   and self.peek(1).type == TokenType.DOT):
-                # `?.` — safe navigation
-                self.consume()  # ?
-                self.consume()  # .
+                self.consume()
+                self.consume()
                 member_name = self.expect(TokenType.IDENT).value
                 if self.check(TokenType.LPAREN):
                     self.consume()
@@ -359,7 +324,6 @@ class ExpressionParser(ParserBase):
                 else:
                     node = MemberExpr(node, member_name, is_safe=True)
             elif self.check(TokenType.DOT):
-                # `.` — member access
                 self.consume()
                 member_name = self.expect(TokenType.IDENT).value
                 if self.check(TokenType.LPAREN):
@@ -382,6 +346,30 @@ class ExpressionParser(ParserBase):
             node = CastExpr(node, target_type)
         return node
 
+    # ==================================================================
+    # FIX (P-10-4): `_parse_slice_bound` cobre additive/term/factor E
+    # comparações binárias.
+    #
+    # Antes, bounds usavam `parse_additive` diretamente, o que rejeitava
+    # `arr[a..b == c]` — a comparação `b == c` não era consumida, e o
+    # parser falhava em `expect(RBRACKET)`.
+    #
+    # Bool é int em Lumina, então `b == c` é uma expressão válida
+    # (0 ou 1). Cobre o caso raro mas real de bounds computados.
+    # ==================================================================
+    def _parse_slice_bound(self):
+        """Parseia um bound de slice."""
+        node = self.parse_additive()
+        cmp_ops = [
+            TokenType.EQ, TokenType.NEQ, TokenType.LT,
+            TokenType.GT, TokenType.LTE, TokenType.GTE,
+        ]
+        while any(self.check(op) for op in cmp_ops):
+            op = self.consume().value
+            right = self.parse_additive()
+            node = BinaryExpr(op, node, right)
+        return node
+
     def _parse_slice_or_index(self, base_node):
         """Chamado após consumir `[`. Decide entre IndexExpr e SliceExpr.
 
@@ -392,8 +380,7 @@ class ExpressionParser(ParserBase):
           arr[..b]       → SliceExpr(None, b)
           arr[..]        → SliceExpr(None, None)
 
-        Usa `parse_additive()` para os bounds (não `parse_expression`),
-        para não consumir o `..` como operador binário.
+        Bounds usam `_parse_slice_bound`, que para em `..`.
         """
         # Caso: arr[..] ou arr[..end]
         if self.check(TokenType.DOT_DOT):
@@ -401,18 +388,18 @@ class ExpressionParser(ParserBase):
             if self.check(TokenType.RBRACKET):
                 self.consume()
                 return SliceExpr(base_node, None, None)
-            end = self.parse_additive()
+            end = self._parse_slice_bound()
             self.expect(TokenType.RBRACKET)
             return SliceExpr(base_node, None, end)
 
         # Caso: arr[i], arr[a..], arr[a..b]
-        first = self.parse_additive()
+        first = self._parse_slice_bound()
         if self.check(TokenType.DOT_DOT):
             self.consume()
             if self.check(TokenType.RBRACKET):
                 self.consume()
                 return SliceExpr(base_node, first, None)
-            end = self.parse_additive()
+            end = self._parse_slice_bound()
             self.expect(TokenType.RBRACKET)
             return SliceExpr(base_node, first, end)
 
@@ -423,7 +410,6 @@ class ExpressionParser(ParserBase):
         if self.check(TokenType.FN):
             self.consume()
             if self.check(TokenType.LPAREN):
-                # `fn(T1, T2) -> R`
                 self.consume()
                 params = []
                 if not self.check(TokenType.RPAREN):
@@ -462,9 +448,6 @@ class ExpressionParser(ParserBase):
         return params
 
     def _expect_gt_for_type(self):
-        """Consome um '>' no contexto de tipo, tratando '>>' (SHR) como
-        dois '>' consecutivos.
-        """
         tok = self.current_token()
         if tok is None:
             raise LuminaError(

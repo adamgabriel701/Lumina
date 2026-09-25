@@ -93,7 +93,6 @@ class Lexer:
 
             c = self.peek()
 
-            # Comentário de linha
             if c == '#':
                 start_line, start_col = self.line, self.col
                 text = ""
@@ -102,7 +101,6 @@ class Lexer:
                 self.add_token(TokenType.COMMENT, text, start_line, start_col)
                 continue
 
-            # Comentário de bloco /* ... */
             if c == '/' and self.peek(1) == '*':
                 start_line, start_col = self.line, self.col
                 text = self._collect_block_comment()
@@ -145,16 +143,15 @@ class Lexer:
         return self.tokens
 
     def _collect_block_comment(self):
-        """Consome /* ... */ e retorna o texto completo (incluindo /* */)."""
         text = ""
-        text += self.advance()  # /
-        text += self.advance()  # *
+        text += self.advance()
+        text += self.advance()
         while True:
             if self.peek() == '\0':
                 self.error("Comentário /* não terminado")
             if self.peek() == '*' and self.peek(1) == '/':
-                text += self.advance()  # *
-                text += self.advance()  # /
+                text += self.advance()
+                text += self.advance()
                 return text
             text += self.advance()
 
@@ -175,10 +172,11 @@ class Lexer:
             self.at_line_start = False
             return
 
-        # Comentários no início da linha NÃO afetam a pilha de indentação.
-        # Eles "pertencem" à próxima linha de código — o INDENT/DEDENT
-        # correspondente será emitido quando a linha de código for processada.
         if self.peek() == '#':
+            self.at_line_start = False
+            return
+
+        if self.peek() == '/' and self.peek(1) == '*':
             self.at_line_start = False
             return
 
@@ -193,13 +191,41 @@ class Lexer:
 
         self.at_line_start = False
 
+    # ==================================================================
+    # FIX (Fase 10c): literais binários (`0b`) e octais (`0o`).
+    #
+    # Antes, só `0x` era reconhecido. `0b1100` era lido como
+    # `NUMBER(0)` seguido de `IDENT(b1100)` — o parser aceitava, mas o
+    # semantic falhava com "Variável 'b1100' não declarada".
+    #
+    # Para cada prefixo, o loop de dígitos é restrito ao alfabeto válido
+    # (binário: 01; octal: 0-7; hex: 0-9a-f). Isso evita consumir
+    # identificadores adjacentes (`0b1100abc` para em `0b1100`).
+    # ==================================================================
     def _number(self):
         num_str = ""
         is_float = False
 
+        # `0x` / `0X` — hexadecimal.
         if self.peek() == '0' and self.peek(1) in ('x', 'X'):
             num_str += self.advance() + self.advance()
-            while self.peek().isalnum():
+            while self.peek() in '0123456789abcdefABCDEF':
+                num_str += self.advance()
+            self.add_token(TokenType.NUMBER, num_str)
+            return
+
+        # `0b` / `0B` — binário.
+        if self.peek() == '0' and self.peek(1) in ('b', 'B'):
+            num_str += self.advance() + self.advance()
+            while self.peek() in '01':
+                num_str += self.advance()
+            self.add_token(TokenType.NUMBER, num_str)
+            return
+
+        # `0o` / `0O` — octal.
+        if self.peek() == '0' and self.peek(1) in ('o', 'O'):
+            num_str += self.advance() + self.advance()
+            while self.peek() in '01234567':
                 num_str += self.advance()
             self.add_token(TokenType.NUMBER, num_str)
             return
@@ -227,18 +253,14 @@ class Lexer:
             self.add_token(TokenType.NUMBER, num_str)
 
     def _read_escape(self, val, allow_newline=False):
-        """Processa um escape `\\X`. Retorna o novo `val` (in-place update
-        seria possível, mas usar retorno simplifica).
-        """
-        self.advance()  # consome '\'
+        self.advance()
         esc = self.advance()
         if esc in _ESCAPE_MAP:
             return val + _ESCAPE_MAP[esc]
-        # Escape desconhecido: preserva `\X` como texto literal.
         return val + '\\' + esc
 
     def _string(self, interpolated=False):
-        self.advance()  # consome a aspa de abertura
+        self.advance()
         val = ""
         if interpolated:
             while self.peek() != '"' and self.peek() != '\0':
@@ -306,12 +328,10 @@ class Lexer:
             self.add_token(TokenType.COMMA, ",")
         elif c == ':':
             if c2 == '=':
-                self.advance()
-                self.advance()
+                self.advance(); self.advance()
                 self.add_token(TokenType.COLON_ASSIGN, ":=")
             elif c2 == ':':
-                self.advance()
-                self.advance()
+                self.advance(); self.advance()
                 self.add_token(TokenType.DOUBLE_COLON, "::")
             else:
                 self.advance()
@@ -330,44 +350,38 @@ class Lexer:
             self.add_token(TokenType.QUESTION, "?")
         elif c == '.':
             if c2 == '.':
-                self.advance()
-                self.advance()
+                self.advance(); self.advance()
                 self.add_token(TokenType.DOT_DOT, "..")
             else:
                 self.advance()
                 self.add_token(TokenType.DOT, ".")
         elif c == '+':
             if c2 == '=':
-                self.advance()
-                self.advance()
+                self.advance(); self.advance()
                 self.add_token(TokenType.PLUS_ASSIGN, "+=")
             else:
                 self.advance()
                 self.add_token(TokenType.PLUS, "+")
         elif c == '-':
             if c2 == '=':
-                self.advance()
-                self.advance()
+                self.advance(); self.advance()
                 self.add_token(TokenType.MINUS_ASSIGN, "-=")
             elif c2 == '>':
-                self.advance()
-                self.advance()
+                self.advance(); self.advance()
                 self.add_token(TokenType.ARROW, "->")
             else:
                 self.advance()
                 self.add_token(TokenType.MINUS, "-")
         elif c == '*':
             if c2 == '=':
-                self.advance()
-                self.advance()
+                self.advance(); self.advance()
                 self.add_token(TokenType.STAR_ASSIGN, "*=")
             else:
                 self.advance()
                 self.add_token(TokenType.STAR, "*")
         elif c == '/':
             if c2 == '=':
-                self.advance()
-                self.advance()
+                self.advance(); self.advance()
                 self.add_token(TokenType.SLASH_ASSIGN, "/=")
             else:
                 self.advance()
@@ -377,76 +391,64 @@ class Lexer:
             self.add_token(TokenType.PERCENT, "%")
         elif c == '=':
             if c2 == '=':
-                self.advance()
-                self.advance()
+                self.advance(); self.advance()
                 self.add_token(TokenType.EQ, "==")
             elif c2 == '>':
-                self.advance()
-                self.advance()
+                self.advance(); self.advance()
                 self.add_token(TokenType.FAT_ARROW, "=>")
             else:
                 self.advance()
                 self.add_token(TokenType.ASSIGN, "=")
         elif c == '!':
             if c2 == '=':
-                self.advance()
-                self.advance()
+                self.advance(); self.advance()
                 self.add_token(TokenType.NEQ, "!=")
             else:
                 self.advance()
                 self.add_token(TokenType.BANG, "!")
         elif c == '<':
             if c2 == '=':
-                self.advance()
-                self.advance()
+                self.advance(); self.advance()
                 self.add_token(TokenType.LTE, "<=")
             elif c2 == '<':
-                self.advance()
-                self.advance()
+                self.advance(); self.advance()
                 self.add_token(TokenType.SHL, "<<")
             else:
                 self.advance()
                 self.add_token(TokenType.LT, "<")
         elif c == '>':
             if c2 == '=':
-                self.advance()
-                self.advance()
+                self.advance(); self.advance()
                 self.add_token(TokenType.GTE, ">=")
             elif c2 == '>':
-                self.advance()
-                self.advance()
+                self.advance(); self.advance()
                 self.add_token(TokenType.SHR, ">>")
             else:
                 self.advance()
                 self.add_token(TokenType.GT, ">")
         elif c == '&':
             if c2 == '=':
-                self.advance()
-                self.advance()
+                self.advance(); self.advance()
                 self.add_token(TokenType.AMP_ASSIGN, "&=")
             elif c2 == '&':
-                self.advance()
-                self.advance()
+                self.advance(); self.advance()
                 self.add_token(TokenType.AND, "&&")
             else:
                 self.advance()
                 self.add_token(TokenType.AMP, "&")
         elif c == '|':
             if c2 == '=':
-                self.advance()
-                self.advance()
+                self.advance(); self.advance()
                 self.add_token(TokenType.PIPE_ASSIGN, "|=")
             elif c2 == '|':
-                self.advance()
-                self.advance()
+                self.advance(); self.advance()
                 self.add_token(TokenType.OR, "||")
             else:
                 self.advance()
                 self.add_token(TokenType.PIPE, "|")
         elif c == '^':
             if c2 == '=':
-                self.advance()
-                self.advance()
+                self.advance(); self.advance()
                 self.add_token(TokenType.CARET_ASSIGN, "^=")
             else:
                 self.advance()

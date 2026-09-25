@@ -1,20 +1,9 @@
-"""Análise semântica de statements.
-
-O método `analyze_stmt` é o dispatcher de entrada — ele decide qual
-mixin trata cada tipo de statement.
-
-Mixins:
-  - HelpersMixin     — _require_assignable, _require_bool, _find_enum_of_variant, _infer_binary_type
-  - VarDeclMixin     — VarDecl, DestructureStmt, AssignStmt
-  - ControlMixin     — IfStmt, WhileStmt, ForStmt
-  - MatchStmtMixin   — MatchStmt (bindings + guards + escopo)
-  - FlowMixin        — ReturnStmt, DeferStmt, AssertStmt, BenchStmt
-  - MacroStmtMixin   — MacroCallStmt (`nome!(args)`)
-"""
+"""Análise semântica de statements."""
 from ...ast import (
     VarDecl, DestructureStmt, AssignStmt, ReturnStmt, IfStmt, WhileStmt,
     ForStmt, MatchStmt, ContinueStmt, DeferStmt, BreakStmt, AssertStmt,
     BenchStmt, ErrorNode, MacroCallStmt,
+    CompoundAssignStmt,   # NOVO (P-10-2)
 )
 
 from .helpers import HelpersMixin
@@ -47,6 +36,11 @@ class StatementAnalyzer(
 
         if isinstance(node, AssignStmt):
             return self._analyze_assign(node)
+
+        # FIX (P-10-2): CompoundAssignStmt tem análise própria para
+        # visitar o target uma única vez.
+        if isinstance(node, CompoundAssignStmt):
+            return self._analyze_compound_assign(node)
 
         if isinstance(node, ReturnStmt):
             return self._analyze_return(node)

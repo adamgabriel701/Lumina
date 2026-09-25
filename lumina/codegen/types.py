@@ -62,12 +62,40 @@ class TypesCodegen:
             return ir.IntType(1)
         elif type_name == "void":
             return ir.VoidType()
-        # v0.8.0: slice `[T]`.
         elif _is_slice_type(type_name):
             return self.get_or_create_slice_type(type_name)
         elif type_name in self.struct_types:
             return self.struct_types[type_name]
-        elif type_name in self.struct_defs and getattr(
+
+        # ----------------------------------------------------------
+        # FIX — registro on-demand de structs/enums não-genéricos.
+        #
+        # Antes, uma struct `A` que referencia `B` declarada depois
+        # (tipicamente via import resolvido depois no AST) tinha o
+        # campo tipado como `i64` por causa do fallback silencioso
+        # abaixo. O bug se manifestava como leitura de membro
+        # retornando 0 (o codegen pensava que era primitivo).
+        #
+        # Agora, se a struct está em `struct_defs` mas ainda não foi
+        # registrada, registramos na hora. Isso funciona para
+        # referências não-cíclicas (`A` usa `B` que ainda não foi
+        # vista) e também para ciclos, porque `register_struct` já
+        # coloca o tipo em `struct_types` **antes** de processar os
+        # campos (então uma autoreferência recursiva encontra o tipo
+        # já registrado e não entra em loop).
+        # ----------------------------------------------------------
+        if type_name in self.struct_defs:
+            decl = self.struct_defs[type_name]
+            type_params = getattr(decl, 'type_params', None)
+            if not type_params:
+                if hasattr(decl, 'variants'):
+                    self.register_enum(decl)
+                    return self.struct_types[type_name]
+                if hasattr(decl, 'fields'):
+                    self.register_struct(decl)
+                    return self.struct_types[type_name]
+
+        if type_name in self.struct_defs and getattr(
             self.struct_defs[type_name], 'type_params', None
         ):
             base_decl = self.struct_defs[type_name]

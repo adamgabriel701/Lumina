@@ -23,6 +23,29 @@ class RegistrationMixin:
 
         field_tys = []
         for ft in node.fields.values():
+            # ----------------------------------------------------------
+            # On-demand: se o campo referencia uma struct/enum que está
+            # em `struct_defs` mas ainda não foi registrada em
+            # `struct_types`, registra agora.
+            #
+            # Sem isto, `get_llvm_type(ft)` retornava `i64` (fallback)
+            # quando `struct_defs` ainda não tinha o tipo. Com o
+            # `struct_defs` pré-populado (Pass 0 em generate_module) e
+            # este on-demand, a resolução funciona mesmo quando o tipo
+            # é definido em arquivo importado resolvido depois.
+            #
+            # `.as_pointer()` é obrigatório: structs Lumina são passadas
+            # por ponteiro em campos de struct. Sem o cast, o campo
+            # fica struct-by-value e `ir.Constant` do phi da safe-nav
+            # quebra com "int is not iterable".
+            # ----------------------------------------------------------
+            if ft not in self.struct_types and ft in self.struct_defs:
+                sub_decl = self.struct_defs[ft]
+                if hasattr(sub_decl, 'variants'):
+                    self.register_enum(sub_decl)
+                elif hasattr(sub_decl, 'fields'):
+                    self.register_struct(sub_decl)
+
             if ft in self.struct_types:
                 field_tys.append(self.struct_types[ft].as_pointer())
             else:
@@ -50,8 +73,6 @@ class RegistrationMixin:
         if node.name in self.struct_types:
             return
 
-        # Enums genéricos não são registrados direto — monomorphizados
-        # on-demand por `get_or_create_monomorphized_enum`.
         if getattr(node, 'type_params', None):
             self.struct_defs[node.name] = node
             return
@@ -84,8 +105,6 @@ class RegistrationMixin:
         if func_name in self.functions_table:
             return
 
-        # `fn main() -> int:` sem params ganha a assinatura C real
-        # `i32 (i32, i8**)` para permitir acesso a argv.
         if (func_name == "main"
                 and len(node.params) == 0
                 and node.return_type in ("int", "void")):
@@ -167,7 +186,6 @@ class RegistrationMixin:
     def _llvm_ty_to_str(self, t):
         if t == self.i64_ty:
             return "int"
-        # v0.8.0: i8 (char) → int.
         if isinstance(t, ir.IntType) and t.width == 8:
             return "int"
         if isinstance(t, ir.IntType) and t.width == 1:

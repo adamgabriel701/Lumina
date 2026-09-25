@@ -575,64 +575,84 @@ impl Lexer:
             let c2 = self.peek_at(1)
 
             if c == 45 and c2 == 62:  # ->
-                self.advance(); self.advance()
+                self.advance()
+                self.advance()
                 push_token(tl, T_ARROW, "->", l, cc)
             elif c == 61 and c2 == 62:  # =>
-                self.advance(); self.advance()
+                self.advance()
+                self.advance()
                 push_token(tl, T_FAT_ARROW, "=>", l, cc)
             elif c == 61 and c2 == 61:  # ==
-                self.advance(); self.advance()
+                self.advance()
+                self.advance()
                 push_token(tl, T_EQ, "==", l, cc)
             elif c == 33 and c2 == 61:  # !=
-                self.advance(); self.advance()
+                self.advance()
+                self.advance()
                 push_token(tl, T_NEQ, "!=", l, cc)
             elif c == 60 and c2 == 61:  # <=
-                self.advance(); self.advance()
+                self.advance()
+                self.advance()
                 push_token(tl, T_LTE, "<=", l, cc)
             elif c == 62 and c2 == 61:  # >=
-                self.advance(); self.advance()
+                self.advance()
+                self.advance()
                 push_token(tl, T_GTE, ">=", l, cc)
             elif c == 60 and c2 == 60:  # <<
-                self.advance(); self.advance()
+                self.advance()
+                self.advance()
                 push_token(tl, T_SHL, "<<", l, cc)
             elif c == 62 and c2 == 62:  # >>
-                self.advance(); self.advance()
+                self.advance()
+                self.advance()
                 push_token(tl, T_SHR, ">>", l, cc)
             elif c == 38 and c2 == 38:  # &&
-                self.advance(); self.advance()
+                self.advance()
+                self.advance()
                 push_token(tl, T_AND, "&&", l, cc)
             elif c == 124 and c2 == 124:  # ||
-                self.advance(); self.advance()
+                self.advance()
+                self.advance()
                 push_token(tl, T_OR, "||", l, cc)
             elif c == 58 and c2 == 61:  # :=
-                self.advance(); self.advance()
+                self.advance()
+                self.advance()
                 push_token(tl, T_COLON_ASS, ":=", l, cc)
             elif c == 58 and c2 == 58:  # ::
-                self.advance(); self.advance()
+                self.advance()
+                self.advance()
                 push_token(tl, T_DCOLON, "::", l, cc)
             elif c == 46 and c2 == 46:  # ..
-                self.advance(); self.advance()
+                self.advance()
+                self.advance()
                 push_token(tl, T_DOT_DOT, "..", l, cc)
             elif c == 43 and c2 == 61:  # +=
-                self.advance(); self.advance()
+                self.advance()
+                self.advance()
                 push_token(tl, T_PLUS_ASS, "+=", l, cc)
             elif c == 45 and c2 == 61:  # -=
-                self.advance(); self.advance()
+                self.advance()
+                self.advance()
                 push_token(tl, T_MINUS_ASS, "-=", l, cc)
             elif c == 42 and c2 == 61:  # *=
-                self.advance(); self.advance()
+                self.advance()
+                self.advance()
                 push_token(tl, T_STAR_ASS, "*=", l, cc)
             elif c == 47 and c2 == 61:  # /=
-                self.advance(); self.advance()
+                self.advance()
+                self.advance()
                 push_token(tl, T_SLASH_ASS, "/=", l, cc)
             elif c == 38 and c2 == 61:  # &=
-                self.advance(); self.advance()
+                self.advance()
+                self.advance()
                 push_token(tl, T_AMP_ASS, "&=", l, cc)
             elif c == 124 and c2 == 61:  # |=
-                self.advance(); self.advance()
+                self.advance()
+                self.advance()
                 push_token(tl, T_PIPE_ASS, "|=", l, cc)
             elif c == 94 and c2 == 61:  # ^=
-                self.advance(); self.advance()
+                self.advance()
+                self.advance()
                 push_token(tl, T_CARET_ASS, "^=", l, cc)
             # Único caractere
             elif c == 43:

@@ -181,43 +181,57 @@ class StatementParser(PatternParser):
         self.consume(TokenType.IF)
         return self._parse_if_core()
 
-    def _parse_if_core(self):
-        condition = self.parse_expression()
-        self.expect(TokenType.COLON)
+    def _parse_block_body(self):
+        """Parseia o corpo de um bloco após o `:`.
+
+        Suporta duas formas:
+          - Inline:     `: stmt NEWLINE`
+          - Multi-linha: `: NEWLINE INDENT stmts... DEDENT`
+
+        Retorna lista de statements. O `:` já foi consumido pelo
+        chamador. Espera que `_skip_trailing_comment` já tenha rodado
+        (ou roda aqui, é idempotente).
+        """
+        self._skip_trailing_comment()
+
+        # Corpo inline: statement na mesma linha do `:`
+        if not self.check(TokenType.NEWLINE):
+            stmt = self.parse_statement()
+            return [stmt] if stmt is not None else []
+
+        # Corpo multi-linha
         self.expect(TokenType.NEWLINE)
         while self.check(TokenType.NEWLINE):
             self.consume()
         self.expect(TokenType.INDENT)
-        then_body = []
+        body = []
         while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
             if self.match(TokenType.NEWLINE):
                 continue
             stmt = self.parse_statement()
             if stmt is not None:
-                then_body.append(stmt)
+                body.append(stmt)
         self.expect(TokenType.DEDENT)
+        return body
+
+    def _parse_if_core(self):
+        condition = self.parse_expression()
+        self.expect(TokenType.COLON)
+        self._skip_trailing_comment()
+
+        then_body = self._parse_block_body()
 
         else_body = None
-
+        # Após o then_body, estamos de volta ao nível do `if`.
+        # Se houver `elif`/`else` na sequência, são do MESMO if.
         if self.check(TokenType.ELIF):
             self.consume()
-            inner = self._parse_if_core()
-            else_body = [inner]
+            # `elif` é `if` aninhado dentro do `else`.
+            else_body = [self._parse_if_core()]
         elif self.check(TokenType.ELSE):
             self.consume()
             self.expect(TokenType.COLON)
-            self.expect(TokenType.NEWLINE)
-            while self.check(TokenType.NEWLINE):
-                self.consume()
-            self.expect(TokenType.INDENT)
-            else_body = []
-            while not self.check(TokenType.DEDENT) and not self.check(TokenType.EOF):
-                if self.match(TokenType.NEWLINE):
-                    continue
-                stmt = self.parse_statement()
-                if stmt is not None:
-                    else_body.append(stmt)
-            self.expect(TokenType.DEDENT)
+            else_body = self._parse_block_body()
 
         return IfStmt(condition, then_body, else_body)
 

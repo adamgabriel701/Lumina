@@ -51,16 +51,10 @@ class LLVMCodegen(
         # Contexto LLVM próprio por instância. Sem isso, `ir.Module()`
         # usa o `global_context` do llvmlite, e tipos identificados
         # (struct/enum) vazam entre instâncias — recompilar a mesma
-        # struct dispara "P is already defined". Isso afetava o REPL
-        # (que recompila tudo a cada célula). Funções não sofrem
-        # porque `ir.Function(self.module, ...)` é criada no módulo,
-        # não no context.
+        # struct dispara "P is already defined". Isso afetava o REPL.
         self.context = ir.Context()
         self.module = ir.Module(name="lumina_module", context=self.context)
 
-        # Consistência com o triple do alvo (ou do host, se não
-        # especificado). Evita o warning "overriding the module
-        # target triple" do clang e é essencial para cross-compile.
         try:
             from llvmlite.binding import get_default_triple
             self.module.triple = target_triple or get_default_triple()
@@ -84,65 +78,62 @@ class LLVMCodegen(
         self.struct_defs = {}
         self.symbol_table = {}
         self.var_types = {}
-        self.global_var_decls = {}   # top-level constants
-        self.global_mut_vars = {}    # nome → GlobalVariable
+        self.global_var_decls = {}
+        self.global_mut_vars = {}
 
         self.string_counter = 0
         self.lambda_counter = 0
-        self._fn_wrappers = {}      # cache de wrappers i64(i8*, i64...) p/ fn nomeadas
+        self._fn_wrappers = {}
         self.heap_allocs = set()
 
         self.builtin_functions = BUILTIN_FUNCTIONS
 
-        # Sprint 2e/8b/8d: controle de loop (continue_bb, break_bb, scope_start)
         self.loop_stack = []
-        # Sprint 8b: pilha de defers (escopos + função)
         self.defer_stack = []
-        # Sprint 2e: bloco do corpo da função atual (para TCO)
         self.current_body_bb = None
 
-        # Sprint 9a: null check em MemberExpr/IndexExpr quando @safe
         self._safe_mode = False
-        # Sprint 9b: macros (@macro) para expansão de AST
         self.macros = {}
 
-        # Sprint 8c: estado do dispatcher SCC em construção
         self._current_scc_slots = None
         self._current_scc_ids = None
         self._current_scc_id_slot = None
         self._current_scc_dispatch_bb = None
 
-        # NOVO: array_lengths mapeia nome → N (para `for x in arr`).
-        # Populado em visit_VarDecl quando `value` é ArrayExpr ou
-        # alloc(N) com N literal.
         self.array_lengths = {}
-
-        # NOVO: vars com `free(x)` explícito. Escape analysis não
-        # coloca no stack.
         self.freed_vars = set()
-
-        # NOVO: vars que seguram closures (bloco {fn_ptr, env_ptr}).
-        # Chamadas a essas vars desempacotam o env antes de invocar.
         self.closure_vars = set()
 
         self.setup_libc_functions()
-        self.alias_methods = set()   # nomes curtos de trait methods
+        self.alias_methods = set()
 
-        self.macros = {}
-
-        # PATCH: globais com init runtime (não-constante).
-        # Preenchido em `generate_module`; consumido em `generate_function_body`
-        # (só na função `main`).
         self._deferred_globals = []
 
     # ==================================================================
     # Geração do módulo
     # ==================================================================
     def generate_module(self, ast):
-        # 0. Coleta VarDecls de topo.
+        # ------------------------------------------------------------------
+        # 0. Reset completo de estado por chamada.
+        #
+        # Se a mesma instância de LLVMCodegen for reusada (REPL, testes),
+        # tudo isso precisa ser zerado. Sem isso, `struct_defs` acumula
+        # entradas velhas e a Pass 0 vira no-op silencioso.
+        # ------------------------------------------------------------------
         self.global_var_decls = {}
         self.global_mut_vars = {}
-        self._deferred_globals = []        # ← PATCH: reset por chamada
+        self._deferred_globals = []
+        self.struct_types = {}
+        self.struct_fields = {}
+        self.struct_defs = {}
+        self.functions_table = {}
+        self.function_defs = {}
+        self.symbol_table = {}
+        self.var_types = {}
+        self.macros = {}
+        self.alias_methods = set()
+
+        # 0a. Coleta VarDecls de topo.
         for decl in ast:
             if type(decl).__name__ == 'VarDecl' and getattr(decl, 'value', None) is not None:
                 if getattr(decl, 'is_mutable', False):
@@ -150,11 +141,7 @@ class LLVMCodegen(
                 else:
                     self.global_var_decls[decl.name] = decl
 
-        # 0b. Coleta macros (@macro). Não são registradas como funções
-        # normais — só expandem em call sites. Valida aqui (não só no
-        # call site) para que macros malformadas falhem mesmo se nunca
-        # chamadas.
-        self.macros = {}
+        # 0b. Coleta macros (@macro).
         for decl in ast:
             if isinstance(decl, AstFunction):
                 attrs_norm = normalize_attrs(getattr(decl, 'attrs', None))
@@ -162,34 +149,42 @@ class LLVMCodegen(
                     self._validate_macro(decl)
                     self.macros[decl.name] = decl
 
-        # 1. Pré-registra todas as structs e enums
+        # ================================================================
+        # FIX — Pass 0: pré-popula `struct_defs` com TODAS as decls de
+        # struct/enum. Sem criar tipo LLVM ainda. Isso é o que permite
+        # `register_struct` / `get_llvm_type` resolverem referências
+        # a tipos que vêm de imports resolvidos DEPOIS no AST.
+        #
+        # Bug que este fix resolve: uma struct `A` cujo campo usa `B`
+        # (ex: `struct Parser: tokens: TokenList`, com `TokenList` de
+        # `lexer.lm` importado depois) tinha o campo tipado como `i64`
+        # por fallback silencioso. Sintoma: `p.tokens.size` retornava
+        # 0 mesmo após `p.tokens = tokens`.
+        #
+        # IMPORTANTE: este passo DEVE rodar antes de `register_function`
+        # (Pass 2). Se rodar depois, `register_struct` já rodou com
+        # `struct_defs` vazio para os tipos ainda-não-vistos.
+        # ================================================================
         for decl in ast:
-            if hasattr(decl, 'name') and decl.name in self.struct_defs:
+            if hasattr(decl, 'name') and (
+                hasattr(decl, 'fields') or hasattr(decl, 'variants')
+            ):
+                self.struct_defs.setdefault(decl.name, decl)
+
+        # Pass 1: registra de verdade. `register_struct` e
+        # `register_enum` são idempotentes.
+        for decl in ast:
+            if hasattr(decl, 'name') and decl.name in self.struct_types:
                 continue
             if hasattr(decl, 'fields') and not hasattr(decl, 'variants'):
                 self.register_struct(decl)
             elif hasattr(decl, 'variants'):
                 self.register_enum(decl)
 
-        # 1.5. (REMOVIDO) A resolução de métodos default de traits vivia
-        # aqui como uma duplicata do que `SemanticAnalyzer` já faz em
-        # `_resolve_trait_defaults`. Manter as duas era fonte de divergência:
-        # na primeira feature nova de trait, uma implementação seria
-        # atualizada e a outra não. Agora, a única fonte é
-        # `lumina/semantic/trait_resolution.py`. Como o pipeline roda
-        # semantic ANTES do codegen, `ImplBlock.methods` já contém os
-        # defaults quando `generate_module` é chamado.
-
         # 2. Pré-registra todas as funções e métodos de impls.
         # TraitDecl NÃO é registrado.
         # Macros NÃO são registradas como funções normais.
-        #
-        # Externs que colidem com builtins NÃO são registrados: o codegen
-        # de builtin (calls.py) declara a função com a assinatura C
-        # correta — ex: `fgets`' `size` é i32 (int do C), mas Lumina
-        # `int` é i64. Registrar o extern criaria uma declaração
-        # conflitante no módulo e `builder.call(...)` falharia com
-        # "Type of #N arg mismatch".
+        # Externs que colidem com builtins NÃO são registrados.
         for decl in ast:
             if isinstance(decl, TraitDecl):
                 continue
@@ -204,7 +199,6 @@ class LLVMCodegen(
                     self.register_function(method)
 
         # 2.5 Registra aliases `metodo` → `Struct_metodo` para traits.
-        self.alias_methods = set()
         for decl in ast:
             if not (hasattr(decl, 'methods') and hasattr(decl, 'struct_name')):
                 continue
@@ -271,9 +265,6 @@ class LLVMCodegen(
     # Hooks de Correção de Codegen
     # ==================================================================
     def _reset_function_codegen_state(self):
-        """Reseta o estado do codegen para uma nova função.
-        Deve ser chamado no início de `generate_function_body`.
-        """
         self._fn_entry_block = None
         self._fn_return_type = None
 
@@ -285,10 +276,7 @@ class LLVMCodegen(
 
         Motivo de inserir no fim do entry block (não no início):
         `_deferred_globals` são inicializadas no entry_bb, e precisam
-        ficar ANTES de qualquer alloca de temporário. Colocando alloca
-        no começo via `position_at_start`, os malloc inits de globais
-        ficavam após os allocas, criando janelas de reordenação com
-        `-O2`.
+        ficar ANTES de qualquer alloca de temporário.
         """
         if self._fn_entry_block is None:
             return self.builder.alloca(ty, name=name)
@@ -296,7 +284,6 @@ class LLVMCodegen(
         current_block = self.builder.block
         entry = self._fn_entry_block
 
-        # Terminadores LLVM: opnames canônicos.
         _TERMINATORS = {
             'br', 'ret', 'unreachable', 'switch', 'invoke',
             'resume', 'indirectbr', 'callbr', 'catchswitch',
@@ -315,29 +302,22 @@ class LLVMCodegen(
         ptr = self.builder.alloca(ty, name=name)
         self.builder.position_at_end(current_block)
         return ptr
-    
+
     def _fn_ensure_terminator(self):
-        """Garante que o bloco atual termine com um terminador.
-        Corrige o bug do chip8 onde funções sem `return` explícito
-        não emitiam um `ret` no final do bloco.
-        """
-        # Se o bloco já está terminado, não faz nada
+        """Garante que o bloco atual termine com um terminador."""
         if self.builder.block.is_terminated:
             return
 
         ret_ty = self._fn_return_type
 
-        # Se a função retorna void, emite `ret void`
         if ret_ty is None or isinstance(ret_ty, ir.VoidType):
             self.builder.ret_void()
             return
 
-        # Se a função retorna um struct vazio (padrão do Lumina para `fn()`)
         if isinstance(ret_ty, ir.LiteralStructType) and len(ret_ty.elements) == 0:
             self.builder.ret(ir.Constant(ret_ty, []))
             return
 
-        # Fallback de segurança: emite um valor padrão (0) para evitar crash
         try:
             self.builder.ret(self._zero_for_type(ret_ty))
         except Exception:

@@ -106,15 +106,6 @@ class AssignStmt(Stmt):
     value: Expr
 
 
-# FIX (Fase 10b / P-10-2): `x op= y` era desaçucarado para
-# `x = x op y` no parser, o que avalia `x` DUAS vezes. Quando `x`
-# é `arr[i]` e `i` tem efeitos colaterais (ex: `arr[f()]`), `f()`
-# era chamada duas vezes — uma no target, outra dentro do value.
-#
-# Novo nó preserva a forma `op=` até o codegen, que resolve o
-# endereço do lvalue UMA vez, carrega, computa e escreve de volta.
-#
-# Sintaxe coberta: `+=`, `-=`, `*=`, `/=`, `&=`, `|=`, `^=`.
 @dataclass
 class CompoundAssignStmt(Stmt):
     target: Expr
@@ -142,15 +133,18 @@ class WhileStmt(Stmt):
     body: List[Any]
 
 
-# FIX (Fase 10b / P-10-5): o parser codificava `for i, x in arr:`
-# como `var_name = "i,x"` — uma string com vírgula. Funcionava por
-# acaso, mas era frágil (`.split(",")` no codegen, `.strip()` para
-# remover espaços, impossível de validar em compile-time).
+# v0.7.0: `elem_type` — anotação opcional do tipo do elemento
+# para iterar sobre `ptr` sem perder tipo.
 #
-# `index_var` é o novo campo: `for i, x in arr` → `var_name="x"`,
-# `index_var="i"`. `for x in arr` → `var_name="x"`, `index_var=None`.
+#     for x: float in arr:    # arr é `ptr`, mas iteramos f64
+#         print(x)
 #
-# É backwards-compatible para construções existentes (default=None).
+# Sem a anotação, `for x in arr` mantém o comportamento anterior
+# (element type = tipo de `ptr.pointee`, tipicamente i64).
+#
+# A anotação é validada no semantic contra o LLVM type do array;
+# se incompatível (ex: `f64` em array de `str`), o bitcast gerado
+# reinterpeta os bits — é responsabilidade do usuário.
 @dataclass
 class ForStmt(Stmt):
     var_name: str
@@ -158,7 +152,8 @@ class ForStmt(Stmt):
     end: Optional[Expr]
     iterable: Optional[Expr]
     body: List[Any]
-    index_var: Optional[str] = None   # NOVO
+    index_var: Optional[str] = None
+    elem_type: Optional[str] = None   # v0.7.0
 
 
 @dataclass

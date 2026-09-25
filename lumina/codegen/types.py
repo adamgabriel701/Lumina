@@ -1,10 +1,52 @@
 from llvmlite import ir
-from ..common.mangle import mangle_type
+from ..common.mangle import mangle_type, mangle_slice
 from ..errors import LuminaError
-from ..semantic.types import substitute_generic
+from ..semantic.types import substitute_generic, _is_slice_type, _slice_inner
 
 
 class TypesCodegen:
+
+    # ==================================================================
+    # v0.8.0: `[T]` — slice type.
+    # Representação: `%Slice_T_` = `{T*, i64}`.
+    # Passado por ponteiro em params (como toda struct Lumina).
+    # ==================================================================
+    def get_or_create_slice_type(self, type_name):
+        """type_name: `'[T]'`. Retorna `%Slice_T_*`."""
+
+        if type_name in self.struct_types:
+            return self.struct_types[type_name]
+
+        inner = _slice_inner(type_name)
+        mangled = mangle_slice(inner)
+
+        slice_ty = self.module.context.get_identified_type(mangled)
+        self.struct_types[type_name] = slice_ty
+        self.struct_types[mangled] = slice_ty
+
+        # Corpo: {T*, i64}
+        inner_llvm_ty = self.get_llvm_type(inner)
+
+        # Se o elemento é uma struct identificada, o campo é `%T*`.
+        # Se é `T*` já (pointer), o campo é `T**`.
+        # Na prática, arrays de structs guardam `%T*` no slot,
+        # então o campo do slice é `%T**`.
+        if isinstance(inner_llvm_ty, ir.IdentifiedStructType):
+            field_ty = inner_llvm_ty.as_pointer()
+        else:
+            field_ty = inner_llvm_ty.as_pointer()
+
+        slice_ty.set_body(field_ty, self.i64_ty)
+
+        fields_map = {"data": 0, "len": 1}
+        self.struct_fields[type_name] = fields_map
+        self.struct_fields[mangled] = fields_map
+        # Registra um def stub — não é usado como struct normal,
+        # mas garante que lookups de `struct_defs` não explodem.
+        self.struct_defs.setdefault(type_name, _SliceTypeDecl(type_name))
+
+        return slice_ty
+
     def get_llvm_type(self, type_name):
         if type_name == "int":
             return self.i64_ty
@@ -20,6 +62,9 @@ class TypesCodegen:
             return ir.IntType(1)
         elif type_name == "void":
             return ir.VoidType()
+        # v0.8.0: slice `[T]`.
+        elif _is_slice_type(type_name):
+            return self.get_or_create_slice_type(type_name)
         elif type_name in self.struct_types:
             return self.struct_types[type_name]
         elif type_name in self.struct_defs and getattr(
@@ -90,11 +135,6 @@ class TypesCodegen:
         return new_ty
 
     def get_or_create_monomorphized_enum(self, type_name):
-        """Cria/retorna a especialização LLVM de um enum genérico.
-
-        Layout: [i32 tag, payload_0, payload_1, ...] onde cada payload_i
-        tem o tipo concreto do arg correspondente.
-        """
         if type_name in self.struct_types:
             return self.struct_types[type_name]
 
@@ -147,9 +187,17 @@ class TypesCodegen:
         self.struct_defs[type_name] = base_decl
         self.struct_defs[mangled] = base_decl
 
-        # FIX: invalida cache de variantes, pois acabamos de adicionar
-        # uma nova chave em `struct_defs`.
         if hasattr(self, '_invalidate_variant_cache'):
             self._invalidate_variant_cache()
 
         return new_ty
+
+
+class _SliceTypeDecl:
+    """Stub usado por `struct_defs['[T]']` para que lookups de
+    `hasattr(decl, 'variants')` e `hasattr(decl, 'fields')` não
+    explodam."""
+    def __init__(self, name):
+        self.name = name
+        self.fields = {"data": "ptr", "len": "int"}
+        self.type_params = None

@@ -191,7 +191,10 @@ class AggregatesMixin:
         block = func.append_basic_block(name="entry")
         inner_builder = ir.IRBuilder(block)
 
-        inherit_safe = getattr(self, '_safe_mode', False)
+        # v0.7.0: safe-by-default. Closures herdam `_safe_mode` do
+        # contexto, que agora defaulta para `True`. Se a função externa
+        # tem `@unsafe`, a closure também herda o opt-out.
+        inherit_safe = getattr(self, '_safe_mode', True)
 
         with push_context(
             self,

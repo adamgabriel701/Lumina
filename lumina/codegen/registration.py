@@ -165,19 +165,14 @@ class RegistrationMixin:
     # Conversão LLVM → Lumina
     # ==================================================================
     def _llvm_ty_to_str(self, t):
-        """Mapeia um tipo LLVM de volta para o nome Lumina.
-
-        Usado por `var_types` (para inferência em chamadas de genéricos)
-        e por `MatchStmtMixin._emit_bindings` (para registrar binding
-        types em enums genéricos).
-        """
-        # Ordem importa: i1 antes de IntType genérico, voidptr antes de PointerType.
         if t == self.i64_ty:
+            return "int"
+        # v0.8.0: i8 (char) → int.
+        if isinstance(t, ir.IntType) and t.width == 8:
             return "int"
         if isinstance(t, ir.IntType) and t.width == 1:
             return "bool"
         if isinstance(t, ir.IntType) and t.width == 32:
-            # i32 aparece em params de FFI (argc, etc.). Tratamos como int.
             return "int"
         if t == self.f64_ty:
             return "float"
@@ -187,13 +182,10 @@ class RegistrationMixin:
             return "void"
         if isinstance(t, ir.PointerType):
             return "ptr"
-        # Arrays decaem para ponteiro na assinatura das funções.
         if isinstance(t, ir.ArrayType):
             return "ptr"
-        # Tuplas são `LiteralStructType` — passadas por ponteiro.
         if isinstance(t, ir.LiteralStructType):
             return "ptr"
-        # Structs identificadas também são passadas por ponteiro.
         if isinstance(t, ir.IdentifiedStructType):
             return "ptr"
         return "unknown"

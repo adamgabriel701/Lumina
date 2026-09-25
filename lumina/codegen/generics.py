@@ -1,15 +1,8 @@
 """Materialização de funções genéricas (monomorphization).
 
-Para cada call site de uma `fn f<T>(...)`, cria uma cópia especializada
-`f__<tipo>` com o `type_map` aplicado aos tipos de params, retorno e
-corpo.
-
-Bug histórico (corrigido): `resolve_lumina` fazia substituição apenas
-quando o nome batia exatamente com uma chave do `type_map`. Para
-`Box<T>` com `T=float`, retornava `Box<T>` — criando `%Box_T_ = {i64}`
-e tratando o campo `data` como inteiro. `2.5` virava `2` e voltava
-como `2.0`. Idem `str` → ponteiro virava `0`. Agora usa
-`substitute_generic` (substituição recursiva).
+v0.7.0: safe-by-default. Cópias especializadas herdam o `_safe_mode`
+do contexto de geração (que agora é `True` por padrão), a menos que
+a `gen_def` original tenha `@unsafe`.
 """
 from llvmlite import ir
 
@@ -35,10 +28,6 @@ class GenericsMixin:
         if mangled in self.functions_table:
             return mangled
 
-        # ------------------------------------------------------------------
-        # Substituição de tipos — usa `substitute_generic` (recursivo).
-        # `substitute_generic("Box<T>", {"T": "float"})` → `"Box<float>"`
-        # ------------------------------------------------------------------
         def resolve_lumina(name):
             return substitute_generic(name, type_map)
 
@@ -53,10 +42,12 @@ class GenericsMixin:
         func_type = ir.FunctionType(ret_ty, param_tys)
         func = ir.Function(self.module, func_type, name=mangled)
 
-        # Aplica attrs na cópia especializada (`@inline`, `@cold`, `@safe`).
+        # v0.7.0: safe-by-default. `@unsafe` na gen_def original
+        # desliga null checks na cópia especializada.
         attrs_norm = normalize_attrs(getattr(gen_def, 'attrs', None))
         self._apply_llvm_attrs(func, attrs_norm)
-        is_safe = any(name == 'safe' for name, _args in attrs_norm)
+        is_unsafe = any(name == 'unsafe' for name, _args in attrs_norm)
+        is_safe = not is_unsafe
 
         # Registra antes de emitir o corpo (recursão / referências circulares).
         self.functions_table[mangled] = (func, func_type)
@@ -80,10 +71,9 @@ class GenericsMixin:
             _current_scc_ids=None,
             _current_scc_id_slot=None,
             _current_scc_dispatch_bb=None,
-            _fn_entry_block=entry_bb,           # PATCH
-            _fn_return_type=ret_ty,             # PATCH
+            _fn_entry_block=entry_bb,
+            _fn_return_type=ret_ty,
         ):
-            # Bind params: alloca + store, com tipo concreto.
             for i, p in enumerate(gen_def.params):
                 p_name = p.name
                 p_ty = param_tys[i]
@@ -114,17 +104,6 @@ class GenericsMixin:
     # Inferência de tipos a partir de nós da AST
     # ==================================================================
     def _infer_arg_type_lumina(self, arg_node):
-        """
-        Infere o tipo Lumina de um argumento (nome de tipo, ex: "int").
-
-        Usado por `_infer_type_map_lumina` para popular o `type_map`
-        antes de `materialize_generic`. Retorna `None` se não conseguir
-        inferir.
-
-        Cobre: NumberExpr, StringExpr, BoolExpr, NilExpr, VariableExpr,
-        CallExpr (variantes de enum ou função nomeada), MemberExpr,
-        StructLiteralExpr, LambdaExpr.
-        """
         from ..ast import (
             NumberExpr, StringExpr, BoolExpr, NilExpr, VariableExpr,
             CallExpr, MemberExpr, StructLiteralExpr, LambdaExpr,
@@ -140,11 +119,9 @@ class GenericsMixin:
             return "nil"
 
         if isinstance(arg_node, VariableExpr):
-            # Tenta var_types primeiro (params já vinculados).
             vt = getattr(self, 'var_types', {}).get(arg_node.name)
             if vt:
                 return vt
-            # Struct/enum nomeado usado como valor.
             if arg_node.name in getattr(self, 'struct_defs', {}):
                 return arg_node.name
 
@@ -156,13 +133,11 @@ class GenericsMixin:
                               getattr(callee, 'member', None)
 
             if callee_name:
-                # Variante de enum: `Some(x)`, `Ok(v)`, `Err(e)`, etc.
                 lookup = self._find_enum_variant(callee_name)
                 if lookup is not None:
                     enum_name, _variant_idx = lookup
                     return enum_name
 
-                # Função nomeada: usa return_type do def.
                 fn_def = getattr(self, 'function_defs', {}).get(callee_name)
                 if fn_def is not None and not getattr(fn_def, 'type_params', None):
                     return fn_def.return_type
@@ -185,20 +160,12 @@ class GenericsMixin:
         return None
 
     def _infer_type_map_lumina(self, gen_def, node):
-        """
-        Constrói `type_map` unificando cada param com o tipo do arg
-        correspondente. Retorna `{}` se não conseguiu inferir nada.
-
-        Ex: `put<T>(b: Box<T>, val: T)` chamada `put(bx, 2.5)` com
-        `bx: Box<float>` produz `{"T": "float"}`.
-        """
         from ..semantic.types import unify_type
 
         type_map = {}
         params = gen_def.params
         args = node.args
 
-        # Ignora `self` se for método.
         if len(args) == len(params) + 1 and params:
             args = args[1:]
 
@@ -206,7 +173,6 @@ class GenericsMixin:
             arg_type = self._infer_arg_type_lumina(arg_node)
             if arg_type is None:
                 continue
-            # `unify_type("Box<T>", "Box<float>", {})` → {"T": "float"}
             unify_type(p.type_ann, arg_type, type_map)
 
         return type_map

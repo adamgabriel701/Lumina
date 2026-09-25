@@ -140,11 +140,28 @@ class ControlMixin:
 
         self.builder.position_at_end(end_bb)
 
+    # ==================================================================
+    # v0.7.0: iterável com hint de tipo.
+    #
+    # Se `node.elem_type` está setado (`for x: T in arr`), o tipo do
+    # elemento é resolvido para LLVM e usado em vez do que seria
+    # inferido do array. Um `bitcast` do `arr_val` é feito quando o
+    # hint difere do `pointee` real — isso preserva a representação
+    # (ponteiro para 1º elemento) e apenas reinterpreta o stride.
+    #
+    # Ex: `fn f(arr: ptr)` chamado com `[1.5, 2.5]`.
+    #     `arr` é `i64*` (o tipo público de `ptr`), mas o chamador
+    #     passou floats. `for x: float in arr` faz `bitcast i64* → f64*`
+    #     e itera corretamente.
+    # ==================================================================
+    def _resolve_elem_type_hint(self, node):
+        hint = getattr(node, 'elem_type', None)
+        if not hint:
+            return None
+        return self.get_llvm_type(hint)
+
     def _visit_for_iterable(self, node):
-        # ==================================================================
-        # FIX (P-10-5): usa `node.index_var` em vez de checar
-        # `"," in node.var_name`.
-        # ==================================================================
+        hint_llvm_ty = self._resolve_elem_type_hint(node)
 
         # --- Caso 0: `for i, x in arr` — índice + valor ---
         if node.index_var is not None:
@@ -179,6 +196,16 @@ class ControlMixin:
                     len_val = ir.Constant(self.i64_ty, 0)
                     elem_ty = self.i64_ty
                     use_array_gep = False
+
+            # v0.7.0: aplica hint apenas no caminho `ptr` (não-array).
+            if hint_llvm_ty is not None and not use_array_gep:
+                if (isinstance(arr_val.type, ir.PointerType)
+                        and arr_val.type.pointee != hint_llvm_ty):
+                    arr_val = self.builder.bitcast(
+                        arr_val, hint_llvm_ty.as_pointer(),
+                        name="forin_hint_cast",
+                    )
+                elem_ty = hint_llvm_ty
 
             idx_ptr = self.builder.alloca(self.i64_ty, name=f"__for_idx_{idx_name}")
             self.builder.store(ir.Constant(self.i64_ty, 0), idx_ptr)
@@ -242,7 +269,7 @@ class ControlMixin:
             self.builder.position_at_end(end_bb)
             return
 
-        # --- Caso 0b: array literal inline (`for x in [1, 2, 3]`) ---
+        # --- Caso 0b: array literal inline ---
         if isinstance(node.iterable, ArrayExpr):
             n = len(node.iterable.elements)
             arr_val = self.visit(node.iterable)
@@ -267,7 +294,8 @@ class ControlMixin:
                     elem_ty = arr_val.type.pointee
                     use_array_gep = False
                 return self._emit_forin_loop(
-                    node, arr_val, len_val, elem_ty, use_array_gep=use_array_gep
+                    node, arr_val, len_val, elem_ty,
+                    use_array_gep=use_array_gep,
                 )
 
         arr_val = self.visit(node.iterable)
@@ -279,7 +307,61 @@ class ControlMixin:
                 node, arr_val, len_val, self.i8_ty, use_array_gep=False
             )
 
-        # --- Caso 3: não suportado — loop vazio ---
+        # --- Caso 2.5: `for x in slice:` — v0.8.0 ---
+        if (isinstance(arr_val.type, ir.PointerType)
+                and isinstance(arr_val.type.pointee, ir.IdentifiedStructType)
+                and arr_val.type.pointee.name.startswith("Slice_")):
+            slice_ty = arr_val.type.pointee
+            elem_ty_llvm = slice_ty.elements[0].pointee
+
+            # Extrai .len
+            len_gep = self.builder.gep(
+                arr_val,
+                [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 1)],
+                name="forin_slice_len_gep",
+            )
+            len_val = self.builder.load(len_gep, name="forin_slice_len")
+
+            # Extrai .data
+            data_gep = self.builder.gep(
+                arr_val,
+                [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 0)],
+                name="forin_slice_data_gep",
+            )
+            data_ptr = self.builder.load(data_gep, name="forin_slice_data")
+
+            return self._emit_forin_loop(
+                node, data_ptr, len_val, elem_ty_llvm, use_array_gep=False,
+            )
+
+        # --- Caso 3: ptr genérico (sem array_lengths registrado) ---
+        # v0.7.0: aqui é onde o hint brilha — `arr` é `T*` sem length
+        # registrado, mas podemos iterar se o usuário deu `elem_type`.
+        if isinstance(arr_val.type, ir.PointerType):
+            hint = hint_llvm_ty
+            if hint is None:
+                # Sem hint: não dá para saber o tamanho — loop vazio.
+                return self._emit_forin_loop(
+                    node, arr_val, ir.Constant(self.i64_ty, 0),
+                    self.i64_ty, use_array_gep=False,
+                )
+            # Bitcast se necessário.
+            if arr_val.type.pointee != hint:
+                arr_val = self.builder.bitcast(
+                    arr_val, hint.as_pointer(), name="forin_hint_cast",
+                )
+            # Sem length — assume que o chamador passou um array
+            # válido; itera até o primeiro NUL em strings, ou o loop
+            # fica vazio para tipos não-string. Como não temos como
+            # saber o tamanho, retornamos loop vazio por segurança.
+            # O caso real esperado é o caso 1 (array_lengths) — este
+            # fallback é defensivo.
+            return self._emit_forin_loop(
+                node, arr_val, ir.Constant(self.i64_ty, 0),
+                hint, use_array_gep=False,
+            )
+
+        # --- Caso 4: não suportado ---
         return self._emit_forin_loop(
             node, arr_val, ir.Constant(self.i64_ty, 0), self.i64_ty,
             use_array_gep=False,

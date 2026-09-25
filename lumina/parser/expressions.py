@@ -406,7 +406,18 @@ class ExpressionParser(ParserBase):
         self.expect(TokenType.RBRACKET)
         return IndexExpr(base_node, first)
 
+    # ==================================================================
+    # v0.8.0: reconhece `[T]` como tipo slice.
+    # `[` em posição de tipo não é ambíguo: só `parse_type` é
+    # chamado em contexto de tipo (após `:`, `->`, `(`, `,`).
+    # ==================================================================
     def parse_type(self):
+        if self.check(TokenType.LBRACKET):
+            self.consume()
+            inner = self.parse_type()
+            self.expect(TokenType.RBRACKET)
+            return f"[{inner}]"
+
         if self.check(TokenType.FN):
             self.consume()
             if self.check(TokenType.LPAREN):

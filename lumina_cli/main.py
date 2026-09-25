@@ -47,7 +47,8 @@ def usage():
          f"{paint('--wasm', Color.MUTED)}, "
          f"{paint('--no-gc', Color.MUTED)}, "
          f"{paint('--linker=self|clang', Color.MUTED)}")
-    info(f"Flags globais: {paint('--error-format=text|json', Color.MUTED)}")
+    info(f"Flags globais: {paint('--error-format=text|json', Color.MUTED)}, "
+         f"{paint('--legacy-slice-copy', Color.MUTED)} (restaura cópia em v[a..b])")
     info(f"Exemplo: {paint('lumina new meu_projeto', Color.MUTED)}")
 
 
@@ -60,16 +61,23 @@ def main():
         usage()
         return 0
 
-    # ---- Extrai flags globais (--error-format) ----
+    # ---- Extrai flags globais (--error-format, --legacy-slice-copy) ----
     error_format = "text"
+    legacy_slice_copy = False
     filtered = []
     for arg in args:
         if arg.startswith("--error-format="):
             error_format = arg.split("=", 1)[1]
+        elif arg == "--legacy-slice-copy":
+            legacy_slice_copy = True
         else:
             filtered.append(arg)
     set_error_format(error_format)
     args = filtered
+
+    # Propaga para o código (variável de ambiente simples).
+    if legacy_slice_copy:
+        os.environ["LUMINA_LEGACY_SLICE_COPY"] = "1"
 
     if not args:
         usage()

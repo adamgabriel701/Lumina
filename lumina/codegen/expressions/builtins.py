@@ -61,6 +61,18 @@ class BuiltinsMixin:
 
         if func_name == "len":
             arg = self.visit(node.args[0])
+
+            # v0.8.0: `len(slice)` → carrega .len.
+            if (isinstance(arg.type, ir.PointerType)
+                    and isinstance(arg.type.pointee, ir.IdentifiedStructType)
+                    and arg.type.pointee.name.startswith("Slice_")):
+                len_gep = self.builder.gep(
+                    arg,
+                    [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 1)],
+                    name="slice_len_gep",
+                )
+                return self.builder.load(len_gep, name="slice_len_load")
+
             if arg.type == self.voidptr_ty or (
                 isinstance(arg.type, ir.PointerType) and arg.type.pointee == self.i8_ty
             ):
@@ -296,5 +308,92 @@ class BuiltinsMixin:
             phi.add_incoming(empty_str, empty_bb)
             phi.add_incoming(real_result, ok_bb)
             return phi
+
+        # ==================================================================
+        # v0.8.0: builtins de slice.
+        #
+        # `as_slice(p, n)` — constrói `%Slice_int_*` a partir de ptr + n.
+        # O tipo do elemento é `int` por default; o caller pode
+        # reinterpretar via anotação `let s: [float] = as_slice(p, n)`.
+        # Bitcast é seguro porque todo slice tem o mesmo layout
+        # `{ptr, i64}` em LLVM.
+        #
+        # `view(arr, a, b)` — idem, mas com índice final explícito.
+        # ==================================================================
+        if func_name == "as_slice":
+            p = self.visit(node.args[0])
+            n = self.visit(node.args[1])
+
+            if not isinstance(p.type, ir.PointerType):
+                p = self.builder.inttoptr(p, self.i64_ty.as_pointer(), name="as_slice_p")
+
+            if n.type != self.i64_ty:
+                if isinstance(n.type, ir.IntType):
+                    n = self.builder.sext(n, self.i64_ty, name="as_slice_n")
+                else:
+                    n = ir.Constant(self.i64_ty, 0)
+
+            slice_ty = self.get_or_create_slice_type("[int]")
+            slice_ptr = self.builder.alloca(slice_ty, name="as_slice_tmp")
+
+            data_gep = self.builder.gep(
+                slice_ptr,
+                [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 0)],
+                name="as_slice_data_gep",
+            )
+            data_ty = slice_ty.elements[0]
+            if p.type != data_ty:
+                p = self.builder.bitcast(p, data_ty, name="as_slice_p_cast")
+            self.builder.store(p, data_gep)
+
+            len_gep = self.builder.gep(
+                slice_ptr,
+                [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 1)],
+                name="as_slice_len_gep",
+            )
+            self.builder.store(n, len_gep)
+
+            return slice_ptr
+
+        if func_name == "view":
+            # view(arr, start, end) — constrói slice sobre arr[start..end].
+            arr_val = self.visit(node.args[0])
+            start_val = self.visit(node.args[1])
+            end_val = self.visit(node.args[2])
+
+            if start_val.type != self.i64_ty:
+                start_val = self.builder.sext(start_val, self.i64_ty, name="view_start")
+            if end_val.type != self.i64_ty:
+                end_val = self.builder.sext(end_val, self.i64_ty, name="view_end")
+
+            if not isinstance(arr_val.type, ir.PointerType):
+                return ir.Constant(self.i64_ty, 0)
+
+            elem_ty = arr_val.type.pointee
+            length = self.builder.sub(end_val, start_val, name="view_len")
+            data_ptr = self.builder.gep(arr_val, [start_val], name="view_data")
+
+            elem_lumina = self._llvm_ty_to_str(elem_ty)
+            slice_ty = self.get_or_create_slice_type(f"[{elem_lumina}]")
+            slice_ptr = self.builder.alloca(slice_ty, name="view_tmp")
+
+            data_gep = self.builder.gep(
+                slice_ptr,
+                [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 0)],
+                name="view_data_gep",
+            )
+            data_ty = slice_ty.elements[0]
+            if data_ptr.type != data_ty:
+                data_ptr = self.builder.bitcast(data_ptr, data_ty, name="view_data_cast")
+            self.builder.store(data_ptr, data_gep)
+
+            len_gep = self.builder.gep(
+                slice_ptr,
+                [ir.Constant(self.i32_ty, 0), ir.Constent(self.i32_ty, 1)],
+                name="view_len_gep",
+            )
+            self.builder.store(length, len_gep)
+
+            return slice_ptr
 
         return None

@@ -4,9 +4,14 @@ Member, Index, Slice, Cast.
 from ...ast import (
     NumberExpr, BoolExpr, StringExpr, NoneExpr, NilExpr,
     VariableExpr, MemberExpr, IndexExpr, SliceExpr, CastExpr,
+    ArrayExpr,
 )
 from ...errors import LuminaError
 from .helpers import get_suggestion
+
+
+def _is_slice_type_str(t):
+    return bool(t) and isinstance(t, str) and t.startswith("[") and t.endswith("]")
 
 
 class LiteralsMixin:
@@ -60,6 +65,20 @@ class LiteralsMixin:
 
     def visit_MemberExpr(self, node):
         current_type = self.visit(node.obj)
+
+        # v0.8.0: slices têm `.data` e `.len`.
+        if _is_slice_type_str(current_type):
+            if node.member == "data":
+                return "ptr"
+            if node.member == "len":
+                return "int"
+            raise LuminaError(
+                f"Slice '{current_type}' não tem membro '{node.member}'. "
+                f"Disponíveis: `data` (ptr) e `len` (int).",
+                self.filename, getattr(node, 'line', 0),
+                getattr(node, 'col', 0), self.source_code,
+            )
+
         base_type = current_type.split('<')[0] if current_type else "Unknown"
 
         if base_type not in self.struct_defs:
@@ -83,35 +102,61 @@ class LiteralsMixin:
                 getattr(node, 'col', 0), self.source_code,
             )
 
-    # FIX (Fase 8): retorna o tipo do elemento de arrays quando
-    # conhecido via `array_elem_types`. Cobre:
-    #   let v = [1.5, 2.5]  → v[0] : float
-    #   let v = ["a", "b"]  → v[0] : str
-    # Para arrays de int e casos sem info, retorna None (comportamento
-    # anterior). Chamador (`_infer_var_decl_type` / `visit_AssignStmt`)
-    # cai para "int" quando None.
+    # ==================================================================
+    # v0.8.0: `s[i]` reconhece slices.
+    # ==================================================================
     def visit_IndexExpr(self, node):
-        self.visit(node.array)
+        arr_t = self.visit(node.array)
         self.visit(node.index)
+
+        # Slice `[T]` → T.
+        if _is_slice_type_str(arr_t):
+            return arr_t[1:-1]
+
         if isinstance(node.array, VariableExpr):
             et = getattr(self, 'array_elem_types', {}).get(node.array.name)
             if et:
                 return et
         return None
 
+    # ==================================================================
+    # v0.8.0: `v[a..b]` → `[T]` (view). Strings permanecem `str`.
+    # ==================================================================
     def visit_SliceExpr(self, node):
         arr_type = self.visit(node.array)
         if node.start:
             self.visit(node.start)
         if node.end:
             self.visit(node.end)
+
         if arr_type == "str":
             return "str"
-        return "ptr"
+
+        # Slice → slice: preserva tipo.
+        if _is_slice_type_str(arr_type):
+            return arr_type
+
+        # Inferir tipo do elemento.
+        elem_type = None
+        if isinstance(node.array, VariableExpr):
+            et = getattr(self, 'array_elem_types', {}).get(node.array.name)
+            if et:
+                elem_type = et
+
+        if elem_type is None and isinstance(node.array, ArrayExpr):
+            if node.array.elements:
+                elem_type = self.visit(node.array.elements[0])
+
+        if elem_type is None:
+            elem_type = "int"
+
+        return f"[{elem_type}]"
 
     def visit_CastExpr(self, node):
         self.visit(node.expr)
         if node.target_type not in ("int", "float", "bool", "str", "ptr"):
+            if _is_slice_type_str(node.target_type):
+                return node.target_type
             base = node.target_type.split('<')[0]
             if base not in self.structs:
                 raise LuminaError(

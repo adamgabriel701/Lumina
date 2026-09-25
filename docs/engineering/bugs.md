@@ -57,11 +57,16 @@ Lista completa de bugs silenciosos corrigidos no compilador. Todos passavam pelo
 
 | Bug | Sintoma | Correção | Teste |
 |---|---|---|---|
+## Semantic
+
+| Bug | Sintoma | Correção | Teste |
+|---|---|---|---|
 | `lumina lint` estourava `RecursionError` | recursão mútua `_collect_vars`/`_collect_exprs` | Reescrito como `_collect` única | `test_lint.py` |
 | Variante de enum com payload usada bare | `let x = Some` compilava silenciosamente | Semantic rejeita se variante tem payload | `test_enum_bare_variant.py` |
 | `fn_name` usado como valor | `sort(arr, n, _cmp_asc)` → "Variável não declarada" | Semantic retorna `"fn"`, codegen bitcast p/ voidptr | `test_sort.py` |
 | Indirect call com N args | `cmp(a, b)` só passava `a` | `fn_ty = i64 (i64) * n_args` | `test_sort.py` |
 | `impl Box<T>:` chamando método base | `%"Box"* != %"Box_int_"*` | Bitcast no `codegen_method_call` fallback | `test_generic_impl.py` |
+| **`_analyze_for` tipava `x: int` hardcoded** | **`for x in ["a","b"]: let y: str = x` falhava no semantic, apesar do codegen iterar `i8*` corretamente** | **`_infer_for_elem_type` infere tipo do array literal, `array_elem_types` ou hint `for x: T in arr`** | **`test_for_hint_type.py::test_without_hint_string_inference_works`, `test_int_array_with_str_annotation_fails`** |
 
 ## Stdlib / Builtins
 

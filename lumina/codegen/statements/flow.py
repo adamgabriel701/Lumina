@@ -34,19 +34,30 @@ class FlowMixin:
     # Helper: coerção de tipo antes do store
     # ------------------------------------------------------------------
     def _coerce_val_to(self, val, target_ty, name="val"):
-        """
-        Coerção única para store. Cobre:
-          - mesmo tipo (no-op)
-          - int↔int (zext/sext/trunc)
-          - int↔float (sitofp/fptosi)
-          - i64↔str (via snprintf)
-          - ptr↔int (ptrtoint/inttoptr)
-          - ptr↔ptr (bitcast ou load, se pointee for struct)
-          - struct por valor → ptr (alloca + store)
-        Fallback: bitcast silencioso.
-        """
         if val.type == target_ty:
             return val
+
+        # v0.8.0: slice → ptr: extrai `.data`.
+        if (isinstance(val.type, ir.PointerType)
+                and isinstance(val.type.pointee, ir.IdentifiedStructType)
+                and val.type.pointee.name.startswith("Slice_")
+                and isinstance(target_ty, ir.PointerType)):
+            data_gep = self.builder.gep(
+                val,
+                [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 0)],
+                name=f"{name}_slice_data_gep",
+            )
+            data_ptr = self.builder.load(data_gep, name=f"{name}_slice_data")
+            if data_ptr.type != target_ty:
+                data_ptr = self.builder.bitcast(data_ptr, target_ty, name=f"{name}_slice_data_cast")
+            return data_ptr
+
+        # v0.8.0: ptr → slice: NÃO é feito implicitamente
+        # (falta `.len`). Se o target é slice e o valor é ptr,
+        # deixa cair no fallback (bitcast) que vai falhar no LLVM
+        # com mensagem obscura. Alternativa: construir slice de
+        # tamanho 0. Vou deixar assim por enquanto — o usuário
+        # deve usar `as_slice(p, n)`.
 
         # int ↔ int
         if isinstance(val.type, ir.IntType) and isinstance(target_ty, ir.IntType):
@@ -175,14 +186,22 @@ class FlowMixin:
                     self.builder.store(val, elem_ptr)
             return
 
-        # ------------------------------------------------------------------
-        # Alvo: índice de array/ptr (`arr[i] = v`)
-        # ------------------------------------------------------------------
+        # Alvo: índice de array/ptr/slice (`arr[i] = v`)
         if hasattr(node.target, 'index'):
             arr_val = self.visit(node.target.array)
             idx_val = self.visit(node.target.index)
             if isinstance(arr_val.type, ir.PointerType):
-                if isinstance(arr_val.type.pointee, ir.ArrayType):
+                # v0.8.0: slice → extrai `.data` primeiro.
+                if (isinstance(arr_val.type.pointee, ir.IdentifiedStructType)
+                        and arr_val.type.pointee.name.startswith("Slice_")):
+                    data_gep = self.builder.gep(
+                        arr_val,
+                        [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 0)],
+                        name="slice_assign_data_gep",
+                    )
+                    data_ptr = self.builder.load(data_gep, name="slice_assign_data")
+                    elem_ptr = self.builder.gep(data_ptr, [idx_val], name="slice_assign_elem_ptr")
+                elif isinstance(arr_val.type.pointee, ir.ArrayType):
                     elem_ptr = self.builder.gep(
                         arr_val,
                         [ir.Constant(self.i32_ty, 0), idx_val],

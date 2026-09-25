@@ -2,7 +2,7 @@ from llvmlite import ir
 from ...ast import (
     CallExpr, ArrayExpr, LambdaExpr, VariableExpr, NumberExpr,
     MemberExpr, IndexExpr,
-    CompoundAssignStmt,   # NOVO
+    CompoundAssignStmt,
 )
 from ...errors import LuminaError
 from ..constants import I64_BYTES, STACK_ALLOC_LIMIT
@@ -60,6 +60,23 @@ class VarDeclMixin:
                 storage = self.builder.inttoptr(storage_int, ptr_pointee, name=name + "_cast")
         self.builder.store(storage, ptr)
 
+    # ==================================================================
+    # v0.7.0: dois caminhos de stack alloc.
+    #
+    #   1. N literal ≤ STACK_ALLOC_LIMIT → `alloca [elem; N]`
+    #   2. N dinâmico, seguro → VLA via `alloca elem, N`
+    #
+    # "Seguro" exige: não estar em loop; estar no bloco de topo da
+    # função (não em if/else); sem escape; sem `free`.
+    #
+    # Qualquer dúvida cai para GC/malloc.
+    #
+    # Nota importante sobre escape analysis: escrever `buf[i] = v`
+    # marca `buf` como escaping (conservador — pode ser refinado
+    # em v0.8.x). Por isso, `alloc(N); buf[i] = v` no mesmo escopo
+    # NÃO usa stack, apesar do tamanho conhecido. Documentado em
+    # `docs/engineering/bugs.md`.
+    # ==================================================================
     def _try_stack_alloc(self, node):
         if node.value is None:
             return None
@@ -76,47 +93,85 @@ class VarDeclMixin:
         args = getattr(node.value, 'args', None) or []
         if not args:
             return None
-        if not isinstance(args[0], NumberExpr):
-            return None
-
-        try:
-            n = int(args[0].value, 0)
-        except (ValueError, AttributeError):
-            return None
-
-        if n <= 0:
-            raise LuminaError(
-                message=(
-                    f"alloc({n}) inválido: tamanho deve ser positivo. "
-                    f"Se o tamanho é dinâmico, use uma variável "
-                    f"(desabilita stack alloc e usa GC/malloc)."
-                ),
-                filename=getattr(self, 'current_filename', '<codegen>'),
-                line=getattr(args[0], 'line', 0) or 0,
-                col=getattr(args[0], 'col', 0) or 0,
-                source_code=getattr(self, 'source_code', '') or '',
-            )
-
-        if n > STACK_ALLOC_LIMIT:
-            return None
 
         elem_ty = self.i64_ty if callee == 'alloc' else self.i8_ty
-        arr_ty = ir.ArrayType(elem_ty, n)
 
-        arr_ptr = self.builder.alloca(arr_ty, name=node.name + "_stack")
+        # ------------------------------------------------------------------
+        # Caminho 1: N literal.
+        # ------------------------------------------------------------------
+        if isinstance(args[0], NumberExpr):
+            try:
+                n = int(args[0].value, 0)
+            except (ValueError, AttributeError):
+                return None
 
-        zero = ir.Constant(self.i32_ty, 0)
-        first_elem = self.builder.gep(
-            arr_ptr, [zero, zero], name=node.name + "_first"
+            if n <= 0:
+                raise LuminaError(
+                    message=(
+                        f"alloc({n}) inválido: tamanho deve ser positivo. "
+                        f"Se o tamanho é dinâmico, use uma variável "
+                        f"(desabilita stack alloc e usa GC/malloc)."
+                    ),
+                    filename=getattr(self, 'current_filename', '<codegen>'),
+                    line=getattr(args[0], 'line', 0) or 0,
+                    col=getattr(args[0], 'col', 0) or 0,
+                    source_code=getattr(self, 'source_code', '') or '',
+                )
+
+            if n > STACK_ALLOC_LIMIT:
+                return None
+
+            arr_ty = ir.ArrayType(elem_ty, n)
+            arr_ptr = self.builder.alloca(arr_ty, name=node.name + "_stack")
+
+            zero = ir.Constant(self.i32_ty, 0)
+            first_elem = self.builder.gep(
+                arr_ptr, [zero, zero], name=node.name + "_first"
+            )
+
+            slot_ty = elem_ty.as_pointer()
+            slot = self.builder.alloca(slot_ty, name=node.name)
+
+            self.builder.store(first_elem, slot)
+            self.symbol_table[node.name] = slot
+            self.var_types[node.name] = "ptr"
+            self.array_lengths[node.name] = n
+
+            return slot
+
+        # ------------------------------------------------------------------
+        # Caminho 2: N dinâmico — VLA, mas só se seguro.
+        # ------------------------------------------------------------------
+        in_loop = bool(getattr(self, 'loop_stack', None))
+        if in_loop:
+            return None
+
+        current_body = getattr(self, 'current_body_bb', None)
+        if current_body is None or self.builder.block != current_body:
+            return None
+
+        n_val = self.visit(args[0])
+        if n_val.type != self.i64_ty:
+            if isinstance(n_val.type, ir.IntType) and n_val.type.width < 64:
+                n_val = self.builder.sext(n_val, self.i64_ty, name=f"{node.name}_vla_sext")
+            elif n_val.type == self.f64_ty:
+                n_val = self.builder.fptosi(n_val, self.i64_ty, name=f"{node.name}_vla_fptosi")
+            else:
+                # Não é int — não dá para alloca dinâmico.
+                return None
+
+        vla_ptr = self.builder.alloca(
+            elem_ty, n_val, name=node.name + "_vla"
         )
 
         slot_ty = elem_ty.as_pointer()
         slot = self.builder.alloca(slot_ty, name=node.name)
 
-        self.builder.store(first_elem, slot)
+        self.builder.store(vla_ptr, slot)
         self.symbol_table[node.name] = slot
         self.var_types[node.name] = "ptr"
-        self.array_lengths[node.name] = n
+        # `array_lengths` não é setado (tamanho dinâmico).
+        # `heap_allocs` não é setado — é stack.
 
         return slot
 
@@ -139,9 +194,6 @@ class VarDeclMixin:
             or ("<" in var_type and var_type.split("<")[0] in self.struct_defs)
         )
 
-        # Ordem importa: `alloc`/`alloc_bytes` têm tipos fixos e vêm
-        # PRIMEIRO. Depois structs, depois arrays literais (que preservam
-        # o tipo do elemento, Fase 8), depois fallback.
         if is_alloc_call:
             llvm_ty = self.i64_ty.as_pointer()
         elif is_alloc_bytes_call:
@@ -263,8 +315,7 @@ class VarDeclMixin:
         """Retorna `(ptr, llvm_ty)` para o lvalue, ou `(None, None)`.
 
         Resolve o endereço do alvo UMA vez. Usado por
-        `visit_CompoundAssignStmt` (e poderia ser usado por
-        `visit_AssignStmt`).
+        `visit_CompoundAssignStmt`.
         """
         # VariableExpr (local ou global)
         if isinstance(target, VariableExpr):
@@ -313,14 +364,12 @@ class VarDeclMixin:
 
     def _apply_binop(self, op, lhs, rhs):
         """Aplica `lhs op rhs` com coerção de tipos padrão Lumina."""
-        # Coerção int → int
         if isinstance(lhs.type, ir.IntType) and isinstance(rhs.type, ir.IntType):
             if lhs.type.width != rhs.type.width:
                 if lhs.type.width < rhs.type.width:
                     lhs = self.builder.sext(lhs, rhs.type, name="compound_sext_l")
                 else:
                     rhs = self.builder.sext(rhs, lhs.type, name="compound_sext_r")
-        # Coerção int → float
         elif lhs.type == self.f64_ty or rhs.type == self.f64_ty:
             if lhs.type != self.f64_ty:
                 lhs = self.builder.sitofp(lhs, self.f64_ty, name="compound_itof_l")
@@ -351,13 +400,7 @@ class VarDeclMixin:
         return fn(lhs, rhs, name=f"compound_{op}")
 
     def visit_CompoundAssignStmt(self, node):
-        """`x op= y`.
-
-        FIX (P-10-2): resolve o endereço do lvalue UMA vez, carrega,
-        aplica o operador e escreve de volta. Antes, o parser
-        desaçucarava para `x = x op y`, avaliando o alvo duas vezes —
-        para `arr[f()] += v`, `f()` era chamada 2x.
-        """
+        """`x op= y` com avaliação única do lvalue."""
         ptr, target_ty = self._resolve_lvalue(node.target)
         if ptr is None:
             return

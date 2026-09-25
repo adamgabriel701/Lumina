@@ -12,7 +12,12 @@ class FunctionBodyMixin:
         func_type = self.functions_table[node.name][1]
 
         attrs_norm = normalize_attrs(getattr(node, 'attrs', None))
-        is_safe = any(name == 'safe' for name, _args in attrs_norm)
+        # v0.7.0: safe-by-default global.
+        # `@safe` foi removido como opt-in — agora é o padrão.
+        # `@unsafe` é o opt-out (não adiciona null checks em
+        # MemberExpr/IndexExpr).
+        is_unsafe = any(name == 'unsafe' for name, _args in attrs_norm)
+        is_safe = not is_unsafe
 
         entry_bb = func.append_basic_block(name=f"{node.name}_entry")
         body_bb = func.append_basic_block(name=f"{node.name}_body")
@@ -39,20 +44,12 @@ class FunctionBodyMixin:
             _current_scc_ids=None,
             _current_scc_id_slot=None,
             _current_scc_dispatch_bb=None,
-            # FIX: passados explicitamente para que push_context controle
-            # o ciclo de vida completo. Antes, eram setados FORA do
-            # `with` (`self._fn_entry_block = entry_bb`), funcionando só
-            # por acidente — se alguém movesse a atribuição para dentro
-            # do bloco, o push_context restauraria o valor antigo (None).
             _fn_entry_block=entry_bb,
             _fn_return_type=func_type.return_type,
         ):
-            # ------------------------------------------------------------------
+            # ----------------------------------------------------------
             # Fase 1 — entry_bb: setup de frame.
-            #   - GC_init (uma vez, antes de qualquer alocação)
-            #   - store argc/argv (para o builtin `argv(i)`)
-            #   - allocas dos parâmetros
-            # ------------------------------------------------------------------
+            # ----------------------------------------------------------
             if node.name == "main" and self.use_gc:
                 gc_init = self.module.globals.get("GC_init")
                 if gc_init is not None:
@@ -78,17 +75,9 @@ class FunctionBodyMixin:
             self.builder.branch(body_bb)
             self.builder.position_at_end(body_bb)
 
-            # ------------------------------------------------------------------
+            # ----------------------------------------------------------
             # Fase 2 — body_bb: init runtime de globais, depois user code.
-            #
-            # Nota: `_fn_emit_alloca` insere allocas no INÍCIO do entry_bb
-            # via position_before(terminador). Isso é o correto — todos os
-            # allocas de uma função ficam no mesmo frame, antes do `br
-            # body_bb`. Se emitíssemos os inits de globais no entry_bb,
-            # o LLVM com -O2 poderia reordenar os allocas e os inits,
-            # quebrando chip8/gc_test (bug histórico documentado em
-            # docs/engineering/bugs.md).
-            # ------------------------------------------------------------------
+            # ----------------------------------------------------------
             if node.name == "main":
                 for gv, init_expr in getattr(self, '_deferred_globals', []):
                     try:
@@ -99,9 +88,9 @@ class FunctionBodyMixin:
                     except Exception:
                         pass
 
-            # ------------------------------------------------------------------
+            # ----------------------------------------------------------
             # Fase 3 — user code.
-            # ------------------------------------------------------------------
+            # ----------------------------------------------------------
             for stmt in node.body:
                 self.visit(stmt)
 

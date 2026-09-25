@@ -6,7 +6,7 @@ from ...ast import (
     LambdaExpr, NoneExpr, ComptimeExpr, NilExpr, TupleExpr,
     DerefExpr, SliceExpr, IndexExpr,
     UnaryExpr,
-    CompoundAssignStmt,   # NOVO
+    CompoundAssignStmt,
 )
 from ...builtins import BUILTIN_RET
 from ...errors import LuminaError
@@ -20,15 +20,24 @@ class VarDeclMixin:
     # ------------------------------------------------------------------
     def _analyze_var_decl(self, node):
         if node.var_type is not None:
-            base_type = node.var_type.split('<')[0]
-            is_fn_sig = base_type.startswith("fn(")
-            if (base_type not in ("int", "float", "bool", "str", "ptr", "fn")
-                    and not is_fn_sig
-                    and base_type not in self.structs):
-                raise LuminaError(
-                    f"Tipo '{node.var_type}' não declarado.",
-                    self.filename, 0, 0, self.source_code,
-                )
+            vt = node.var_type
+
+            # v0.8.0: slice `[T]` — válido sem checar `structs`.
+            is_slice = (
+                isinstance(vt, str)
+                and vt.startswith("[")
+                and vt.endswith("]")
+            )
+            if not is_slice:
+                base_type = vt.split('<')[0]
+                is_fn_sig = base_type.startswith("fn(")
+                if (base_type not in ("int", "float", "bool", "str", "ptr", "fn")
+                        and not is_fn_sig
+                        and base_type not in self.structs):
+                    raise LuminaError(
+                        f"Tipo '{vt}' não declarado.",
+                        self.filename, 0, 0, self.source_code,
+                    )
 
         if node.var_type is None and node.value is not None:
             self._infer_var_decl_type(node)
@@ -138,6 +147,9 @@ class VarDeclMixin:
         elif isinstance(node.value, IndexExpr):
             inferred = self.visit(node.value)
             node.var_type = inferred if inferred else "int"
+
+        elif isinstance(node.value, SliceExpr):
+            node.var_type = self.visit(node.value)
 
         elif isinstance(node.value, CallExpr):
             node.var_type = self._infer_call_expr_type(node.value)
@@ -255,6 +267,11 @@ class VarDeclMixin:
             self.check_escape(target.array)
             arr_type = self.visit(target.array)
             self.visit(target.index)
+
+            # v0.8.0: slice `[T]` → T.
+            if (arr_type and isinstance(arr_type, str)
+                    and arr_type.startswith("[") and arr_type.endswith("]")):
+                return arr_type[1:-1]
 
             if arr_type == "str":
                 return "int"

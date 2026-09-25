@@ -4,7 +4,7 @@ from ..ast import (
     VarDecl, DestructureStmt, AssignStmt, ReturnStmt, IfStmt, WhileStmt,
     ForStmt, BreakStmt, ContinueStmt, DeferStmt, AssertStmt, BenchStmt,
     Function, BinaryExpr, MacroCallStmt,
-    CompoundAssignStmt,   # NOVO (P-10-2)
+    CompoundAssignStmt,
 )
 
 
@@ -90,8 +90,6 @@ class StatementParser(PatternParser):
                 self.match(TokenType.NEWLINE)
                 return AssignStmt(expr, value)
 
-            # FIX (P-10-2): retorna CompoundAssignStmt em vez de
-            # AssignStmt(target, BinaryExpr(op, target, value)).
             compound = self._parse_compound_assign(expr)
             if compound is not None:
                 self.match(TokenType.NEWLINE)
@@ -117,17 +115,6 @@ class StatementParser(PatternParser):
         )
 
     def _parse_compound_assign(self, target_expr):
-        """`x op= y` → CompoundAssignStmt(x, op, y).
-
-        FIX (P-10-2): antes, retornava
-        `AssignStmt(target, BinaryExpr(op, target, value))`, que
-        avalia `target` duas vezes (uma no lvalue, outra dentro do
-        value). Para `arr[i()] += 1`, isso chamava `i()` duas vezes.
-
-        Com CompoundAssignStmt, o codegen resolve o endereço do
-        lvalue UMA vez, carrega o valor atual, aplica o operador e
-        escreve de volta.
-        """
         compound_ops = {
             TokenType.PLUS_ASSIGN:  "+",
             TokenType.MINUS_ASSIGN: "-",
@@ -253,16 +240,18 @@ class StatementParser(PatternParser):
         return WhileStmt(condition, body)
 
     # ==================================================================
-    # FIX (P-10-5): `parse_for` usa `index_var` em vez de codificar
-    # `var_name = "i,x"`.
+    # v0.7.0: `for x: T in arr:` — anotação opcional do tipo do elemento.
     #
-    # Antes:
-    #     for i, x in arr  →  var_name = "i,x"
-    #     for x in arr     →  var_name = "x"
+    # Desambiguação: após o(s) nome(s) da variável, se virmos `:` seguido
+    # de `IDENT` (nome de tipo), é anotação. Se virmos `:` seguido de
+    # `NEWLINE`, é o marcador de bloco. Como `IN` nunca é uma keyword
+    # ambígua aqui, o lookahead é confiável.
     #
-    # Agora:
-    #     for i, x in arr  →  var_name = "x", index_var = "i"
-    #     for x in arr     →  var_name = "x", index_var = None
+    # Sintaxe suportada:
+    #   for x in arr:
+    #   for i, x in arr:
+    #   for x: float in arr:
+    #   for i, x: float in arr:
     # ==================================================================
     def parse_for(self):
         self.consume(TokenType.FOR)
@@ -271,6 +260,14 @@ class StatementParser(PatternParser):
         if self.check(TokenType.COMMA):
             self.consume()
             second = self.expect(TokenType.IDENT).value
+
+        # Anotação opcional `: T` antes do `in`.
+        elem_type = None
+        if self.check(TokenType.COLON):
+            next_tok = self.peek(1)
+            if next_tok and next_tok.type == TokenType.IDENT:
+                self.consume()   # COLON
+                elem_type = self.parse_type()
 
         self.expect(TokenType.IN)
         start = None
@@ -299,9 +296,9 @@ class StatementParser(PatternParser):
         self.expect(TokenType.DEDENT)
 
         if second is not None:
-            # `for idx, val in arr:` → idx = first, val = second
-            return ForStmt(second, start, end, iterable, body, index_var=first)
-        return ForStmt(first, start, end, iterable, body)
+            return ForStmt(second, start, end, iterable, body,
+                           index_var=first, elem_type=elem_type)
+        return ForStmt(first, start, end, iterable, body, elem_type=elem_type)
 
     def parse_defer(self):
         self.consume(TokenType.DEFER)

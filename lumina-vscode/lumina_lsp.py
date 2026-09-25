@@ -29,6 +29,11 @@ REFERÊNCIAS COM ESCOPO (Sprint 8a):
   Quando o cursor está sobre uma variável LOCAL do enclosing function,
   `references` e `rename` filtram para apenas as ocorrências dentro
   dessa função. Símbolos de topo continuam com varredura léxica global.
+
+INLAY HINTS + CODE ACTIONS (Sprint 12):
+  Inlay hints mostram o tipo inferido para variáveis declaradas sem 
+  anotação de tipo (`let x = 10` exibe `: int`). 
+  Code actions permitem transformar essa sugestão em código real.
 """
 import bisect
 import sys
@@ -306,17 +311,9 @@ def _qualify(func_name, var_name):
 def validate_and_extract_symbols(code):
     """Parse + semantic + extração de símbolos.
 
-    Retorna (8-tuple):
+    Retorna (9-tuple):
       diagnostics, symbols, definitions, symbol_details,
-      document_symbols, references, no_type_var_decls, scope_map
-
-    Chaves:
-      - top-level: `name`         → `main`, `Pessoa`, `Red`
-      - locais:    `func::name`   → `main::i`, `helper::x`
-
-    `scope_map` é [(start_line, func_name), ...] ordenado por
-    start_line, usado para descobrir o enclosing function de uma
-    posição do cursor.
+      document_symbols, references, scope_map, semantic_tokens, inlay_hints
     """
     diagnostics = []
     symbols = {"functions": [], "vars": []}
@@ -326,6 +323,8 @@ def validate_and_extract_symbols(code):
     no_type_var_decls = []
     scope_map = []
     _stmt_refs = {}
+    semantic_tokens = []
+    inlay_hints = []
 
     try:
         lexer = Lexer(code)
@@ -553,6 +552,10 @@ def validate_and_extract_symbols(code):
             base_name = qkey.split("::")[-1]
             info["detail"] = f"{base_name}: {inferred}"
 
+        # ----- Passada 4: Semantic Tokens + Inlay Hints -----
+        semantic_tokens = _collect_semantic_tokens(code, tokens, ast, symbol_details)
+        inlay_hints = _collect_inlay_hints(no_type_var_decls)
+
     except LuminaError as e:
         diagnostics.append({
             "range": {
@@ -572,7 +575,7 @@ def validate_and_extract_symbols(code):
     references = _find_all_references(code, top_level_names)
 
     return (diagnostics, symbols, definitions, symbol_details,
-            document_symbols, references, no_type_var_decls, scope_map)
+            document_symbols, references, scope_map, semantic_tokens, inlay_hints)
 
 
 # ============================================================
@@ -648,28 +651,21 @@ def _collect_semantic_tokens(code, tokens, ast, symbol_details):
 # ============================================================
 # Inlay hints
 # ============================================================
-def _collect_inlay_hints(no_type_var_decls, analyzer):
+def _collect_inlay_hints(no_type_var_decls):
     hints = []
     for decl in no_type_var_decls:
-        name = decl.name
+        # O analyzer atualiza in-place o 'var_type' dos nós da AST.
+        inferred = getattr(decl, 'var_type', None)
+        if not inferred or inferred == "inferred":
+            continue
         line = getattr(decl, 'line', 0) or 0
         col = getattr(decl, 'col', 0) or 0
         if line <= 0 or col <= 0:
             continue
-        info = None
-        try:
-            info = analyzer.get_var_info(name)
-        except Exception:
-            info = None
-        inferred = (info or {}).get('type') if info else None
-        if not inferred:
-            inferred = decl.var_type
-        if not inferred or inferred == "inferred":
-            continue
         hints.append({
             "position": {
                 "line": line - 1,
-                "character": (col - 1) + len(name),
+                "character": (col - 1) + len(decl.name),
             },
             "label": f": {inferred}",
             "kind": 1,
@@ -813,7 +809,7 @@ class LuminaLSP:
                                 },
                                 "inlayHintProvider": True,
                                 "codeActionProvider": {
-                                    "codeActionKinds": ["quickfix"],
+                                    "codeActionKinds": ["quickfix", "refactor.rewrite"],
                                 },
                             }
                         }
@@ -830,7 +826,7 @@ class LuminaLSP:
                     self.latest_uri = params.get("textDocument", {}).get("uri", "")
 
                     (diagnostics, symbols, defs, details,
-                     doc_syms, refs, no_type_vars, scope_map) = \
+                     doc_syms, refs, scope_map, sem_tokens, inlay_hints) = \
                         validate_and_extract_symbols(text)
 
                     self.latest_definitions = defs
@@ -840,8 +836,8 @@ class LuminaLSP:
                     self.references = refs
                     self.last_diagnostics = diagnostics
                     self.scope_map = scope_map
-
-                    self._recompute_extras(text, no_type_vars)
+                    self.semantic_tokens_data = sem_tokens
+                    self.inlay_hints_data = inlay_hints
 
                     write_message({
                         "jsonrpc": "2.0",
@@ -925,34 +921,6 @@ class LuminaLSP:
                         "jsonrpc": "2.0", "id": msg_id,
                         "error": {"code": -32603, "message": str(e)},
                     })
-
-    # ------------------------------------------------------------------
-    # Recalcula semantic tokens + inlay hints
-    # ------------------------------------------------------------------
-    def _recompute_extras(self, text, no_type_vars):
-        if not text:
-            self.semantic_tokens_data = []
-            self.inlay_hints_data = []
-            return
-        try:
-            lexer = Lexer(text)
-            tokens = lexer.tokenize()
-            parser = Parser(tokens, "lsp.lm", text)
-            ast = parser.parse()
-            self.semantic_tokens_data = _collect_semantic_tokens(
-                text, tokens, ast, self.symbol_details
-            )
-            try:
-                analyzer = SemanticAnalyzer("lsp.lm", text)
-                analyzer.analyze(ast)
-                self.inlay_hints_data = _collect_inlay_hints(
-                    no_type_vars, analyzer
-                )
-            except LuminaError:
-                self.inlay_hints_data = []
-        except Exception:
-            self.semantic_tokens_data = []
-            self.inlay_hints_data = []
 
     # ------------------------------------------------------------------
     # Handlers
@@ -1100,6 +1068,7 @@ class LuminaLSP:
         diagnostics = context.get("diagnostics", [])
         actions = []
 
+        # 1. Quickfix para sugestões de erros (ex: "Você quis dizer X?")
         for diag in diagnostics:
             msg = diag.get("message", "")
             suggestion = _extract_suggestion(msg)
@@ -1130,6 +1099,53 @@ class LuminaLSP:
                     },
                 },
             })
+
+        # 2. Code Action para aplicar Inlay Hint (Anotar tipo inferido)
+        cursor_range = params.get("range", {})
+        c_line = cursor_range.get("start", {}).get("line", 0)
+        c_char = cursor_range.get("start", {}).get("character", 0)
+        
+        lines = self.latest_text.split('\n')
+        if c_line < len(lines):
+            line_str = lines[c_line]
+            if c_char <= len(line_str):
+                # Descobre a palavra sob o cursor
+                word_start = c_char
+                while word_start > 0 and (line_str[word_start-1].isalnum() or line_str[word_start-1] == '_'):
+                    word_start -= 1
+                word_end = c_char
+                while word_end < len(line_str) and (line_str[word_end].isalnum() or line_str[word_end] == '_'):
+                    word_end += 1
+                word = line_str[word_start:word_end]
+                
+                if word:
+                    # Verifica se existe um Inlay Hint para essa palavra
+                    for hint in self.inlay_hints_data:
+                        if hint["position"]["line"] == c_line:
+                            hint_char = hint["position"]["character"]
+                            # Se a palavra termina onde o hint começa
+                            if word_end == hint_char or word_start <= hint_char <= word_end:
+                                # Evita sugerir se já houver tipagem
+                                rest_of_line = line_str[word_end:].strip()
+                                if not rest_of_line.startswith(":"):
+                                    inferred_type = hint["label"][2:] # remove ": "
+                                    actions.append({
+                                        "title": f"Anotar tipo inferido: {word}: {inferred_type}",
+                                        "kind": "refactor.rewrite",
+                                        "isPreferred": False,
+                                        "edit": {
+                                            "changes": {
+                                                self.latest_uri: [{
+                                                    "range": {
+                                                        "start": {"line": c_line, "character": word_end},
+                                                        "end": {"line": c_line, "character": word_end},
+                                                    },
+                                                    "newText": f": {inferred_type}"
+                                                }]
+                                            }
+                                        }
+                                    })
+                                break
 
         return actions
 

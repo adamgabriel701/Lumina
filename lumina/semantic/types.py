@@ -2,6 +2,8 @@
 
 Única fonte de verdade para `is_assignable`. Consumida por VarDecl,
 AssignStmt, ReturnStmt e (futuramente) por validação de argumentos.
+
+v0.8.0: suporte a `[T]` (slice).
 """
 
 PRIMITIVES = {"int", "float", "bool", "str", "ptr", "fn", "void"}
@@ -15,6 +17,16 @@ def _base(t: str) -> str:
 def _is_type_param(t: str) -> bool:
     """Um type param genérico é uma letra maiúscula sozinha (T, U, V, ...)."""
     return bool(t) and len(t) == 1 and t.isupper()
+
+
+def _is_slice_type(t: str) -> bool:
+    """`[T]` → True. `[]` → False."""
+    return bool(t) and len(t) >= 2 and t[0] == "[" and t[-1] == "]"
+
+
+def _slice_inner(t: str) -> str:
+    """`[T]` → `T`."""
+    return t[1:-1]
 
 
 def _split_top_level(s):
@@ -90,13 +102,14 @@ def is_assignable(target: str, value: str) -> bool:
     Regras:
       - Tipos iguais → True.
       - Type param (T, U, ...) → aceita qualquer coisa.
-      - Option ↔ Option<X> (compatibilidade sem args).
-      - int → float (promoção implícita).
-      - int ↔ ptr (casts implícitos para ponteiros).
-      - array → ptr (arrays decaem para ponteiros).
-      - none/null → qualquer ptr, struct, fn, str, ou Option.
-      - Box<int> → Box<int> (mesma base + mesmos args) → True.
-      - Desconhecido (None) → True.
+      - Slice `[T]` ↔ `[U]` → recursão em T/U.
+      - Slice → ptr: coage para `.data` (retrocompat com APIs antigas).
+      - ptr → slice: **não** (perde `.len`).
+      - Option ↔ Option<X>.
+      - int → float (promoção).
+      - int ↔ ptr.
+      - arrays decaem para ponteiros.
+      - `none`/`nil` para qualquer ptr/struct/fn/str/Option/slice.
     """
     if target is None or value is None:
         return True
@@ -107,6 +120,25 @@ def is_assignable(target: str, value: str) -> bool:
         return True
     if _is_type_param(value):
         return True
+
+    # ----- Slice -----
+    t_slice = _is_slice_type(target)
+    v_slice = _is_slice_type(value)
+    if t_slice and v_slice:
+        return is_assignable(_slice_inner(target), _slice_inner(value))
+    if t_slice and not v_slice:
+        # ptr → [T]: NÃO (perde len).
+        if value in ("none", "None", "null", "nil"):
+            return True
+        return False
+    if v_slice and not t_slice:
+        # [T] → ptr: coage implicitamente para `.data`.
+        if target in ("ptr",):
+            return True
+        if target == "int":
+            # slice → int: reinterpreta ponteiro como int.
+            return True
+        return False
 
     if target.startswith("Option") and value == "Option":
         return True
@@ -191,11 +223,7 @@ def check_assignable(target: str, value: str, err_ctx) -> None:
 # ============================================================
 
 def parse_generic(type_str):
-    """Parse 'Box<int>' → ('Box', ['int']). 'int' → ('int', []).
-
-    Não lida com aninhamento profundo recursivo em args (mas a
-    substituição abaixo lida).
-    """
+    """Parse 'Box<int>' → ('Box', ['int']). 'int' → ('int', [])."""
     if not type_str or "<" not in type_str:
         return type_str, []
     base, _, rest = type_str.partition("<")
@@ -223,16 +251,17 @@ def parse_generic(type_str):
 
 
 def substitute_generic(type_str, type_map):
-    """Substitui type params recursivamente.
-
-    Ex: substitute_generic("Box<T>", {"T": "int"}) → "Box<int>"
-        substitute_generic("T", {"T": "int"}) → "int"
-        substitute_generic("Map<str, T>", {"T": "int"}) → "Map<str,int>"
-    """
+    """Substitui type params recursivamente."""
     if not type_str:
         return type_str
     if type_str in type_map:
         return type_map[type_str]
+
+    # Slice: `[T]` → `[int]`.
+    if _is_slice_type(type_str):
+        inner = _slice_inner(type_str)
+        return f"[{substitute_generic(inner, type_map)}]"
+
     base, args = parse_generic(type_str)
     if not args:
         return type_str
@@ -243,8 +272,6 @@ def substitute_generic(type_str, type_map):
 def unify_type(declared, actual, type_map):
     """Unifica `declared` (com type params) contra `actual` (concreto),
     preenchendo `type_map`.
-
-    Retorna True se unificou com sucesso.
     """
     if declared == actual:
         return True
@@ -255,6 +282,10 @@ def unify_type(declared, actual, type_map):
             type_map[declared] = actual
             return True
         return existing == actual
+
+    # Slice: `[T]` vs `[int]`.
+    if _is_slice_type(declared) and _is_slice_type(actual):
+        return unify_type(_slice_inner(declared), _slice_inner(actual), type_map)
 
     d_base, d_args = parse_generic(declared)
     a_base, a_args = parse_generic(actual)
@@ -271,24 +302,11 @@ def unify_type(declared, actual, type_map):
     return all(unify_type(d, a, type_map) for d, a in zip(d_args, a_args))
 
 
-# FIX 10: limite explícito para expansão de aliases. Antes, retornar
-# silenciosamente no limite escondia ciclos como:
-#     type A = B
-#     type B = A
-# que causavam comportamento indefinido em consumidores. Agora levanta
-# LuminaError com mensagem acionável.
 _ALIAS_MAX_DEPTH = 32
 
 
 def expand_type_alias(type_str, aliases, _depth=0):
-    """Expande aliases recursivamente em `type_str`.
-
-    `aliases` é `{name: (params_list, target_type)}`. Se `params_list` é
-    vazio, o alias é simples. Caso contrário, é genérico: `Nome<args>`
-    substitui os params no `target_type` antes de recursar.
-
-    FIX 10: ao exceder `_ALIAS_MAX_DEPTH`, levanta LuminaError.
-    """
+    """Expande aliases recursivamente em `type_str`."""
     if not type_str:
         return type_str
 
@@ -305,6 +323,11 @@ def expand_type_alias(type_str, aliases, _depth=0):
             col=0,
             source_code="",
         )
+
+    # Slice: expande o tipo interno.
+    if _is_slice_type(type_str):
+        inner = expand_type_alias(_slice_inner(type_str), aliases, _depth + 1)
+        return f"[{inner}]"
 
     base, args = parse_generic(type_str)
 

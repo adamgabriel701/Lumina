@@ -1,19 +1,11 @@
 """Tail Call Optimization: SCCs de mutual recursion + dispatcher.
 
-O dispatcher `__scc_N` recebe `(id, params_comuns)` e faz `switch` sobre
-`id` para o bloco de cada membro do SCC. Cada membro reescreve seus
-próprios slots de parâmetro e salta de volta para `dispatch_bb` — sem
-novo frame.
-
-PATCH: `_materialize_scc_dispatcher` agora usa `push_context` em vez de
-salvar/restaurar campos manualmente. Além disso, corrige um bug latente:
-`var_types` era inicializado como **set** em vez de **dict**, quebrando
-`_infer_arg_type_lumina` (que chama `.get()`) quando um membro do SCC
-chamava função genérica.
+v0.7.0: safe-by-default. Cada membro do SCC herda `_safe_mode` com
+base nos próprios attrs (`@unsafe` desliga null checks).
 """
 from llvmlite import ir
 
-from .context import push_context
+from .context import push_context, normalize_attrs
 
 
 class TCOMixin:
@@ -22,12 +14,6 @@ class TCOMixin:
     # SCCs de tail calls + dispatcher
     # ==================================================================
     def _compute_tail_call_sccs(self, ast):
-        """SCCs do grafo de tail calls entre funções top-level.
-
-        Retorna `[[name1, name2, ...], ...]` — cada sub-lista é um
-        SCC com >= 2 membros. Self-recursion (tamanho 1) é tratada
-        pelo `_try_tail_call` existente e NÃO aparece aqui.
-        """
         from ..ast import (
             CallExpr, VariableExpr, ReturnStmt,
             IfStmt, WhileStmt, ForStmt, MatchStmt, DeferStmt, BenchStmt,
@@ -67,7 +53,6 @@ class TCOMixin:
             if isinstance(decl, AstFunction) and not getattr(decl, 'type_params', None):
                 walk_tail(decl.body, decl.name)
 
-        # Kosaraju
         visited = set()
         order = []
         def dfs1(n):
@@ -104,7 +89,6 @@ class TCOMixin:
         return [scc for scc in sccs if len(scc) > 1]
 
     def _can_dispatcher(self, funcs):
-        """Todos os membros do SCC têm assinatura compatível?"""
         if not funcs:
             return False
         sig0 = (
@@ -121,17 +105,6 @@ class TCOMixin:
         return True
 
     def _materialize_scc_dispatcher(self, scc_id, funcs):
-        """Gera dispatcher + wrappers para um SCC de mutual recursion.
-
-        Estrutura:
-          - `__scc_N(i32 id, <params>)` — dispatcher com switch sobre `id`.
-          - Para cada `f` do SCC:
-              - bloco `__scc_N_<f>` com o corpo, usando `push_context`.
-              - wrapper `f_wrap` que chama `__scc_N(idx_f, ...)`.
-
-        PATCH: refatorado para usar `push_context`, e `var_types` agora é
-        um **dict** (`{name: type}`) em vez de um **set** (`{type}`).
-        """
         sample = funcs[0]
         param_tys = [self.get_llvm_param_type(p.type_ann) for p in sample.params]
         ret_ty = self.get_llvm_param_type(sample.return_type)
@@ -140,14 +113,8 @@ class TCOMixin:
         disp_fn_ty = ir.FunctionType(ret_ty, [self.i32_ty] + param_tys)
         disp_fn = ir.Function(self.module, disp_fn_ty, name=disp_name)
 
-        # Salva builder externo — restaurado no final.
         old_builder = self.builder
 
-        # ------------------------------------------------------------------
-        # Setup do dispatcher (entry + slots + dispatch bb).
-        # Feito com um builder próprio, fora do push_context — não é
-        # "corpo de função" no sentido do codegen, é boilerplate.
-        # ------------------------------------------------------------------
         entry_bb = disp_fn.append_basic_block(name=f"{disp_name}_entry")
         self.builder = ir.IRBuilder(entry_bb)
 
@@ -181,16 +148,13 @@ class TCOMixin:
         scc_slots = {f.name: slots for f in funcs}
         scc_ids = {f.name: idx for idx, f in enumerate(funcs)}
 
-        # ------------------------------------------------------------------
-        # Corpos de cada membro — cada um em um `push_context` próprio.
-        #
-        # PATCH: `var_types` agora é `{param_name: type_ann}` (dict) em
-        # vez de `{type_ann}` (set). O bug era silencioso até um membro
-        # do SCC chamar função genérica, o que dispara
-        # `_infer_arg_type_lumina` → `var_types.get(name)` → crash.
-        # ------------------------------------------------------------------
         for idx, f in enumerate(funcs):
             member_builder = ir.IRBuilder(member_bb[f.name])
+
+            # v0.7.0: safe-by-default por membro do SCC.
+            attrs_norm = normalize_attrs(getattr(f, 'attrs', None))
+            is_unsafe = any(name == 'unsafe' for name, _args in attrs_norm)
+            is_safe = not is_unsafe
 
             with push_context(
                 self,
@@ -201,13 +165,13 @@ class TCOMixin:
                 current_body_bb=None,
                 defer_stack=[],
                 closure_vars=set(),
-                _safe_mode=False,
+                _safe_mode=is_safe,
                 _current_scc_slots=scc_slots,
                 _current_scc_ids=scc_ids,
                 _current_scc_id_slot=id_slot,
                 _current_scc_dispatch_bb=dispatch_bb,
-                _fn_entry_block=member_bb[f.name],  # PATCH
-                _fn_return_type=ret_ty,             # PATCH
+                _fn_entry_block=member_bb[f.name],
+                _fn_return_type=ret_ty,
             ):
                 for stmt in f.body:
                     if self.builder.block.is_terminated:
@@ -224,11 +188,6 @@ class TCOMixin:
                     else:
                         self.builder.ret(ir.Constant(ret_ty, 0))
 
-        # ------------------------------------------------------------------
-        # Wrappers: cada `f` original vira um stub que chama o dispatcher
-        # com o `id` do membro. Emitidos fora do push_context — é
-        # boilerplate de 3 instruções, não corpo de função.
-        # ------------------------------------------------------------------
         for idx, f in enumerate(funcs):
             func, func_type = self.functions_table[f.name]
             wbb = func.append_basic_block(name=f"{f.name}_wrap")
@@ -240,5 +199,4 @@ class TCOMixin:
             else:
                 self.builder.ret(result)
 
-        # Restaura builder externo.
         self.builder = old_builder

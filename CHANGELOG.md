@@ -8,6 +8,439 @@ O formato segue, de forma geral, as convenções do [Keep a Changelog](https://k
 
 ---
 
+## [0.8.0] — 2026-10-02
+
+> **Milestone:** slice types (`[T]`) — views tipadas e com comprimento.
+
+Esta versão introduz o tipo `[T]` como view tipada e com comprimento
+sobre regiões contíguas de memória, resolvendo a limitação conhecida
+de `for x: T in ptr` (loop vazio por falta de comprimento) e
+preparando o terreno para APIs de stdlib mais ergonômicas.
+
+### ✨ Adicionado
+
+#### Tipo `[T]` — slice
+
+* Novo tipo primitivo `[T]` representando uma **view** sobre uma
+  região contígua de memória: `{T*, i64}`.
+* Zero-copy: nenhuma alocação ao criar um slice.
+* Integrado com `for`, `len`, `s[i]`, `s.data`, `s.len`.
+* `[T]` é um tipo estático, como `int` e `Box<int>`.
+
+  ```lumina
+  fn sum(s: [float]) -> float:
+      mut total = 0.0
+      for x in s:
+          total += x
+      return total
+
+  fn main() -> int:
+      let v = [1.5, 2.5, 3.5]
+      print(sum(v[..]))
+      return 0
+  ```
+
+* Representação LLVM: `%Slice_T_ = { T*, i64 }`, monomorphizada por
+  tipo de elemento como `Box<T>`.
+* Passado por ponteiro em parâmetros de função (consistente com o
+  resto das structs Lumina).
+
+#### `as_slice(p, n)` e `view(arr, a, b)` — builtins
+
+* `as_slice(p: ptr, n: int) -> [int]` — constrói slice a partir de
+  ptr + comprimento. O tipo do elemento é `int` por padrão;
+  reinterprete via anotação (`let s: [float] = as_slice(p, n)`).
+* `view(arr: ptr, a: int, b: int) -> [T]` — constrói slice
+  `arr[a..b]`. O tipo do elemento é inferido do `pointee`.
+* Ambos são zero-copy — o slice retornado aponta para a memória
+  original.
+
+#### `for x in slice:`
+
+* `_visit_for_iterable` reconhece `%Slice_T_*` e extrai `.data` +
+  `.len`.
+* Resolve a limitação conhecida de v0.7.0: `for x: T in ptr` agora
+  funciona quando o comprimento está disponível no slice.
+
+#### Bounds check em `slice[i]` (safe mode)
+
+* Em modo safe-default, `s[i]` verifica `0 <= i < s.len` em runtime.
+* Fora dos limites → retorna `0` (para int/float) ou `nil` (para ptr).
+* `@unsafe` desliga os bounds checks.
+
+#### `s.data` e `s.len`
+
+* Acesso direto aos campos do slice.
+* `s.data: ptr` — ponteiro para o primeiro elemento.
+* `s.len: int` — número de elementos.
+
+#### Sub-slicing zero-copy
+
+* `s[a..b]` de slice retorna novo slice view, sem alocação.
+* Composição: `v[1..4][1..3]` funciona.
+
+#### Flag `--legacy-slice-copy`
+
+* Restaura o comportamento de `v[a..b]` anterior à v0.8.0
+  (cópia em vez de view). Destinada à migração.
+* Será removida em v0.9.0.
+
+### 🔧 Alterado
+
+#### `v[a..b]` retorna `[T]` (view) em vez de cópia
+
+* **Breaking change.** Antes, `v[1..3]` copiava para `T*` via
+  `malloc`. Agora retorna um slice view `[T]` — zero alocação.
+* Strings **mantêm retrocompat**: `s[1..3]` continua retornando
+  `str` (cópia via `strncpy`).
+* Migração recomendada: substitua `let p: ptr = v[1..3]` por
+  `let s: [float] = v[1..3]` e use `s.data` quando precisar do
+  ponteiro bruto.
+
+  | Antes | Depois |
+  |---|---|
+  | `let s = v[1..3]` → `T*` (cópia) | `[T]` (view) |
+  | `s[0]` → `T` | `s[0]` → `T` (idêntico) |
+  | `print(s)` → imprime ponteiro | `print(s)` → imprime ponteiro |
+
+* Mitigação: `--legacy-slice-copy` restaura o comportamento antigo.
+
+#### Parser: `[T]` reconhecido em posição de tipo
+
+* `parse_type` aceita `[` como prefixo de tipo.
+* `fn f(s: [int])` compila.
+* Sem ambiguidade: `[` em contexto de tipo (`:` `->` `(` `,`) não
+  conflita com array literal.
+
+#### Semantic: `is_assignable` para `[T]`
+
+* `[T] → [U]` — recursão em T/U.
+* `[T] → ptr` — coage implicitamente para `.data` (retrocompat).
+* `ptr → [T]` — **não** (perde `.len`); use `as_slice(p, n)`.
+
+#### Mangling de slices
+
+* Novo `mangle_slice` em `lumina/common/mangle.py`.
+* `'int'` → `'Slice_int_'`; `'[int]'` → `'Slice_int_'` (idempotente);
+  `'Box<int>'` → `'Slice_Box_int__'`.
+
+#### Genéricos com slices
+
+* `substitute_generic`, `unify_type`, `expand_type_alias` reconhecem
+  `[T]` e recursam no tipo interno.
+* `Box<[int]>` funciona em type annotations.
+
+### 🐛 Corrigido
+
+#### `visit_SliceExpr` — `is_string` não computado
+
+* A versão inicial referenciava `is_string` antes de definir,
+  disparando `UnboundLocalError` em todo `v[a..b]`. Corrigido
+  computando `is_string` imediatamente após `arr_val = visit(node.array)`.
+
+#### `visit_MemberExpr` (semantic) — slices sem campos
+
+* `s.len` e `s.data` falhavam com "Tipo '[int]' não é uma
+  Struct/Enum". Adicionado caso explícito para slices com os
+  membros `data` e `len`.
+
+#### `_infer_for_elem_type` — slices não reconhecidos
+
+* `for x in v[..]` caía no fallback `int`. Adicionado caso para
+  tipo `[T]` → `T`.
+
+#### `visit_AssignStmt` — `s[i] = v` em slice
+
+* Atribuição via index em slice exigia extrair `.data` antes do
+  GEP. Sem isso, `s[0] = 42` escrevia no `%Slice_T_*` em vez de no
+  buffer de dados.
+
+### 🧪 Testes
+
+Estado após este ciclo:
+
+```text
+pytest tests/ -q
+487 passed in 126.89s
+```
+
+Testes novos:
+
+* `tests/test_slice_basic.py` — 5 casos cobrindo:
+  * `len(s)` em slice criado por `v[1..4]`
+  * `for x in s` iterando
+  * `s[i]` indexando
+  * `[int]` como parâmetro de função
+  * `s.len` como field access
+
+### 🚧 Não implementado neste ciclo
+
+* **`bytes(s)`** — slice de string (bytes) como `[int]`. Strings
+  continuam sendo `str` opaco. Adiado para v0.8.x.
+* **`copy(s: [T]) -> ptr`** — migração programática do comportamento
+  antigo. Use `--legacy-slice-copy` como workaround.
+* **Slice de struct custom** (`[MyStruct]`) — funciona
+  estruturalmente (`{%MyStruct*, i64}`), mas não há teste nem doc.
+  Cuidado ao usar.
+* **Migração de `std/*`** — APIs duais (`sort` + `sort_slice`).
+  v0.8.x.
+* **Deprecation de `--legacy-slice-copy`** — v0.9.0.
+
+### 📚 Documentação
+
+* Nova seção **Slices** em `docs/guia/linguagem.md`, cobrindo:
+  * criação (`v[a..b]`, `as_slice(p, n)`, `view(arr, a, b)`)
+  * iteração, indexação, `len`
+  * acesso a `.data` e `.len`
+  * sub-slicing
+  * bounds check em safe mode
+  * interoperabilidade com `ptr` e retrocompat com strings
+* Nova ADR **`docs/engineering/decisoes/0002-slice-types.md`**
+  documentando o design, alternativas descartadas e fases de
+  implementação.
+
+[Unreleased]: https://github.com/adamgabriel701/Lumina/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/adamgabriel701/Lumina/compare/v0.7.0...v0.8.0
+
+---
+
+## [0.7.0] — 2026-10-01
+
+> **Milestone:** safe-by-default + preparação para self-hosting.
+
+Esta versão torna a segurança de memória o **comportamento padrão** da
+linguagem (`@safe` deixa de ser opt-in) e prepara o terreno para
+self-hosting com melhorias na iteração sobre arrays e análise de
+escape.
+
+### ✨ Adicionado
+
+#### Safe-by-default global
+
+* Null checks automáticos em `MemberExpr` e `IndexExpr` agora são o
+  comportamento **padrão** — `@safe` deixou de ser necessário.
+* Novo atributo `@unsafe` desliga os null checks explicitamente:
+
+  ```lumina
+  @unsafe
+  fn hot_path(u: U) -> int:
+      return u.id       # sem null check — mais rápido, mais perigoso
+  ```
+
+* Comportamento de migração:
+  * Código com `@safe` continua funcionando (o atributo é aceito mas
+    ignorado — já é o default).
+  * Código sem `@safe` que dependia do SIGSEGV em `u.id` com `u == nil`
+    agora retorna `0`. **Breaking change sutil**: para preservar o
+    comportamento antigo, use `@unsafe`.
+* Closures, cópias especializadas de genéricos (`materialize_generic`)
+  e membros de SCCs (mutual TCO) herdam `_safe_mode` do contexto.
+  `@unsafe` na função externa propaga para a closure.
+
+#### `for x: T in arr` — iteração tipada sobre `ptr`
+
+* Nova sintaxe opcional de anotação de tipo no cabeçalho do `for`:
+
+  ```lumina
+  let precos = [1.5, 2.5, 3.5]
+  for x: float in precos:
+      print(x)     # imprime float, não bits do f64
+  ```
+
+* Funciona também com `for i, x: T in arr:`.
+* Motivada pelo caso `fn f(arr: ptr)` chamada com `[1.5, 2.5]`:
+  sem a anotação, `arr` é `i64*` e `x` sairia como int truncado.
+* O codegen faz `bitcast i64* → f64*` quando o hint diverge do
+  `pointee` real (apenas no caminho `ptr`; arrays com tipo próprio
+  são intocados).
+* Validação em compile-time: hints incompatíveis com o tipo inferido
+  do iterável levantam `LuminaError` (via `_is_hint_compatible`).
+  Ex: `for x: str in [1, 2, 3]` falha.
+* Preservado pelo `lumina fmt`.
+
+#### Escape analysis para `alloc(N)` com N dinâmico (VLA)
+
+* `alloc(N)` com `N` não-literal agora pode virar **VLA**
+  (*variable length array*) via `alloca(elem_ty, N)`, contanto que
+  todas as condições de segurança valham:
+
+  1. `N` **não** está dentro de loop (`loop_stack` vazio);
+  2. a chamada está no **bloco de topo** da função
+     (`builder.block == current_body_bb`, ou seja, não em if/else);
+  3. a variável **não escapa** (não é retornada, não é passada a
+     função externa, não é armazenada em struct);
+  4. a variável **não é passada a `free`**.
+
+* Reduz pressão no GC em funções que alocam buffers temporários de
+  tamanho dinâmico mas limitado.
+
+* Qualquer dúvida cai para GC/malloc — comportamento anterior
+  preservado. Zero regressão em código existente.
+
+#### `lumina/common/attrs.py` — fonte única de atributos
+
+* Módulo referenciado em ~10 arquivos do compilador mas **ausente do
+  repositório**. Criado como fonte única de verdade para parsing e
+  normalização de `@attr`:
+
+  * `normalize_attrs(attrs)` — normaliza `List[str]`,
+    `List[Tuple[str, List]]` e variantes para o formato canônico.
+  * `attr_names(attrs)` — apenas os nomes.
+  * `has_attr(attrs, name)` — teste de presença.
+  * `get_attr_args(attrs, name)` — args do primeiro attr com o nome.
+
+* `codegen/context.py` re-exporta `normalize_attrs` para
+  compatibilidade.
+
+### 🔧 Alterado
+
+#### Codegen
+
+* `generate_function_body` — `_safe_mode` agora defaulta para `True`,
+  controlado por `@unsafe` em vez de `@safe`.
+* `materialize_generic` — mesmo tratamento: cópias especializadas
+  herdam o modo safe, `@unsafe` na `gen_def` original desliga.
+* `_materialize_scc_dispatcher` — cada membro do SCC resolve
+  `_safe_mode` a partir dos próprios attrs (não herda do vizinho).
+* `_emit_lambda_closure` — `inherit_safe` agora usa
+  `getattr(self, '_safe_mode', True)` em vez de `False`.
+* `_try_stack_alloc` — ganhou segundo caminho (VLA) para `N` dinâmico
+  seguro. Caminho de `N` literal permanece idêntico.
+* `_visit_for_iterable` — aceita `node.elem_type` como hint;
+  aplica `bitcast` do `arr_val` apenas no caminho `ptr` genérico.
+  Caminhos com `array_lengths` e array literal preservam o
+  comportamento anterior, exceto pela aplicação do hint quando
+  presente.
+
+#### Parser
+
+* `parse_for` reconhece anotação opcional `: T` entre o nome da
+  variável e o `in`. Lookahead de 1 token (`COLON` + `IDENT` vs.
+  `COLON` + `NEWLINE`) evita ambiguidade.
+* Sintaxes suportadas:
+
+  ```
+  for x in arr:
+  for i, x in arr:
+  for x: float in arr:
+  for i, x: float in arr:
+  ```
+
+#### Semantic
+
+* `_analyze_for` **infere o tipo do elemento** da variável de loop
+  (`_infer_for_elem_type`). Ordem de precedência:
+
+  1. Hint explícito (`for x: T in arr`) — vence; validado contra
+     tipo inferido.
+  2. Array literal inline (`for x in [1.5, 2.5]`) — tipo do 1º
+     elemento.
+  3. Variável com `array_elem_types` populado — tipo registrado.
+  4. String literal ou variável de tipo `str` — `int` (char i8).
+  5. Fallback — `int` (comportamento anterior).
+
+* Antes, `for x in ["a", "b"]` declarava `x: int` (hardcoded),
+  quebrando `let y: str = x`.
+
+#### Formatter
+
+* `format_node` para `ForStmt` preserva a anotação `: T` ao
+  reemitir o código.
+
+#### AST
+
+* `ForStmt.elem_type: Optional[str] = None` — novo campo. Backwards
+  compatible (default `None`).
+
+### 🐛 Corrigido
+
+#### Semantic — inferência de tipo em `for`
+
+* `_analyze_for` declarava **todos** os bindings de loop como `int`
+  (hardcoded). `for x in ["a", "b"]: let y: str = x` falhava com
+  "Tipo inválido em declaração de 'y'" mesmo com o codegen iterando
+  `i8*` corretamente.
+* Novo helper `_infer_for_elem_type` infere o tipo pela ordem
+  documentada acima.
+* Teste de regressão:
+  `test_for_hint_type.py::test_without_hint_string_inference_works`.
+* Teste negativo:
+  `test_for_hint_type.py::test_int_array_with_str_annotation_fails`.
+
+#### Semantic — validação de hint incompatível
+
+* Hint de tipo incompatível com o tipo inferido do iterável falha
+  em compile-time em vez de gerar bitcast silencioso.
+* Compatibilidade definida por **grupos LLVM**, não por
+  `is_assignable`: `int`↔`float` é promoção, mas em `for` seria
+  `bitcast` (reinterpretação de bits), que não é o que o usuário
+  espera.
+* Grupos aceitos: `{int}`, `{float}`, `{bool}`, `{str, fn}`.
+  `ptr` é wildcard (hint é fonte de verdade).
+* Teste: `test_hint_conflicts_with_array_type_fails`.
+
+#### `lumina/common/attrs.py` ausente
+
+* Múltiplos módulos faziam `from ..common.attrs import normalize_attrs`
+  — o import falhava em builds limpos.
+* `_extract_args` foi reescrito para aceitar corretamente o formato
+  `List[List[str]]` (antes pegava só `item[1]`, descartando o resto).
+* Testes: `test_attrs_normalize.py` (13 casos).
+
+#### VLA — segunda condição de segurança
+
+* `_try_stack_alloc` caminho 2 exige que o `builder.block` seja o
+  `current_body_bb` (bloco de topo da função). Antes, `alloc(n)`
+  dentro de `if` geraria `alloca` condicional — válido em LLVM, mas
+  pessimiza e complica razão sobre o IR.
+* Coberto por `test_vla_escape.py::test_alloc_in_if_uses_gc`.
+
+### 🧪 Testes
+
+Estado após este ciclo:
+
+```text
+pytest tests/ -q
+482 passed
+```
+
+Testes adicionados neste ciclo:
+
+* `test_safe_default.py` — 9 testes (null check em runtime, `@unsafe`
+  remove `safe_nav_*`, herança em closures/generics/SCC).
+* `test_for_hint_type.py` — 11 testes (hint `float`/`str`, inferência
+  automática, teste negativo, índice, formatter, limitação
+  documentada).
+* `test_vla_escape.py` — 7 testes (VLA habilitado/desabilitado,
+  regressão literal, escape conservador em subscript).
+* `test_attrs_normalize.py` — 13 testes (normalização, helpers,
+  integração com parser).
+
+### 📚 Documentação
+
+* `docs/guia/linguagem.md`:
+  * Seção **`@safe`** reescrita como **Safe-by-default**, com
+    `@unsafe` documentado como opt-out.
+  * Seção **`for`** atualizada com `for x: T in arr` e a limitação
+    sobre `ptr` dinâmico.
+  * Seção **Arrays** — nota sobre VLA em `alloc(N)` dinâmico.
+* `docs/internals/codegen.md`:
+  * Seção **Escape analysis** — segundo caminho (VLA) documentado
+    com as 4 condições de segurança.
+  * Seção **`@safe`** atualizada para refletir o default invertido.
+* `docs/engineering/bugs.md`:
+  * Entrada sobre `lumina/common/attrs.py` ausente.
+  * Entrada sobre `_analyze_for` hardcoded em `int`.
+  * Entrada sobre escape analysis conservadora em subscript.
+* `README.md`:
+  * Badge de versão atualizado.
+  * Seção **Memória e segurança** com nota sobre safe-by-default.
+
+[Unreleased]: https://github.com/adamgabriel701/Lumina/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/adamgabriel701/Lumina/compare/v0.6.0...v0.7.0
+
+---
+
 ## [0.6.0] — 2026-09-25
 
 > Desenvolvimento posterior ao milestone `v0.5.0-linker`.
@@ -464,7 +897,7 @@ fn(T1, T2) -> R
 
 A suíte de testes foi ampliada continuamente durante o desenvolvimento.
 
-Estado atual informado pelo projeto:
+Estado informado pelo projeto:
 
 ```text
 pytest tests/ -q
@@ -834,3 +1267,95 @@ As mudanças são agrupadas nas seguintes categorias:
 
 [Unreleased]: https://github.com/adamgabriel701/Lumina/compare/v0.5.0-linker...HEAD
 [0.5.0-linker]: https://github.com/adamgabriel701/Lumina/releases/tag/v0.5.0-linker
+```
+
+---
+
+## Commits
+
+Como você **não commitou o v0.7.0**, recomendo **dois commits separados** — cada um mapeando para uma release no CHANGELOG. Isso facilita `git tag` por release, `git bisect` futuro e revisão.
+
+### Commit 1 — v0.7.0
+
+```
+feat(lang): safe-by-default, for hints tipados, VLA escape analysis
+
+Torna segurança de memória o comportamento padrão e melhora
+iteração sobre arrays.
+
+### Safe-by-default global
+- Null checks em MemberExpr/IndexExpr agora são o padrão.
+- `@unsafe` é o opt-out (substitui `@safe` como opt-in).
+- Herança de safe-mode em closures, genéricos e SCCs.
+
+### `for x: T in arr`
+- Anotação opcional de tipo do elemento.
+- Validação em compile-time (`_is_hint_compatible`).
+- Inferência automática de tipo em `_analyze_for`.
+
+### Escape analysis (VLA)
+- `alloc(N)` dinâmico vira alloca quando seguro:
+  não em loop, no bloco de topo, sem escape, sem free.
+- Reduz pressão no GC.
+
+### Infra
+- `lumina/common/attrs.py` criado (estava ausente).
+- `_extract_args` aceita `List[List[str]]` corretamente.
+
+### Testes
+- 40 testes novos (safe_default, for_hint_type, vla_escape,
+  attrs_normalize).
+- Suíte: 482 passed.
+
+### Doc
+- CHANGELOG.md: entrada v0.7.0.
+- docs/engineering/bugs.md: 3 entradas novas.
+```
+
+### Commit 2 — v0.8.0
+
+```
+feat(lang): slice types `[T]` — views tipadas e com comprimento
+
+Introduz `[T]` como view `{T*, i64}` sobre região contígua de
+memória. Zero-copy, integrado com `for`, `len`, `s[i]`, `s.data`,
+`s.len`.
+
+### Tipo
+- Parser reconhece `[T]` em posição de tipo.
+- Semantic: is_assignable cobre `[T] ↔ [U]` e `[T] → ptr` (via
+  `.data`).
+- Codegen: `%Slice_T_` monomorphizado, passado por ponteiro.
+- Mangling: `'int'` → `'Slice_int_'`.
+
+### Consumo
+- `for x in slice:` extrai `.data` + `.len`.
+- `s[i]` com bounds check em safe mode.
+- `s.data` e `s.len` como fields.
+- Sub-slicing zero-copy.
+
+### Builtins
+- `as_slice(p, n) -> [int]`.
+- `view(arr, a, b) -> [T]`.
+
+### Migração
+- `--legacy-slice-copy` restaura cópia em `v[a..b]`.
+- Strings mantêm retrocompat (retornam `str` copiado).
+
+### Bug fixes
+- `visit_SliceExpr`: `is_string` computado antes do uso.
+- `visit_MemberExpr` (semantic): reconhece `[T].data`/`[T].len`.
+- `_infer_for_elem_type`: reconhece `[T]`.
+- `visit_AssignStmt`: `s[i] = v` extrai `.data`.
+
+### Testes
+- test_slice_basic.py: 5 casos.
+- Suíte: 487 passed.
+
+### Doc
+- ADR 0002: docs/engineering/decisoes/0002-slice-types.md.
+- CHANGELOG.md: entrada v0.8.0.
+
+BREAKING CHANGE: `v[a..b]` retorna `[T]` (view zero-copy) em vez
+de cópia `T*`. Strings preservadas. Use `--legacy-slice-copy` para
+o comportamento antigo (será removida em v0.9.0).

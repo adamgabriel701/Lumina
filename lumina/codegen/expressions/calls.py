@@ -85,14 +85,27 @@ class CallsMixin:
         return arg_val
 
     def _zero_for_type(self, ty):
-        """Retorna um zero constante do tipo LLVM."""
+        """Retorna um zero constante do tipo LLVM.
+
+        Para tipos primitivos, usa o valor 0 apropriado. Para structs
+        (LiteralStructType ou IdentifiedStructType) — que em Lumina
+        aparecem sempre como ponteiro — devolve null. Nunca cria
+        `ir.Constant(struct_ty, 0)`, que o llvmlite aceita sem
+        validar mas quebra ao imprimir com
+        "TypeError: 'int' object is not iterable".
+        """
         if isinstance(ty, ir.PointerType):
             return ir.Constant(ty, None)
         if isinstance(ty, ir.DoubleType):
             return ir.Constant(ty, 0.0)
         if isinstance(ty, ir.IntType):
             return ir.Constant(ty, 0)
-        return ir.Constant(ty, 0)
+        if isinstance(ty, (ir.LiteralStructType, ir.IdentifiedStructType)):
+            # Structs são sempre por ponteiro em Lumina. Este caminho
+            # só é atingido se algum caller passou o struct direto;
+            # devolve null do ponteiro para não quebrar o llvmlite.
+            return ir.Constant(ty.as_pointer(), None)
+        return ir.Constant(ty, None)
 
     # ==================================================================
     # Invocação de fat pointer

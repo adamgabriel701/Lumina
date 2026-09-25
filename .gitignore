@@ -154,3 +154,5 @@ output.ll
 .vscode/
 .idea/
 *.swp
+lumina_core/parser
+lumina_core/*.ll

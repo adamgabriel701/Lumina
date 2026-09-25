@@ -20,8 +20,7 @@ def cprint(*args, color=Color.RESET, end='\n', sep=' '):
     text = sep.join(str(a) for a in args)
     print(f"{color}{text}{Color.RESET}", end=end, file=_PROGRESS_STREAM)
 
-LUMINA_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-STD_DIR = os.path.join(LUMINA_ROOT, "std")
+from lumina.common.paths import LUMINA_ROOT, STD_DIR
 
 def paint(text, color):
     return f"{color}{text}{Color.RESET}"

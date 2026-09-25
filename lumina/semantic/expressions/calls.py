@@ -100,6 +100,16 @@ class CallsMixin:
                 fn_def = self.function_defs.get(func_name)
                 self._resolve_kwargs(node, fn_def, skip_self=False)
 
+        # `copy(s)` herda o tipo do argumento. Se o arg é `[float]`,
+        # o resultado é `[float]` — não `[int]`.
+        if func_name == "copy" and not node.is_method and node.args:
+            arg_type = self.visit(node.args[0])
+            if arg_type and isinstance(arg_type, str) \
+                    and arg_type.startswith("[") and arg_type.endswith("]"):
+                return arg_type
+            # Fallback: assume [int]
+            return "[int]"
+
         # Builtins com tipo de retorno conhecido (fonte única:
         # lumina/builtins.py::BUILTIN_RET).
         if not node.is_method:

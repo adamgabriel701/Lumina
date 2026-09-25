@@ -344,13 +344,26 @@ class VarDeclMixin:
             )
             return ptr, ptr.type.pointee
 
-        # arr[idx]
+        # arr[idx] — agora com slices (FIX #1)
         if isinstance(target, IndexExpr):
             arr_val = self.visit(target.array)
             idx_val = self.visit(target.index)
             if not isinstance(arr_val.type, ir.PointerType):
                 return None, None
-            if isinstance(arr_val.type.pointee, ir.ArrayType):
+
+            # v0.8.0: slice → extrai `.data` antes do GEP.
+            # Sem isto, `s[0] += 1` faz GEP em `%Slice_T_*` (o struct)
+            # em vez de no backing buffer (`T*`).
+            if (isinstance(arr_val.type.pointee, ir.IdentifiedStructType)
+                    and arr_val.type.pointee.name.startswith("Slice_")):
+                data_gep = self.builder.gep(
+                    arr_val,
+                    [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 0)],
+                    name="slice_ca_data_gep",
+                )
+                data_ptr = self.builder.load(data_gep, name="slice_ca_data")
+                ptr = self.builder.gep(data_ptr, [idx_val], name="slice_ca_idx_ptr")
+            elif isinstance(arr_val.type.pointee, ir.ArrayType):
                 ptr = self.builder.gep(
                     arr_val,
                     [ir.Constant(self.i32_ty, 0), idx_val],

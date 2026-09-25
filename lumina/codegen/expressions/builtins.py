@@ -396,4 +396,151 @@ class BuiltinsMixin:
 
             return slice_ptr
 
+        # ==================================================================
+        # v0.9.x: `bytes(s)` — view imutável da string como `[int]` (bytes).
+        #
+        # Constrói um slice `%Slice_int_` cujo `.data` é um buffer novo
+        # (i64*) preenchido com os bytes de `s`. Cada elemento é o valor
+        # do byte (0..255), promovido para i64.
+        #
+        # Zero-copy NÃO é possível porque `[int]` usa stride 8 e a string
+        # usa stride 1 — reinterpretar `i8*` como `i64*` faria leituras de
+        # 8 bytes por elemento. O custo é O(n) em memória; para strings
+        # curtas, é aceitável.
+        # ==================================================================
+        if func_name == "bytes":
+            s = self.visit(node.args[0])
+            i8p = self.i8_ty.as_pointer()
+            if not isinstance(s.type, ir.PointerType):
+                s = self.builder.inttoptr(s, i8p, name="bytes_inttoptr")
+            elif s.type != i8p:
+                s = self.builder.bitcast(s, i8p, name="bytes_bitcast")
+
+            n = self.builder.call(self.strlen, [s], name="bytes_len")
+
+            byte_size = self.builder.mul(
+                n, ir.Constant(self.i64_ty, 8), name="bytes_alloc_size",
+            )
+            buf_raw = self.builder.call(self.malloc, [byte_size], name="bytes_buf")
+            buf = self.builder.bitcast(buf_raw, self.i64_ty.as_pointer(), name="bytes_i64p")
+
+            loop_bb = self.builder.append_basic_block(name="bytes_loop")
+            end_bb = self.builder.append_basic_block(name="bytes_end")
+            pred_bb = self.builder.block
+            self.builder.branch(loop_bb)
+
+            self.builder.position_at_end(loop_bb)
+            i = self.builder.phi(self.i64_ty, name="bytes_i")
+            i.add_incoming(ir.Constant(self.i64_ty, 0), pred_bb)
+
+            src_ptr = self.builder.gep(s, [i], name="bytes_src_p")
+            byte_val = self.builder.load(src_ptr, name="bytes_byte")
+            byte_i64 = self.builder.zext(byte_val, self.i64_ty, name="bytes_zext")
+            dst_ptr = self.builder.gep(buf, [i], name="bytes_dst_p")
+            self.builder.store(byte_i64, dst_ptr)
+
+            nxt = self.builder.add(i, ir.Constant(self.i64_ty, 1), name="bytes_nxt")
+            i.add_incoming(nxt, self.builder.block)
+            cond = self.builder.icmp_signed("<", nxt, n, name="bytes_cond")
+            self.builder.cbranch(cond, loop_bb, end_bb)
+
+            self.builder.position_at_end(end_bb)
+
+            slice_ty = self.get_or_create_slice_type("[int]")
+            slice_ptr = self.builder.alloca(slice_ty, name="bytes_slice")
+            data_field = self.builder.gep(
+                slice_ptr,
+                [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 0)],
+                name="bytes_slice_d",
+            )
+            self.builder.store(buf, data_field)
+            len_field = self.builder.gep(
+                slice_ptr,
+                [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 1)],
+                name="bytes_slice_l",
+            )
+            self.builder.store(n, len_field)
+            return slice_ptr
+
+        # ==================================================================
+        # v0.9.x: `copy(s: [T]) -> [T]` — cópia profunda do buffer.
+        #
+        # Devolve um slice novo cujo `.data` é um `malloc` com os
+        # elementos copiados. Mutar o original não afeta a cópia (e
+        # vice-versa). Preserva o tipo do elemento (`[float]` → `[float]`).
+        # ==================================================================
+        if func_name == "copy":
+            s = self.visit(node.args[0])
+            if not (isinstance(s.type, ir.PointerType)
+                    and isinstance(s.type.pointee, ir.IdentifiedStructType)
+                    and s.type.pointee.name.startswith("Slice_")):
+                # Sem suporte a cópia de array literal inline ainda.
+                return ir.Constant(self.i64_ty, 0)
+
+            slice_ty = s.type.pointee
+            elem_ty = slice_ty.elements[0].pointee
+
+            len_gep = self.builder.gep(
+                s, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 1)],
+                name="copy_len_gep",
+            )
+            n = self.builder.load(len_gep, name="copy_len")
+
+            data_gep = self.builder.gep(
+                s, [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 0)],
+                name="copy_data_gep",
+            )
+            src_data = self.builder.load(data_gep, name="copy_src")
+
+            # Tamanho do elemento via getelementptr sobre null ptr.
+            null_elem = ir.Constant(elem_ty.as_pointer(), None)
+            size_gep = self.builder.gep(
+                null_elem, [ir.Constant(self.i64_ty, 1)],
+                name="copy_elem_size_gep",
+            )
+            elem_size = self.builder.ptrtoint(
+                size_gep, self.i64_ty, name="copy_elem_size",
+            )
+            total = self.builder.mul(n, elem_size, name="copy_total")
+            raw = self.builder.call(self.malloc, [total], name="copy_raw")
+            new_data = self.builder.bitcast(
+                raw, elem_ty.as_pointer(), name="copy_new_data",
+            )
+
+            loop_bb = self.builder.append_basic_block(name="copy_loop")
+            end_bb = self.builder.append_basic_block(name="copy_end")
+            pred_bb = self.builder.block
+            self.builder.branch(loop_bb)
+
+            self.builder.position_at_end(loop_bb)
+            i = self.builder.phi(self.i64_ty, name="copy_i")
+            i.add_incoming(ir.Constant(self.i64_ty, 0), pred_bb)
+
+            sp = self.builder.gep(src_data, [i], name="copy_sp")
+            v = self.builder.load(sp, name="copy_v")
+            dp = self.builder.gep(new_data, [i], name="copy_dp")
+            self.builder.store(v, dp)
+
+            nxt = self.builder.add(i, ir.Constant(self.i64_ty, 1), name="copy_nxt")
+            i.add_incoming(nxt, self.builder.block)
+            cond = self.builder.icmp_signed("<", nxt, n, name="copy_cond")
+            self.builder.cbranch(cond, loop_bb, end_bb)
+
+            self.builder.position_at_end(end_bb)
+
+            out_slice = self.builder.alloca(slice_ty, name="copy_out")
+            od = self.builder.gep(
+                out_slice,
+                [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 0)],
+                name="copy_out_d",
+            )
+            self.builder.store(new_data, od)
+            ol = self.builder.gep(
+                out_slice,
+                [ir.Constant(self.i32_ty, 0), ir.Constant(self.i32_ty, 1)],
+                name="copy_out_l",
+            )
+            self.builder.store(n, ol)
+            return out_slice
+
         return None

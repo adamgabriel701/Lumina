@@ -16,7 +16,9 @@ BUILTIN_FUNCTIONS = frozenset({
     "argv",
     "chr",
     "http_response",
-    "black_box",        # NOVO: barreira anti-DCE
+    "black_box",
+    "bytes",            # NOVO — str → [int]
+    "copy",             # NOVO — [T] → [T]
     # FILE* globals do libc
     "stdin",
     "stdout",
@@ -44,7 +46,9 @@ BUILTIN_RET = {
     "argv": "str",
     "chr": "str",
     "http_response": "str",
-    "black_box": "int",     # NOVO
+    "black_box": "int",
+    "bytes": "[int]",   # NOVO
+    "copy": "[int]",    # NOVO — placeholder; semantic refina com o tipo do arg
     "stdin": "str",
     "stdout": "str",
     "stderr": "str",

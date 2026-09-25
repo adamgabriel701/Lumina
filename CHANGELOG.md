@@ -1,10 +1,31 @@
-# CHANGELOG.md
-
 # Changelog
 
 Todas as mudanças relevantes do **Lumina** são documentadas neste arquivo.
 
 O formato segue, de forma geral, as convenções do [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/), e o projeto segue [Semantic Versioning](https://semver.org/lang/pt-BR/).
+
+---
+
+## [1.0.0] — 2026-09-25
+
+> **Milestone:** primeira versão estável. Fecha as lacunas do v0.9.0
+> (bytes/copy), conserta bugs de borda em slices e parser self-hosted,
+> e documenta a decisão de hygiene automática (ADR 0004).
+
+### ✨ Adicionado
+
+* `bytes(s: str) -> [int]` — view imutável da string como bytes.
+* `copy(s: [T]) -> [T]` — cópia profunda com backing buffer próprio.
+* ADR 0004 — hygiene automática em macros (design para v1.x).
+* `lumina_core/parser.lm` — corrigidos 4 bugs bloqueantes para self-hosting.
+
+### 🐛 Corrigido
+
+* `CompoundAssignStmt` em slice fazia GEP no `%Slice_T_*` em vez do `.data`.
+* `_expect_gt_for_type` (parser.lm) não splittava `>>` (fecha `Vec<Vec<T>>`).
+* `parse_switch` (parser.lm) re-consumia `T_MATCH`.
+* `tokenize` (parser.lm) era stub com struct não inicializada.
+* `node_nexts` era usado como sibling chain **e** campo específico.
 
 ---
 

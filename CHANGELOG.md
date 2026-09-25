@@ -436,6 +436,41 @@ Testes adicionados neste ciclo:
   * Badge de versão atualizado.
   * Seção **Memória e segurança** com nota sobre safe-by-default.
 
+### 🛠️ Tooling
+
+#### LSP — inlay hints funcionais
+
+* `lumina-vscode/lumina_lsp.py`:
+  * `validate_and_extract_symbols` agora retorna 9-tuple
+    (`+ semantic_tokens`, `+ inlay_hints`), eliminando a
+    segunda passada de parse + semantic que existia em
+    `_recompute_extras`.
+  * `_collect_inlay_hints` lê `decl.var_type` diretamente da AST
+    (que o analyzer muta in-place), em vez de chamar
+    `analyzer.get_var_info(name)` — fonte única de verdade,
+    sem chance de divergir.
+  * **Nova code action `refactor.rewrite`**: "Anotar tipo inferido:
+    `x: int`". O usuário posiciona o cursor sobre uma variável
+    cujo tipo foi inferido e o VS Code oferece materializar
+    a anotação (`let x = 10` → `let x: int = 10`).
+
+#### Lexer self-hosted (`lumina_core/lexer.lm`)
+
+* **Deixou de ser esqueleto**: paridade funcional com o lexer
+  Python (`lumina/lexer/lexer.py`).
+* Adicionado:
+  * `INDENT` / `DEDENT` via `indent_stack` (antes: TODO).
+  * `paren_depth` para supressão de `NEWLINE` dentro de
+    `(...)`, `[...]`, `{...}`.
+  * Suporte a `\r\n` (CRLF).
+  * `0b` / `0o` — paridade com o lexer Python pós-v0.6.0.
+  * `DEDENT` final + `EOF` corretos.
+* Estrutura `Lexer` com campos `source`, `pos`, `length`,
+  `line`, `col`, `paren_depth`, `at_line_start`,
+  `indent_stack`, `indent_size`.
+* Este arquivo agora serve como base para o **parser
+  self-hosted** (Sprint 12 da ADR de self-hosting).
+
 [Unreleased]: https://github.com/adamgabriel701/Lumina/compare/v0.7.0...HEAD
 [0.7.0]: https://github.com/adamgabriel701/Lumina/compare/v0.6.0...v0.7.0
 

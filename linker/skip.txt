@@ -21,6 +21,3 @@ proxy
 engine                        # libraylib
 ffi_test                      # C++ (ffi_helper.o)
 wasm_js_interop               # import JS (WASM)
-
-# --- pthreads (exige clone() + TLS real em rt.c — roadmap) ---
-threads

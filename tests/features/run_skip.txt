@@ -22,6 +22,5 @@ wasm_js_interop.lm    # não roda nativo
 # Não-determinístico / loop infinito / segfault
 gc_test.lm            # output de GC varia
 json_parser.lm        # output muito grande para comparar
-threads.lm            # output depende do scheduler
 bootstrap_lexer.lm    # loop infinito
 database.lm           # segfault (I/O de arquivo)

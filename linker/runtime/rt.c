@@ -15,17 +15,14 @@
  *
  * - `malloc` é thread-safe (spinlock global). `free` continua no-op.
  *
- * - TLS é real (variant II x86_64, via %fs). Thread-locals do usuário
- *   (`.tbss`/`.tdata` gerados pelo codegen) NÃO são suportados
- *   porque o linker próprio não mescla essas seções. O TLS aqui é
- *   usado apenas para a API `_lumina_tls_*` (chaves dinâmicas) e
- *   para o `%fs` ficar válido em cada thread.
+ * - TLS é real (variant II x86_64, via %fs).
  *
- * - pthreads: `pthread_create`/`pthread_join` reais, com stack
- *   alocada via mmap, TLS por thread, e sincronização via futex.
- *   `pthread_mutex_*` e `pthread_cond_*` são implementações mínimas
- *   baseadas em futex, suficientes para `std/channel.lm`.
- * ---------------------------------------------------------------------- */
+ * - pthreads: `pthread_create`/`pthread_join` com assinatura
+ *   compatível com a libc (POSIX). `_PThread` é um descritor interno
+ *   mapeado por `tid`; o usuário só vê o `pthread_t` opaco
+ *   (`unsigned long`).
+ * ----------------------------------------------------------------------
+ */
 typedef unsigned long size_t;
 typedef long          ssize_t;
 
@@ -76,7 +73,6 @@ int    close(int);
 long   read(int, void*, size_t);
 long   write(int, const void*, size_t);
 long   lseek(int, long, int);
-int    clone(int (*fn)(void*), void *stack, int flags, void *arg);
 void   GC_init(void);
 void  *GC_malloc(size_t);
 void   GC_free(void*);
@@ -94,11 +90,11 @@ void        *_lumina_tls_get(unsigned int k);
 int          _lumina_tls_set(unsigned int k, void *v);
 void         _lumina_tls_run_destructors(void);
 
-/* pthreads */
-typedef struct _PThread _PThread;
-int pthread_create(_PThread **out, const void *attr,
-                   void *(*fn)(void *), void *arg);
-int pthread_join(_PThread *t, void **retval);
+/* pthreads (assinatura libc) */
+typedef unsigned long pthread_t;
+int pthread_create(pthread_t *thread, const void *attr,
+                   void *(*start_routine)(void *), void *arg);
+int pthread_join(pthread_t thread, void **retval);
 int pthread_mutex_init(void *m, const void *attr);
 int pthread_mutex_lock(void *m);
 int pthread_mutex_unlock(void *m);
@@ -147,14 +143,7 @@ static long _sys6(long n, long a, long b, long c, long d, long e, long f) {
 static void _write_fd(int fd, const void *buf, size_t n) { _sys3(1, fd, (long)buf, (long)n); }
 static void _exit(int code) { _sys1(60, code); __builtin_unreachable(); }
 
-/* ================= memória (brk) + spinlock =================
- *
- * `_malloc_lock` serializa chamadas a `malloc` entre threads.
- * Sem isso, `clone` com CLONE_VM compartilha `_heap` e duas threads
- * podem corromper o heap mutuamente.
- *
- * `free` continua NO-OP — ver comentário longo abaixo.
- * ------------------------------------------------------------------ */
+/* ================= memória (brk) + spinlock ================= */
 extern char _end;
 static char *_heap = 0;
 static volatile int _malloc_lock = 0;
@@ -169,35 +158,12 @@ static _GCBlock *gc_head = 0;
 
 static inline void _lock(void) {
     while (__atomic_exchange_n(&_malloc_lock, 1, __ATOMIC_ACQUIRE)) {
-        while (__atomic_load_n(&_malloc_lock, __ATOMIC_RELAXED)) {
-            /* spin */
-        }
+        while (__atomic_load_n(&_malloc_lock, __ATOMIC_RELAXED)) {}
     }
 }
 static inline void _unlock(void) {
     __atomic_store_n(&_malloc_lock, 0, __ATOMIC_RELEASE);
 }
-
-/* --------------------------------------------------------------------
- * Alocador linear sobre brk().
- *
- * IMPORTANTE — `free()` é NO-OP:
- *   Esta runtime é usada com --linker=self. Programas compilados com
- *   esta runtime rodam com --no-gc implícito. Sem um coletor real,
- *   `free()` não pode devolver memória ao heap sem risco de
- *   double-free/use-after-free.
- *
- *   Consequência: `malloc` + `free` em loop **vaza** memória.
- *   Para churn controlado sob --linker=self, use `std/alloc.lm`
- *   (arena) — um único malloc grande + bump pointer.
- *
- *   Sob clang (linker padrão), `free()` resolve para a libc/glibc
- *   e se comporta normalmente.
- *
- * Thread-safety: `malloc` é serializado por spinlock. `brk` é uma
- * syscall global — chamadas concorrentes com valores diferentes
- * corromperiam o espaço de endereçamento, então o lock é obrigatório.
- * ------------------------------------------------------------------ */
 
 void GC_init(void) { gc_head = 0; }
 
@@ -220,7 +186,10 @@ void *malloc(size_t n) {
     return result;
 }
 
-/* NO-OP por design — ver comentário acima. */
+/* NO-OP por design: sem bookkeeping de blocos vivos, `free` não
+ * pode devolver memória sem risco de double-free/use-after-free.
+ * Para churn controlado sob --linker=self, use std/alloc.lm (arena).
+ * Sob clang (linker padrão), free resolve para glibc. */
 void free(void *p) { (void)p; }
 
 void *calloc(size_t n, size_t sz) {
@@ -234,38 +203,7 @@ void *GC_malloc(size_t n) { return malloc(n); }
 void  GC_free(void *p)    { free(p); }
 
 
-/* ================= TLS (Thread Local Storage) — REAL =================
- *
- * Implementação REAL de TLS para x86_64 Linux usando o registrador %fs.
- *
- * Layout (variant II, conforme o TLS ABI do x86_64):
- *
- *     +--------------------------+  <- endereço base do bloco (mmap)
- *     |  TLS estático (master)   |
- *     |  ...                     |
- *     +--------------------------+  <- base + LUMINA_TLS_STATIC_SIZE
- *     |  TCB                     |  <- %fs aponta AQUI
- *     |    self   = &TCB         |
- *     |    dtv    = ptr p/ DTV   |
- *     |    static_size           |
- *     |    entry/entry_arg/tid   |
- *     +--------------------------+
- *
- * - Acesso a TLS estático (variáveis thread_local do programa) usa
- *   offsets NEGATIVOS a partir de %fs. Como este runtime não tem
- *   loader dinâmico nem suporte a .tdata/.tbss emitidos pelo linker
- *   próprio, o TLS estático é apenas o "master image" interno —
- *   atualmente sempre zero.
- *
- * - TLS dinâmico (pthread_key_create-like) é implementado via um DTV
- *   (Dynamic Thread Vector) por thread, alocado lazily e apontado
- *   pelo campo `dtv` do TCB.
- *
- * - arch_prctl(ARCH_SET_FS, addr) configura %fs da thread atual.
- * - clone() passa CLONE_SETTLS para que o kernel configure %fs da
- *   thread filha antes dela começar a executar.
- */
-
+/* ================= TLS (variant II x86_64) ================= */
 #define ARCH_SET_FS        0x1002
 #define ARCH_GET_FS        0x1003
 
@@ -286,31 +224,24 @@ void  GC_free(void *p)    { free(p); }
 #define LUMINA_TLS_MAX_KEYS     64
 
 typedef struct _TCB {
-    void   *self;            /* %fs:[0] == &TCB */
-    void   *dtv;             /* Dynamic Thread Vector */
+    void   *self;
+    void   *dtv;
     size_t  static_size;
-    void  (*entry)(void *);  /* usado por clone simples (não-pthread) */
+    void  (*entry)(void *);
     void   *entry_arg;
     int     tid;
     int     _pad;
 } _TCB;
 
-typedef struct {
-    int   in_use;
-    void *value;
-} _TLSSlot;
-
-typedef struct _TLSDtv {
-    _TLSSlot slots[LUMINA_TLS_MAX_KEYS];
-} _TLSDtv;
+typedef struct { int in_use; void *value; } _TLSSlot;
+typedef struct { _TLSSlot slots[LUMINA_TLS_MAX_KEYS]; } _TLSDtv;
 
 static int    _tls_key_used[LUMINA_TLS_MAX_KEYS];
 static void (*_tls_key_dtor[LUMINA_TLS_MAX_KEYS])(void *);
 
 static unsigned char _tls_master_image[LUMINA_TLS_STATIC_SIZE]
-    __attribute__((aligned(64)));
+    __attribute__((aligned(64), unused));
 
-/* Compat: mantido como símbolo visível, sempre 0. */
 void *__lumina_tls_block = (void *)0;
 
 static long _arch_prctl(int code, unsigned long addr) {
@@ -325,10 +256,7 @@ static inline _TCB *_tcb_current(void) {
 
 static _TCB *_tls_alloc_block(void) {
     size_t total = LUMINA_TLS_STATIC_SIZE + sizeof(_TCB);
-    long addr = _sys6(9, 0, (long)total,
-                      3,       /* PROT_READ|PROT_WRITE */
-                      0x22,    /* MAP_PRIVATE|MAP_ANONYMOUS */
-                      -1, 0);
+    long addr = _sys6(9, 0, (long)total, 3, 0x22, -1, 0);
     if (addr < 0) return 0;
     unsigned char *block = (unsigned char *)addr;
     memcpy(block, _tls_master_image, LUMINA_TLS_STATIC_SIZE);
@@ -362,17 +290,9 @@ void _lumina_tls_init(void) {
     _arch_prctl(ARCH_SET_FS, (unsigned long)tcb);
 }
 
-void *_lumina_get_tls(void) {
-    return (void *)_tcb_current();
-}
-
-void _lumina_set_tls(void *ptr) {
-    _arch_prctl(ARCH_SET_FS, (unsigned long)ptr);
-}
-
-void *_lumina_tls_alloc_child(void) {
-    return (void *)_tls_alloc_block();
-}
+void *_lumina_get_tls(void) { return (void *)_tcb_current(); }
+void  _lumina_set_tls(void *ptr) { _arch_prctl(ARCH_SET_FS, (unsigned long)ptr); }
+void *_lumina_tls_alloc_child(void) { return (void *)_tls_alloc_block(); }
 
 unsigned int _lumina_tls_key_create(void (*destructor)(void *)) {
     for (int i = 0; i < LUMINA_TLS_MAX_KEYS; i++) {
@@ -437,12 +357,7 @@ void _lumina_tls_run_destructors(void) {
 }
 
 
-/* ================= futex =================
- * Wrappers mínimos sobre a syscall futex (202).
- * - futex_wait(addr, expected): bloqueia se *addr == expected.
- *   Retorna imediatamente se *addr != expected.
- * - futex_wake(addr, n): acorda até n threads bloqueadas em addr.
- */
+/* ================= futex ================= */
 static int _futex_wait(volatile int *addr, int expected) {
     return (int)_sys6(202, (long)addr, FUTEX_WAIT, (long)expected, 0, 0, 0);
 }
@@ -451,19 +366,7 @@ static int _futex_wake(volatile int *addr, int n) {
 }
 
 
-/* ================= clone() simples =================
- * API simplificada, sem ctid. Usada por código que só quer
- * "spawn e forget". Para pthreads, ver _clone_pthread abaixo.
- *
- * Trampoline inline:
- *   - Pai empilha [arg, fn] no topo da stack filha.
- *   - syscall clone(56).
- *   - Pai (rax > 0): retorna tid.
- *   - Filha (rax == 0): pop arg, pop fn, call fn, run TLS destructors, exit.
- *
- * O kernel aplica CLONE_SETTLS com `child` (= TCB alocado aqui),
- * então %fs da filha já aponta para um TCB válido.
- */
+/* ================= clone() simples (spawn-and-forget) ================= */
 int clone(int (*fn)(void*), void *stack, int flags, void *arg) {
     if (!fn || !stack) return -1;
 
@@ -474,96 +377,128 @@ int clone(int (*fn)(void*), void *stack, int flags, void *arg) {
 
     unsigned long *sp = (unsigned long *)((unsigned long)stack & ~15UL);
     sp -= 2;
-    sp[0] = (unsigned long)arg; /* pop -> rdi */
-    sp[1] = (unsigned long)fn;  /* pop -> rax */
+    sp[0] = (unsigned long)arg;
+    sp[1] = (unsigned long)fn;
 
     unsigned long clone_flags = (unsigned long)flags | CLONE_SETTLS;
 
     long r;
-    /* Usamos restrições "r" genéricas para os inputs para evitar conflito
-     * com a clobber list. O compilador alocará registradores preservados
-     * (como rbx, r12, etc.), e nós os movemos para os registradores de
-     * syscall dentro do bloco asm. */
+    register long r10 __asm__("r10") = 0;
+    register long r8  __asm__("r8")  = (long)child;
     __asm__ volatile(
-        "movq %1, %%rdi\n\t"      /* clone_flags */
-        "movq %2, %%rsi\n\t"      /* sp */
-        "movq %3, %%rdx\n\t"      /* ptid */
-        "movq %4, %%r10\n\t"      /* ctid */
-        "movq %5, %%r8\n\t"       /* tls */
         "syscall\n\t"
         "testq %%rax, %%rax\n\t"
         "jnz 1f\n\t"
-        /* ---- child path ---- */
-        "popq %%rdi\n\t"          /* arg */
-        "popq %%rax\n\t"          /* fn */
-        "callq *%%rax\n\t"        /* fn(arg) -> rax */
-        "movq %%rax, %%rbx\n\t"   /* salva retorno de fn */
+        "popq %%rdi\n\t"
+        "popq %%rax\n\t"
+        "callq *%%rax\n\t"
+        "movq %%rax, %%rbx\n\t"
         "callq _lumina_tls_run_destructors\n\t"
-        "movq %%rbx, %%rdi\n\t"   /* exit code = retorno de fn */
-        "movq $60, %%rax\n\t"     /* SYS_exit */
+        "movq %%rbx, %%rdi\n\t"
+        "movq $60, %%rax\n\t"
         "syscall\n\t"
-        /* ---- parent path ---- */
         "1:\n\t"
         : "=a"(r)
-        : "r"(clone_flags),
-          "r"(sp),
-          "r"(0L),
-          "r"(0L),
-          "r"((long)child)
-        : "rcx", "r11", "rdi", "rsi", "rdx", "r8", "r9", "r10", "rbx", "memory"
+        : "0"((long)56),
+          "D"(clone_flags),
+          "S"(sp),
+          "d"(0L),
+          "r"(r10),
+          "r"(r8)
+        : "rcx", "r11", "rbx", "memory"
     );
     return r < 0 ? -1 : (int)r;
 }
 
 
-/* ================= pthreads =================
+/* ================= pthreads (libc-compatible) =================
  *
- * _PThread: descritor de thread.
- *   - done: 1 enquanto rodando; kernel zera em exit via
- *     CLONE_CHILD_CLEARTID. `pthread_join` faz futex_wait até 0.
- *   - stack: base do mmap da stack (para munmap em join).
+ * pthread_t = unsigned long (tid do kernel).
+ *
+ * `_PThread` é um descritor interno — o usuário nunca vê.
+ * O tid é mapeado em `_pthread_table[]` para o join.
+ *
+ * `pthread_create`:
+ *   1. Aloca `_PThread`.
+ *   2. Aloca stack (mmap).
+ *   3. Aloca TCB via _tls_alloc_block().
+ *   4. clone(CLONE_THREAD|CLONE_SETTLS|CLONE_CHILD_CLEARTID|...)
+ *   5. Registra tid → _PThread.
+ *
+ * `pthread_join`:
+ *   1. Lookup tid → _PThread.
+ *   2. futex_wait(&done, 1) até kernel zerar (CLONE_CHILD_CLEARTID).
+ *   3. munmap stack; remove da tabela; retorna retval.
  */
-struct _PThread {
+#define MAX_PTHREADS 256
+
+typedef struct _PThread {
     int            tid;
     void *        (*fn)(void *);
     void          *arg;
     void          *retval;
-    volatile int   done;
+    volatile int   done;          /* ctid: kernel zera em exit */
     void          *stack;
     size_t         stack_size;
-};
+} _PThread;
+
+static _PThread *_pthread_table[MAX_PTHREADS];
+static volatile int _pthread_table_lock = 0;
+
+static void _pthread_register(int tid, _PThread *t) {
+    while (__atomic_exchange_n(&_pthread_table_lock, 1, __ATOMIC_ACQUIRE)) {}
+    for (int i = 0; i < MAX_PTHREADS; i++) {
+        if (_pthread_table[i] == 0) {
+            _pthread_table[i] = t;
+            break;
+        }
+    }
+    __atomic_store_n(&_pthread_table_lock, 0, __ATOMIC_RELEASE);
+}
+
+static _PThread *_pthread_lookup_remove(int tid) {
+    _PThread *found = 0;
+    while (__atomic_exchange_n(&_pthread_table_lock, 1, __ATOMIC_ACQUIRE)) {}
+    for (int i = 0; i < MAX_PTHREADS; i++) {
+        if (_pthread_table[i] && _pthread_table[i]->tid == tid) {
+            found = _pthread_table[i];
+            _pthread_table[i] = 0;
+            break;
+        }
+    }
+    __atomic_store_n(&_pthread_table_lock, 0, __ATOMIC_RELEASE);
+    return found;
+}
 
 static void _pthread_trampoline(void *ptr);
 
-/* clone com ctid, para pthreads. Empilha [arg, trampoline] na
- * stack filha; child faz pop rdi, pop rax, call rax. */
-static long _clone_pthread(void *stack, int flags, void *tls, int *ctid) {
+static long _clone_pthread(void *stack, int flags, void *tls,
+                           int *ptid, int *ctid) {
     long r;
+    register long r10 __asm__("r10") = (long)ctid;
+    register long r8  __asm__("r8")  = (long)tls;
     __asm__ volatile(
-        "movq %1, %%rdi\n\t"      /* flags */
-        "movq %2, %%rsi\n\t"      /* stack */
-        "movq %3, %%rdx\n\t"      /* ptid */
-        "movq %4, %%r10\n\t"      /* ctid */
-        "movq %5, %%r8\n\t"       /* tls */
         "syscall\n\t"
         "testq %%rax, %%rax\n\t"
         "jnz 1f\n\t"
-        /* ---- child path ---- */
-        "popq %%rdi\n\t"          /* ptr para _PThread */
-        "popq %%rax\n\t"          /* trampoline */
+        /* child path */
+        "popq %%rdi\n\t"            /* ptr -> _PThread */
+        "popq %%rax\n\t"            /* trampoline */
         "callq *%%rax\n\t"
-        "movq $60, %%rax\n\t"     /* SYS_exit */
+        /* defesa: se trampoline retornar, mata a thread */
         "xorl %%edi, %%edi\n\t"
+        "movq $60, %%rax\n\t"
         "syscall\n\t"
-        /* ---- parent path ---- */
+        /* parent path */
         "1:\n\t"
         : "=a"(r)
-        : "r"((long)flags),
-          "r"((long)stack),
-          "r"(0L),
-          "r"((long)ctid),
-          "r"((long)tls)
-        : "rcx", "r11", "rdi", "rsi", "rdx", "r8", "r9", "r10", "rbx", "memory"
+        : "0"((long)56),
+          "D"((long)flags),
+          "S"((long)stack),
+          "d"((long)ptid),
+          "r"(r10),
+          "r"(r8)
+        : "rcx", "r11", "memory"
     );
     return r;
 }
@@ -573,30 +508,29 @@ static void _pthread_trampoline(void *ptr) {
     void *ret = t->fn(t->arg);
     t->retval = ret;
     _lumina_tls_run_destructors();
+    /* Termina a thread. Em CLONE_THREAD, `exit` (60) só mata a
+     * thread atual; o kernel zera *ctid (= t->done) e acorda
+     * futexes — o que libera o pthread_join. */
     _exit(0);
 }
 
-int pthread_create(_PThread **out, const void *attr,
-                   void *(*fn)(void *), void *arg) {
+int pthread_create(pthread_t *thread, const void *attr,
+                   void *(*start_routine)(void *), void *arg) {
     (void)attr;
-    if (!out || !fn) return -1;
+    if (!thread || !start_routine) return -1;
 
     _PThread *t = (_PThread *)calloc(1, sizeof(_PThread));
     if (!t) return -1;
-    t->fn = fn;
+    t->fn = start_routine;
     t->arg = arg;
-    t->done = 1;
+    t->done = 1;    /* kernel vai zerar em exit */
 
     const size_t STACK_SIZE = 64 * 1024;
-    long stack_addr = _sys6(9, 0, (long)STACK_SIZE,
-                            3,       /* PROT_READ|PROT_WRITE */
-                            0x22,    /* MAP_PRIVATE|MAP_ANONYMOUS */
-                            -1, 0);
+    long stack_addr = _sys6(9, 0, (long)STACK_SIZE, 3, 0x22, -1, 0);
     if (stack_addr < 0) { free(t); return -1; }
     t->stack = (void *)stack_addr;
     t->stack_size = STACK_SIZE;
 
-    /* Setup da stack filha: [t, trampoline] no topo. */
     unsigned long *sp = (unsigned long *)
         ((unsigned long)(stack_addr + STACK_SIZE) & ~15UL);
     sp -= 2;
@@ -605,44 +539,47 @@ int pthread_create(_PThread **out, const void *attr,
 
     _TCB *tls = _tls_alloc_block();
     if (!tls) {
-        _sys1(11, stack_addr);   /* munmap */
+        _sys2(11, stack_addr, (long)STACK_SIZE);
         free(t);
         return -1;
     }
 
     int flags = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND
               | CLONE_SYSVSEM | CLONE_THREAD | CLONE_SETTLS
-              | CLONE_CHILD_CLEARTID;
+              | CLONE_PARENT_SETTID | CLONE_CHILD_CLEARTID;
 
-    long tid = _clone_pthread(sp, flags, tls, (int *)&t->done);
+    int ptid_scratch = 0;
+    long tid = _clone_pthread(sp, flags, tls,
+                              &ptid_scratch, (int *)&t->done);
     if (tid < 0) {
-        _sys1(11, stack_addr);
+        _sys2(11, stack_addr, (long)STACK_SIZE);
         free(t);
         return -1;
     }
 
     t->tid = (int)tid;
-    *out = t;
+    *thread = (pthread_t)tid;
+    _pthread_register((int)tid, t);
     return 0;
 }
 
-int pthread_join(_PThread *t, void **retval) {
+int pthread_join(pthread_t thread, void **retval) {
+    _PThread *t = _pthread_lookup_remove((int)thread);
     if (!t) return -1;
 
-    /* Aguarda `done` virar 0. O kernel faz isso em exit, via
-     * CLONE_CHILD_CLEARTID, e acorda futexes. */
+    /* Espera `done` virar 0. O kernel faz isso em exit via
+     * CLONE_CHILD_CLEARTID e acorda futexes com FUTEX_WAKE. */
     while (__atomic_load_n(&t->done, __ATOMIC_ACQUIRE) != 0) {
         _futex_wait((volatile int *)&t->done, 1);
     }
 
     if (retval) *retval = t->retval;
-
-    _sys1(11, (long)t->stack);   /* munmap stack */
+    _sys2(11, (long)t->stack, (long)t->stack_size);
     free(t);
     return 0;
 }
 
-/* --- mutex: implementação futex-based (0=unlocked, 1=locked, 2=contended). --- */
+/* --- mutex futex-based --- */
 int pthread_mutex_init(void *m, const void *attr) {
     (void)attr;
     if (!m) return -1;
@@ -653,7 +590,6 @@ int pthread_mutex_lock(void *m) {
     if (!m) return -1;
     volatile int *s = (volatile int *)m;
     if (__atomic_exchange_n(s, 1, __ATOMIC_ACQUIRE) == 0) return 0;
-    /* contended path */
     while (__atomic_exchange_n(s, 2, __ATOMIC_ACQUIRE) != 0) {
         _futex_wait(s, 2);
     }
@@ -668,9 +604,7 @@ int pthread_mutex_unlock(void *m) {
     return 0;
 }
 
-/* --- cond: seq-counter futex-based. ---
- * pthread_cond_wait precisa do mutex. O padrão POSIX de "spurious
- * wakeup" é tratado pelo usuário (loop externo). */
+/* --- cond seq-counter futex-based --- */
 int pthread_cond_init(void *c, const void *attr) {
     (void)attr;
     if (!c) return -1;
@@ -698,12 +632,12 @@ int pthread_cond_signal(void *c) {
 /* ================= corrotinas ================= */
 void makecontext(void *ucp, void (*func)(), void *stack, size_t stack_size) {
     unsigned long *sp = (unsigned long *)((unsigned char *)stack + stack_size);
-    sp = (unsigned long *)((unsigned long)sp & ~0xFFUL); /* 256B align */
+    sp = (unsigned long *)((unsigned long)sp & ~0xFFUL);
     sp -= 1;
 
     unsigned long *ctx = (unsigned long *)ucp;
-    ctx[6] = (unsigned long)sp;   /* RSP */
-    ctx[7] = (unsigned long)func; /* RIP */
+    ctx[6] = (unsigned long)sp;
+    ctx[7] = (unsigned long)func;
 }
 
 

@@ -110,6 +110,8 @@ Lista completa de bugs silenciosos corrigidos no compilador. Todos passavam pelo
 | `main` duplicado tinha ordem dependente | O resultado do link dependia da ordem dos `.o` na linha de comando | Filtro em `build_gsyms` (não em `add_gsym`) — comportamento determinístico | `linker/triagem.sh` |
 | Otimizador O1 usava API removida | `module 'llvmlite.binding' has no attribute 'create_pass_manager_builder'` (llvmlite >= 0.42) | `_optimize_ir` detecta em runtime qual API existe: `create_new_module_pass_manager()`, `create_pass_manager_builder()` ou `PassManagerBuilder`; fallback via passes individuais | build com O1 ativo |
 | W^X ausente | Um único `PT_LOAD` RWX violava W^X em kernels hardened | Dois `PT_LOAD`: RX (headers + `.text` + `.rodata`) e RW (`.data` + `.bss` + heap folga); page-align entre as regiões | `readelf -l` |
+| `pthread_create` incompatível com libc | `threads.lm` falhava com exit=1 sob `--linker=self` | Assinatura trocada para `pthread_t*` (compatível libc); tabela `tid → _PThread` interna; `CLONE_CHILD_CLEARTID` para join via futex | `linker/triagem.sh examples` |
+| `rdi` no clobber list do clone | `asm-specifier for input or output variable conflicts with asm clobber list` ao compilar `rt.c` | Removido `"rdi"` do clobber em `_clone_pthread` — `popq %rdi` interno restaura antes de qualquer `call` | `clang -Wall -Wextra rt.c` |
 
 ---
 
